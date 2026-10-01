@@ -304,7 +304,7 @@ display.addEventListener("pointermove", (e) => {
   moveCursor(e);
   if (stroking) strokeTo(canvasPoint(e));
 });
-const endStroke = () => { stroking = false; last = null; };
+const endStroke = () => { if (stroking) scheduleMaskSave(); stroking = false; last = null; };
 display.addEventListener("pointerup", endStroke);
 display.addEventListener("pointercancel", endStroke);
 display.addEventListener("pointerleave", () => { $("brushCursor").hidden = true; });
@@ -381,6 +381,7 @@ async function setImageFile(file) {
     state.imgUrl = url; state.imgEl = im;
     state.imageName = up.name; state.srcW = up.width; state.srcH = up.height;
     $("imageInfo").textContent = `${file.name || "image"} – original ${up.width}×${up.height}`;
+    saveSession({ imageName: up.name, srcW: up.width, srcH: up.height, label: file.name || "image", maskName: null, maskMeta: null });
     $("dropText").textContent = "Drop another image or click to replace";
     resetMask();
     state.size = null;
@@ -420,6 +421,21 @@ async function computeMask() {
       expand: parseInt($("expand").value, 10) || 0, invert: $("invert").checked,
     });
     const im = await loadImage(res.mask_url);
+    applyMaskImage(im);
+    $("maskTime").textContent = `Last: ${res.seconds}s`;
+    scheduleMaskSave();
+    updateStale();
+    render();
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    btn.disabled = false;
+    $("maskSpinner").hidden = true;
+  }
+}
+
+// black/white mask image (white = replace) -> mask canvas
+function applyMaskImage(im, mp = num("megapixels")) {
     const w = im.naturalWidth, h = im.naturalHeight;
     const tmp = document.createElement("canvas");
     tmp.width = w; tmp.height = h;
@@ -435,16 +451,7 @@ async function computeMask() {
     newMask(w, h);
     state.mask.getContext("2d").putImageData(data, 0, 0);
     state.hasMask = true;
-    state.maskMeta = { w, h, mp: num("megapixels") };
-    $("maskTime").textContent = `Last: ${res.seconds}s`;
-    updateStale();
-    render();
-  } catch (e) {
-    showError(e.message);
-  } finally {
-    btn.disabled = false;
-    $("maskSpinner").hidden = true;
-  }
+    state.maskMeta = { w, h, mp };
 }
 $("computeMask").onclick = computeMask;
 
@@ -802,6 +809,8 @@ function setDivider(pct) {
 }
 
 function renderHistory() {
+  const tab = document.querySelector('#viewTabs [data-view="result"]');
+  if (tab) tab.textContent = state.runs.length ? `Result · ${state.runs.length} saved` : "Result";
   const box = $("history");
   box.innerHTML = "";
   if (!state.runs.length) { box.innerHTML = '<div class="hint">No runs yet.</div>'; return; }
@@ -889,4 +898,64 @@ function syncModeUi() { $("keepIdenticalRow").hidden = $("mode").value !== "past
 $("mode").addEventListener("change", syncModeUi);
 syncModeUi();
 
-loadStoredRuns();
+// ------------------------------------------------------------------ session restore (image + mask survive reloads)
+const SESSION_KEY = "inpaint-studio-session-v1";
+function readSession() { try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch { return null; } }
+function saveSession(patch) {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ ...(readSession() || {}), ...patch })); } catch { /* storage optional */ }
+}
+
+let maskSaveTimer = 0;
+// uploads the current mask (incl. brush edits) shortly after it changes, so a reload can restore it
+function scheduleMaskSave() {
+  clearTimeout(maskSaveTimer);
+  maskSaveTimer = setTimeout(async () => {
+    if (!state.mask || !state.hasMask || !state.imageName) return;
+    try {
+      const { blob } = await exportMaskBlob();
+      const fd = new FormData();
+      fd.append("file", blob, "mask.png");
+      const up = await api("/api/upload-mask", { method: "POST", body: fd });
+      saveSession({ imageName: state.imageName, maskName: up.name, maskMeta: state.maskMeta });
+    } catch { /* restoring the mask is a convenience */ }
+  }, 1200);
+}
+for (const id of ["maskClear", "maskFill", "maskUndo"]) $(id).addEventListener("click", scheduleMaskSave);
+
+function inputViewUrl(name) {
+  const i = name.lastIndexOf("/");
+  const q = new URLSearchParams({ filename: name.slice(i + 1), subfolder: i >= 0 ? name.slice(0, i) : "", type: "input" });
+  return `/api/view?${q}`;
+}
+
+async function restoreSession() {
+  const sess = readSession();
+  if (!sess || !sess.imageName) return false;
+  try {
+    const im = await loadImage(inputViewUrl(sess.imageName));
+    state.imgEl = im; state.imgUrl = null;
+    state.imageName = sess.imageName; state.srcW = sess.srcW; state.srcH = sess.srcH;
+    $("imageInfo").textContent = `${sess.label || "image"} – original ${sess.srcW}×${sess.srcH} (restored)`;
+    $("dropText").textContent = "Drop another image or click to replace";
+    resetMask();
+    state.size = null;
+    await refreshSize();
+    if (sess.maskName) {
+      try {
+        applyMaskImage(await loadImage(inputViewUrl(sess.maskName)), sess.maskMeta?.mp);
+        if (sess.maskMeta) state.maskMeta = sess.maskMeta;
+        updateStale();
+      } catch { /* mask file gone */ }
+    }
+    render();
+    return true;
+  } catch {
+    return false; // image no longer in ComfyUI's input folder
+  }
+}
+
+(async () => {
+  const [restored] = await Promise.all([restoreSession(), loadStoredRuns()]);
+  // nothing to work on yet -> show the latest result instead of an empty page
+  if (!restored && state.runs.length) { setView("result"); showRun(state.runs[0]); $("progressWrap").hidden = true; }
+})();

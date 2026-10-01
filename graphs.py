@@ -220,6 +220,9 @@ def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int) -> li
             "sigmas": [f"from_{i}", 1], "latent_image": latent}}
         g[f"chunk_dec_{i}"] = {"class_type": "VAEDecode", "inputs": {"samples": [f"chunk_{i}", 1], "vae": ["vae", 0]}}
         step_img = [f"chunk_dec_{i}", 0]
+        if paste_mask and not noise_masked:  # paste mode: also keep the full generated image
+            g[f"stepraw_{b}"] = {"class_type": "SaveImage", "inputs": {
+                "images": step_img, "filename_prefix": f"{prefix}/raw_step_{a:03d}-{b:03d}"}}
         if paste_mask:  # show each step the way the final result will look: pasted into the original
             g[f"chunk_paste_{i}"] = {"class_type": "ImageCompositeMasked", "inputs": {
                 "destination": ["scale", 0], "source": step_img, "x": 0, "y": 0, "resize_source": True, "mask": paste_mask}}

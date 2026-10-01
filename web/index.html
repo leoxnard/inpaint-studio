@@ -101,8 +101,7 @@
             </select>
           </label>
           <label class="check" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Tell the model to keep the rest identical</label>
-          <label class="check full" title="Quick low-res preview after every sampling step (ComfyUI latent preview). Off saves a little time and memory."><input type="checkbox" id="livePreview" checked> Live preview every step</label>
-          <label title="Decode the real intermediate image with the VAE and save it every N steps (like the Steps workflow). 0 = off. Steps with a saved render replace their live preview.">Save step every N (0 = off)
+          <label title="Decode the real intermediate image with the VAE and save it every N steps (like the Steps workflow). 0 = off. Live previews are always recorded and can be shown in the viewer.">Save step every N (0 = off)
             <input type="number" id="saveEvery" min="0" max="50" step="1" value="2">
           </label>
           <label>Feather (px)
@@ -176,8 +175,12 @@
             <button id="downloadSteps">Download all steps</button>
             <button id="useResult">Use result as new input</button>
             <button id="showCompare" hidden>Show comparison</button>
-            <button id="showRaw" hidden title="The model's full edited image before only the masked area was pasted in">Show raw edit</button>
             <span class="hint" id="matchInfo"></span>
+          </div>
+          <div class="row wrap viewer-opts" id="viewerOpts" hidden>
+            <label class="check"><input type="checkbox" id="viewLive"> Live previews</label>
+            <label class="check" id="viewRawRow" title="Free edit + paste: the model's full generated image before only the masked area was pasted in"><input type="checkbox" id="viewRaw"> Raw (full generated image)</label>
+            <span class="hint">← → to step through</span>
           </div>
           <div class="filmstrip" id="filmstrip"></div>
           <h3>Run history</h3>

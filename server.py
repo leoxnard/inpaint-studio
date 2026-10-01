@@ -303,17 +303,18 @@ async def ws_edit(ws: WebSocket):
                     offset = chunk_starts[int(node.split("_")[1])] if node.startswith("chunk_") else 0
                     step = offset + data["value"]
                     await ws.send_json({"type": "progress", "value": step, "max": int(params["steps"])})
-                elif kind == "executed" and str(data.get("node", "")).startswith("stepsave_"):
+                elif kind == "executed" and str(data.get("node", "")).startswith(("stepsave_", "stepraw_")):
                     imgs = (data.get("output") or {}).get("images", [])
+                    variant = "raw" if data["node"].startswith("stepraw_") else "result"
                     if imgs:
                         sstep = int(data["node"].split("_")[1])
                         if run:  # the saved render replaces the live preview of the same step
                             for f in [f for f in run["frames"] if f["kind"] == "live" and f["step"] == sstep]:
                                 (RUNS / run_id / Path(f["url"]).name).unlink(missing_ok=True)
                                 run["frames"].remove(f)
-                            run["frames"].append({"kind": "saved", "step": sstep, "mime": "image/png",
+                            run["frames"].append({"kind": "saved", "variant": variant, "step": sstep, "mime": "image/png",
                                                   "url": view_url(imgs[0]), "filename": imgs[0]["filename"]})
-                        await ws.send_json({"type": "step_image", "step": sstep,
+                        await ws.send_json({"type": "step_image", "step": sstep, "variant": variant,
                                             "url": view_url(imgs[0]), "filename": imgs[0]["filename"]})
                 elif kind == "executing" and data.get("node"):
                     await ws.send_json({"type": "node", "node": data["node"]})

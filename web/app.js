@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "livePreview", "saveEvery", "seed",
+  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "unet", "clip", "vae",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -351,13 +351,14 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault(); undo();
     return;
   }
-  // arrow keys step through the filmstrip; past the last frame shows the final comparison
+  // arrow keys step through the visible filmstrip; past the last frame shows the final comparison
   if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && !$("resultView").hidden) {
     const run = state.run;
-    if (!run || !run.frames.length) return;
+    const frames = run ? visibleFrames(run) : [];
+    if (!frames.length) return;
     e.preventDefault();
     const onCompare = !$("compare").hidden;
-    const last = run.frames.length - 1;
+    const last = frames.length - 1;
     let i = onCompare ? last + 1 : (run.shown ?? last);
     i += e.key === "ArrowRight" ? 1 : -1;
     if (i > last) { if (run.resultUrl) showCompare(); else showFrame(last); return; }
@@ -503,7 +504,7 @@ async function runEdit() {
       prompt: $("prompt").value, negative: $("negative").value,
       steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
       sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value, keep_identical: $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
-      unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: $("livePreview").checked ? "auto" : "none",
+      unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
     };
     startRun(params);
   } catch (e) {
@@ -529,6 +530,7 @@ function startRun(params) {
   $("progressBar").style.width = "0%";
   $("progressText").textContent = "Queued...";
   renderFilmstrip();
+  syncViewerOpts();
   run.timer = setInterval(updateProgressText, 500);
 
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -571,28 +573,61 @@ function addFrame(run, m) {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const url = URL.createObjectURL(new Blob([bytes], { type: m.mime }));
-  run.frames.push({ url, step: m.step, mime: m.mime, kind: "live" });
-  if (state.run === run && !run.done) showFrame(run.frames.length - 1);
-  renderFilmstrip();
+  frameAdded(run, { url, step: m.step, mime: m.mime, kind: "live" });
 }
 
-// full-quality intermediate image (real VAE decode), saved by ComfyUI every N steps
+// full-quality intermediate image (real VAE decode), saved by ComfyUI every N steps;
+// variant "raw" = full generated image before pasting (free edit + paste mode)
 function addSavedFrame(run, m) {
-  // the saved render replaces the live preview(s) of the same step
   run.frames = run.frames.filter((f) => {
-    const drop = f.kind === "live" && f.step === m.step;
-    if (drop) URL.revokeObjectURL(f.url);
+    const drop = f.kind === "live" && f.step === m.step; // the saved render replaces the live preview
+    if (drop && f.url.startsWith("blob:")) URL.revokeObjectURL(f.url);
     return !drop;
   });
-  run.frames.push({ url: m.url, step: m.step, mime: "image/png", kind: "saved", filename: m.filename });
-  if (state.run === run && !run.done) showFrame(run.frames.length - 1);
+  frameAdded(run, { url: m.url, step: m.step, mime: "image/png", kind: "saved", variant: m.variant || "result", filename: m.filename });
+}
+
+function frameAdded(run, frame) {
+  run.frames.push(frame);
+  if (state.run !== run) return;
+  syncViewerOpts();
+  const vis = visibleFrames(run);
+  const idx = vis.indexOf(frame);
   renderFilmstrip();
+  if (idx >= 0 && !run.done) showFrame(idx);
+}
+
+// viewer filters (default off): live previews and raw full images are only shown on demand
+function visibleFrames(run) {
+  const wantLive = $("viewLive").checked, wantRaw = $("viewRaw").checked;
+  const byStep = new Map();
+  for (const f of run.frames) {
+    const slot = byStep.get(f.step) || {};
+    if (f.kind === "live") slot.live = f;
+    else if (f.variant === "raw") slot.raw = f;
+    else slot.result = f;
+    byStep.set(f.step, slot);
+  }
+  const out = [];
+  for (const step of [...byStep.keys()].sort((a, b) => a - b)) {
+    const s = byStep.get(step);
+    const pick = (wantRaw && s.raw) || s.result || (wantLive && s.live) || null;
+    if (pick) out.push(pick);
+  }
+  return out;
+}
+
+function syncViewerOpts() {
+  const run = state.run;
+  $("viewerOpts").hidden = !run;
+  $("viewRawRow").hidden = !(run && (run.rawUrl || run.frames.some((f) => f.variant === "raw")));
 }
 
 function showFrame(i) {
   const run = state.run;
-  if (!run || !run.frames[i]) return;
-  $("liveImg").src = run.frames[i].url;
+  const f = run && visibleFrames(run)[i];
+  if (!f) return;
+  $("liveImg").src = f.url;
   $("liveImg").hidden = false;
   $("compare").hidden = true;
   $("resultEmpty").hidden = true;
@@ -606,17 +641,28 @@ function renderFilmstrip() {
   fs.innerHTML = "";
   const run = state.run;
   if (!run) return;
-  run.frames.forEach((f, i) => {
+  visibleFrames(run).forEach((f, i) => {
     const img = document.createElement("img");
     img.src = f.url;
-    img.title = f.kind === "saved" ? `Step ${f.step} – full quality (saved)` : `Step ${f.step} – live preview`;
+    img.title = f.kind === "live" ? `Step ${f.step} – live preview`
+      : f.variant === "raw" ? `Step ${f.step} – raw full image (saved)` : `Step ${f.step} – full quality (saved)`;
     if (f.kind === "saved") img.classList.add("saved");
+    if (f.variant === "raw") img.classList.add("raw");
     img.onclick = () => showFrame(i);
     if (i === run.shown) img.classList.add("active");
     fs.appendChild(img);
   });
-  const active = fs.querySelector(".active");
-  if (active && !run.done) fs.scrollLeft = fs.scrollWidth;
+  if (!run.done) fs.scrollLeft = fs.scrollWidth;
+}
+
+for (const id of ["viewLive", "viewRaw"]) {
+  $(id).addEventListener("change", () => {
+    const run = state.run;
+    if (!run) return;
+    run.shown = undefined;
+    renderFilmstrip();
+    if (run.done) showCompare(); else { const n = visibleFrames(run).length; if (n) showFrame(n - 1); }
+  });
 }
 
 function freeRunFrames(run) {
@@ -698,19 +744,10 @@ function showRun(run) {
   renderFilmstrip();
   showCompare();
   renderHistory();
-  $("showRaw").hidden = !run.rawUrl;
+  syncViewerOpts();
   $("matchInfo").textContent = run.match || "";
   if (run.rawUrl && run.maskUrl && !run.match) measureMatch(run);
 }
-
-$("showRaw").onclick = () => {
-  const run = state.run;
-  if (!run || !run.rawUrl) return;
-  $("liveImg").src = run.rawUrl;
-  $("liveImg").hidden = false;
-  $("compare").hidden = true;
-  $("showCompare").hidden = false;
-};
 
 function loadImg(url) {
   return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
@@ -740,7 +777,7 @@ function showCompare() {
   const run = state.run;
   if (!run || !run.resultUrl) return;
   $("cmpBefore").src = run.beforeUrl || run.resultUrl;
-  $("cmpAfter").src = run.resultUrl;
+  $("cmpAfter").src = $("viewRaw").checked && run.rawUrl ? run.rawUrl : run.resultUrl;
   $("liveImg").hidden = true;
   $("compare").hidden = false;
   $("showCompare").hidden = true;
@@ -789,14 +826,12 @@ function renderHistory() {
 
 $("downloadSteps").onclick = async () => {
   const run = state.run;
-  if (!run || !run.frames.length) { showError("No step frames to download."); return; }
-  // prefer the full-quality saved steps; fall back to the live previews
-  const saved = run.frames.filter((f) => f.kind === "saved");
-  const list = saved.length ? saved : run.frames;
+  if (!run || !visibleFrames(run).length) { showError("No step frames to download."); return; }
+  const list = visibleFrames(run); // exactly what the viewer currently shows
   for (const [i, f] of list.entries()) {
     const a = document.createElement("a");
     a.href = f.url;
-    a.download = f.kind === "saved" ? `step-${String(f.step).padStart(3, "0")}.png`
+    a.download = f.kind === "saved" ? `${f.variant === "raw" ? "raw-" : ""}step-${String(f.step).padStart(3, "0")}.png`
       : `preview-${String(i + 1).padStart(2, "0")}.${f.mime.includes("png") ? "png" : "jpg"}`;
     document.body.appendChild(a); a.click(); a.remove();
     await new Promise((r) => setTimeout(r, 150));

@@ -71,3 +71,13 @@ def test_chunked_graph_saves_every_n_steps():
 def test_keep_identical_only_in_paste_mode():
     assert graphs.edit_prompt({"prompt": "x", "mode": "inpaint"}) == "x"
     assert graphs.edit_prompt({"prompt": "x", "mode": "paste", "keep_identical": False}) == "x"
+
+
+def test_paste_mode_saves_raw_steps_inpaint_does_not():
+    base = dict(image="a.png", mask="m.png", use_mask=True, megapixels=0.95, resolution=1008, prompt="x",
+                steps=4, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=0,
+                unet="u.gguf", clip="c", vae="v", work_w=1344, work_h=736, save_every=2, prefix="P")
+    paste = graphs.build_edit_graph(dict(base, mode="paste"))
+    inpaint = graphs.build_edit_graph(dict(base, mode="inpaint"))
+    assert [k for k in paste if k.startswith("stepraw_")] == ["stepraw_2", "stepraw_4"]
+    assert not any(k.startswith("stepraw_") for k in inpaint)

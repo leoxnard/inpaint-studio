@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "seed",
+  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "livePreview", "saveEvery", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "unet", "clip", "vae",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -346,8 +346,23 @@ $("maskFill").onclick = () => {
 };
 $("maskUndo").onclick = undo;
 document.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "z" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  if ((e.metaKey || e.ctrlKey) && e.key === "z" && !typing) {
     e.preventDefault(); undo();
+    return;
+  }
+  // arrow keys step through the filmstrip; past the last frame shows the final comparison
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && !$("resultView").hidden) {
+    const run = state.run;
+    if (!run || !run.frames.length) return;
+    e.preventDefault();
+    const onCompare = !$("compare").hidden;
+    const last = run.frames.length - 1;
+    let i = onCompare ? last + 1 : (run.shown ?? last);
+    i += e.key === "ArrowRight" ? 1 : -1;
+    if (i > last) { if (run.resultUrl) showCompare(); else showFrame(last); return; }
+    showFrame(Math.max(0, i));
+    $("filmstrip").children[Math.max(0, i)]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 });
 
@@ -488,7 +503,7 @@ async function runEdit() {
       prompt: $("prompt").value, negative: $("negative").value,
       steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
       sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value, keep_identical: $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
-      unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
+      unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: $("livePreview").checked ? "auto" : "none",
     };
     startRun(params);
   } catch (e) {
@@ -550,6 +565,8 @@ function updateProgressText() {
 }
 
 function addFrame(run, m) {
+  // a saved full-quality render for this step already exists -> no extra live preview
+  if (run.frames.some((f) => f.kind === "saved" && f.step === m.step)) return;
   const bin = atob(m.data);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -561,6 +578,12 @@ function addFrame(run, m) {
 
 // full-quality intermediate image (real VAE decode), saved by ComfyUI every N steps
 function addSavedFrame(run, m) {
+  // the saved render replaces the live preview(s) of the same step
+  run.frames = run.frames.filter((f) => {
+    const drop = f.kind === "live" && f.step === m.step;
+    if (drop) URL.revokeObjectURL(f.url);
+    return !drop;
+  });
   run.frames.push({ url: m.url, step: m.step, mime: "image/png", kind: "saved", filename: m.filename });
   if (state.run === run && !run.done) showFrame(run.frames.length - 1);
   renderFilmstrip();

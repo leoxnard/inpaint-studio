@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inpaint Studio</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Inpaint Studio</h1>
+    <span class="pill" id="statusPill" title="ComfyUI status"><i class="dot"></i><span id="statusText">Checking...</span></span>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+
+      <section class="card">
+        <h2>Image</h2>
+        <label class="dropzone" id="dropzone">
+          <input type="file" id="fileInput" accept="image/*" hidden>
+          <span id="dropText">Drop an image here or click to choose</span>
+        </label>
+        <div class="hint" id="imageInfo">No image loaded.</div>
+      </section>
+
+      <section class="card">
+        <h2>Size &amp; safety</h2>
+        <div class="grid2">
+          <label>Megapixels
+            <input type="number" id="megapixels" value="0.95" min="0.3" max="2" step="0.01">
+          </label>
+          <label>Resolution (ref.)
+            <input type="number" id="resolution" value="1008" min="256" max="2048" step="16">
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="autofix" checked> Auto-fix size</label>
+        <div class="sizeinfo" id="sizeInfo">Load an image to see the working size.</div>
+        <div class="hint">Above ~4096 latent tokens the edit turns gray on Apple Silicon.</div>
+      </section>
+
+      <section class="card">
+        <h2>Step 1 &ndash; Mask</h2>
+        <label>What to mask
+          <input type="text" id="maskText" value="person">
+        </label>
+        <label>Threshold <output id="thresholdOut"></output>
+          <input type="range" id="threshold" min="0.05" max="0.95" step="0.01" value="0.4">
+        </label>
+        <div class="grid2">
+          <label>Refine iterations
+            <input type="number" id="refine" min="0" max="5" step="1" value="2">
+          </label>
+          <label>Expand (px)
+            <input type="number" id="expand" min="0" max="200" step="1" value="24">
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="invert"> Invert</label>
+        <div class="row">
+          <button class="primary" id="computeMask">Compute mask</button>
+          <span class="hint" id="maskTime"></span>
+        </div>
+        <div class="warn" id="maskStale" hidden>Size changed &ndash; recompute mask</div>
+
+        <h3>Brush</h3>
+        <div class="seg" id="brushMode">
+          <button data-mode="paint" class="active">Paint</button>
+          <button data-mode="erase">Erase</button>
+          <button data-mode="off">Off</button>
+        </div>
+        <label>Brush size <output id="brushSizeOut"></output>
+          <input type="range" id="brushSize" min="2" max="200" step="1" value="40">
+        </label>
+        <label>Overlay opacity <output id="opacityOut"></output>
+          <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.5">
+        </label>
+        <div class="row wrap">
+          <button id="maskClear">Clear mask</button>
+          <button id="maskFill">Fill all</button>
+          <button id="maskUndo">Undo</button>
+        </div>
+        <label class="check"><input type="checkbox" id="useMask" checked> Use mask (off = edit whole image)</label>
+      </section>
+
+      <section class="card">
+        <h2>Step 2 &ndash; Edit</h2>
+        <label>Prompt
+          <textarea id="prompt" rows="4">Replace the person with a walking dog. Keep everything else unchanged.</textarea>
+        </label>
+        <div class="grid2">
+          <label>Steps
+            <input type="number" id="steps" min="1" max="100" step="1" value="20">
+          </label>
+          <label>Denoise
+            <input type="number" id="denoise" min="0" max="1" step="0.01" value="1">
+          </label>
+          <label class="full">Mode
+            <select id="mode" title="Inpaint: only the masked area is re-generated. Free edit + paste: the whole image is edited, then only the masked area is pasted in (try this when the old content keeps coming back).">
+              <option value="inpaint">Inpaint (mask only)</option>
+              <option value="paste">Free edit + paste</option>
+            </select>
+          </label>
+          <label>Feather (px)
+            <input type="number" id="feather" min="0" max="100" step="1" value="12">
+          </label>
+          <label>CFG
+            <input type="number" id="cfg" min="0" max="20" step="0.1" value="1">
+          </label>
+        </div>
+        <div class="grid2">
+          <label>Seed
+            <input type="number" id="seed" min="0" step="1" value="0">
+          </label>
+          <label class="check seedrandom"><input type="checkbox" id="randomSeed" checked> Random</label>
+        </div>
+        <details>
+          <summary>Advanced</summary>
+          <label>Negative prompt
+            <textarea id="negative" rows="2"></textarea>
+          </label>
+          <div class="grid2">
+            <label>Sampler <select id="sampler"></select></label>
+            <label>Scheduler <select id="scheduler"></select></label>
+          </div>
+          <label>UNet <select id="unet"></select></label>
+          <label>CLIP <select id="clip"></select></label>
+          <label>VAE <select id="vae"></select></label>
+        </details>
+        <div class="row">
+          <button class="primary" id="runEdit">Run edit</button>
+          <button id="cancelEdit">Cancel</button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div class="tabs">
+        <div class="seg" id="viewTabs">
+          <button data-view="mask" class="active">Mask</button>
+          <button data-view="result">Result</button>
+        </div>
+        <span class="hint" id="maskBadge"></span>
+      </div>
+
+      <div class="view" id="maskView">
+        <div class="stage" id="stage">
+          <canvas id="display"></canvas>
+          <div class="empty" id="stageEmpty">Load an image to start.</div>
+          <div class="spinner-wrap" id="maskSpinner" hidden><div class="spinner"></div><span>Computing mask...</span></div>
+        </div>
+      </div>
+
+      <div class="view" id="resultView" hidden>
+        <div class="resultcol">
+          <div class="bigarea" id="bigArea">
+            <div class="empty" id="resultEmpty">No result yet. Run an edit.</div>
+            <img id="liveImg" alt="Live preview" hidden>
+            <div class="compare" id="compare" hidden>
+              <img id="cmpBefore" alt="Before">
+              <img id="cmpAfter" alt="After">
+              <div class="divider" id="cmpDivider"><span></span></div>
+              <span class="tag tl">Before</span><span class="tag tr">After</span>
+            </div>
+          </div>
+          <div class="progress-wrap" id="progressWrap" hidden>
+            <div class="progress"><div class="bar" id="progressBar"></div></div>
+            <div class="hint" id="progressText"></div>
+          </div>
+          <div class="row wrap actions" id="resultActions" hidden>
+            <a class="btn" id="downloadBtn" download>Download</a>
+            <button id="downloadSteps">Download all steps</button>
+            <button id="useResult">Use result as new input</button>
+            <button id="showCompare" hidden>Show comparison</button>
+          </div>
+          <div class="filmstrip" id="filmstrip"></div>
+          <h3>Run history</h3>
+          <div class="history" id="history"><div class="hint">No runs yet.</div></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastClose" aria-label="Dismiss">&times;</button></div>
+  <div class="cursor" id="brushCursor" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

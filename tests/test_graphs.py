@@ -1,0 +1,51 @@
+import graphs
+
+
+def test_scale_matches_comfy_rounding():
+    # 1182x665 at 1.0 MP is what ComfyUI produced in practice
+    assert graphs.scale_to_megapixels(1182, 665, 1.0) == (1376, 768)
+
+
+def test_known_gray_and_good_sizes():
+    bad = graphs.size_report(1182, 665, 1.0, 1024)
+    assert not bad["safe"] and bad["target_tokens"] == 4128
+    good = graphs.size_report(1182, 665, 0.95, 1008)
+    assert good["safe"]
+
+
+def test_square_1024_is_unsafe():
+    assert not graphs.size_report(1024, 1024, 1.0, 1024)["safe"]
+
+
+def test_safe_settings_stays_below_limit():
+    s = graphs.safe_settings(1182, 665, 1.0, 1024)
+    assert s["target_tokens"] < graphs.TOKEN_LIMIT and s["ref_tokens"] < graphs.TOKEN_LIMIT
+    assert s["megapixels"] <= 1.0
+
+
+def test_edit_graph_with_mask_has_composite():
+    p = dict(image="a.png", mask="m.png", use_mask=True, megapixels=0.95, resolution=1008, prompt="x",
+             steps=4, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=12,
+             unet="qwen-image-2.1-UC-Q4_K_M.gguf", clip="c", vae="v", work_w=1312, work_h=736)
+    g = graphs.build_edit_graph(p)
+    assert g["unet"]["class_type"] == "UnetLoaderGGUF"
+    assert g["sampler"]["inputs"]["latent_image"] == ["latent", 0]
+    assert "composite" in g and "feather" in g
+
+
+def test_edit_graph_without_mask_uses_encoder_latent():
+    p = dict(image="a.png", mask=None, use_mask=True, megapixels=0.95, resolution=1008, prompt="x",
+             steps=4, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple",
+             unet="x.safetensors", clip="c", vae="v", work_w=1312, work_h=736)
+    g = graphs.build_edit_graph(p)
+    assert g["sampler"]["inputs"]["latent_image"] == ["encode", 2]
+    assert "composite" not in g and g["unet"]["class_type"] == "UNETLoader"
+
+
+def test_paste_mode_edits_freely_and_composites():
+    p = dict(image="a.png", mask="m.png", use_mask=True, mode="paste", megapixels=0.95, resolution=1008, prompt="x",
+             steps=4, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=0,
+             unet="u.gguf", clip="c", vae="v", work_w=1344, work_h=736)
+    g = graphs.build_edit_graph(p)
+    assert g["sampler"]["inputs"]["latent_image"] == ["encode", 2]
+    assert g["composite"]["inputs"]["resize_source"] is True and "latent" not in g

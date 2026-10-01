@@ -12,6 +12,11 @@ A small local web app for mask-based image editing with **Qwen-Image 2.1** throu
 The app predicts the working size and warns (or auto-fixes) when it would exceed ~4096 latent
 tokens, the point where the edit turns into gray noise on Apple Silicon.
 
+## Run history
+Every finished run is stored in `data/runs/` (gitignored) and listed again after a reload,
+including its step frames, before/after and the raw edit. Deleting a run there keeps the
+images in the ComfyUI output folder.
+
 ## Requirements
 - ComfyUI with ComfyUI-GGUF, the SAM3 checkpoint `sam3.1_multiplex_fp16.safetensors`,
   a Qwen-Image 2.1 model, `qwen3vl_8b_*` text encoder and the Qwen-Image 2.1 VAE.

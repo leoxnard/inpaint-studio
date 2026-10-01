@@ -621,7 +621,34 @@ function renderFilmstrip() {
 
 function freeRunFrames(run) {
   if (!run || state.runs.some((r) => r === run)) return;
-  for (const f of run.frames) if (f.kind !== "saved") URL.revokeObjectURL(f.url);
+  for (const f of run.frames) if (f.url.startsWith("blob:")) URL.revokeObjectURL(f.url);
+}
+
+// ------------------------------------------------------------------ persisted run history
+function runFromStored(r) {
+  return {
+    id: r.id, serverId: r.id, prompt: r.params?.prompt || "", seed: r.params?.seed, steps: r.params?.steps,
+    frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
+    rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
+    value: r.params?.steps, max: r.params?.steps, created: r.created,
+  };
+}
+
+async function loadStoredRuns() {
+  try {
+    const runs = await api("/api/runs");
+    state.runs = runs.map(runFromStored);
+    renderHistory();
+  } catch (e) { showError(`Could not load run history: ${e.message}`); }
+}
+
+async function deleteRun(run) {
+  if (!confirm("Delete this run from the history? (Images in the ComfyUI output folder are kept.)")) return;
+  try {
+    if (run.serverId) await api(`/api/runs/${encodeURIComponent(run.serverId)}`, { method: "DELETE" });
+    state.runs = state.runs.filter((r) => r !== run);
+    renderHistory();
+  } catch (e) { showError(e.message); }
 }
 
 function endSocket() {
@@ -636,6 +663,8 @@ function finishRun(run, m) {
   run.beforeUrl = m.before_url;
   run.rawUrl = m.raw_url || null;
   run.maskUrl = m.mask_url || null;
+  run.serverId = m.run_id || null;
+  run.steps = run.max;
   run.filename = m.filename;
   $("progressBar").style.width = "100%";
   $("progressText").textContent = `Done in ${fmtTime((performance.now() - run.t0) / 1000)}`;
@@ -746,10 +775,14 @@ function renderHistory() {
     img.src = run.resultUrl; img.alt = "";
     const d = document.createElement("div");
     const t = document.createElement("div"); t.className = "t"; t.textContent = run.prompt;
-    const s = document.createElement("div"); s.className = "s"; s.textContent = `seed ${run.seed} · ${run.frames.length} steps`;
+    const when = run.created ? new Date(run.created * 1000).toLocaleString() : "";
+    const s = document.createElement("div"); s.className = "s";
+    s.textContent = [when, `seed ${run.seed}`, `${run.steps ?? run.max} steps`].filter(Boolean).join(" · ");
     d.append(t, s);
-    b.append(img, d);
-    b.onclick = () => { if (state.running) return; showRun(run); $("progressWrap").hidden = true; };
+    const del = document.createElement("span"); del.className = "hist-del"; del.textContent = "×"; del.title = "Delete from history";
+    del.onclick = (ev) => { ev.stopPropagation(); deleteRun(run); };
+    b.append(img, d, del);
+    b.onclick = () => { if (state.running) return; setView("result"); showRun(run); $("progressWrap").hidden = true; };
     box.appendChild(b);
   }
 }
@@ -820,3 +853,5 @@ init();
 function syncModeUi() { $("keepIdenticalRow").hidden = $("mode").value !== "paste"; }
 $("mode").addEventListener("change", syncModeUi);
 syncModeUi();
+
+loadStoredRuns();

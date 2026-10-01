@@ -178,10 +178,12 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
             "resize_source": True, "mask": ["mask", 0]}}
         result = ["composite", 0]
     g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": result, "filename_prefix": p.get("prefix", "InpaintStudio/edit")}}
-    g["out_before"] = {"class_type": "PreviewImage", "inputs": {"images": ["scale", 0]}}
+    # saved (not temp previews) so the run history survives reloads and ComfyUI restarts
+    prefix = p.get("prefix", "InpaintStudio/edit")
+    g["out_before"] = {"class_type": "SaveImage", "inputs": {"images": ["scale", 0], "filename_prefix": f"{prefix}/before"}}
     if use_mask:  # the raw model output before pasting, to judge how well it lines up
-        g["out_raw"] = {"class_type": "PreviewImage", "inputs": {"images": ["decode", 0]}}
-        g["out_mask"] = {"class_type": "PreviewImage", "inputs": {"images": ["mask_preview", 0]}}
+        g["out_raw"] = {"class_type": "SaveImage", "inputs": {"images": ["decode", 0], "filename_prefix": f"{prefix}/raw"}}
+        g["out_mask"] = {"class_type": "SaveImage", "inputs": {"images": ["mask_preview", 0], "filename_prefix": f"{prefix}/mask"}}
         g["mask_preview"] = {"class_type": "MaskToImage", "inputs": {"mask": ["mask", 0]}}
     return g
 

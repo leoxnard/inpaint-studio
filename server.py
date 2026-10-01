@@ -32,6 +32,10 @@ WEB = ROOT / "web"
 COMFY = os.environ.get("COMFY_URL") or "http://127.0.0.1:8188"
 COMFY_WS = COMFY.replace("http", "ws", 1) + "/ws"
 SUBFOLDER = "inpaint-studio"
+RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or ROOT / "data") / "runs"
+RUNS.mkdir(parents=True, exist_ok=True)
+HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
+                  "scheduler", "feather", "megapixels", "resolution", "save_every", "unet", "keep_identical")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -204,6 +208,39 @@ async def cancel():
     return {"cancelled": False, "reason": "no own job running"}
 
 
+# ---------------------------------------------------------------- run history (persisted on disk)
+
+def save_run(run: dict) -> None:
+    d = RUNS / run["id"]
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / "run.json.tmp"
+    tmp.write_text(json.dumps(run, indent=1))
+    tmp.replace(d / "run.json")
+
+
+@app.get("/api/runs")
+async def list_runs():
+    runs = []
+    for f in RUNS.glob("*/run.json"):
+        try:
+            runs.append(json.loads(f.read_text()))
+        except (OSError, json.JSONDecodeError):
+            continue
+    runs = [r for r in runs if r.get("status") == "done"]
+    return sorted(runs, key=lambda r: r.get("created", 0), reverse=True)
+
+
+@app.delete("/api/runs/{run_id}")
+async def delete_run(run_id: str):
+    d = (RUNS / run_id).resolve()
+    if d.parent != RUNS.resolve() or not d.is_dir():
+        raise HTTPException(404, "run not found")
+    for f in d.iterdir():
+        f.unlink()
+    d.rmdir()
+    return {"deleted": run_id}
+
+
 # ---------------------------------------------------------------- live edit over websocket
 
 def parse_preview(msg: bytes) -> tuple[str, bytes] | None:
@@ -229,13 +266,19 @@ async def ws_edit(ws: WebSocket):
         params["work_w"], params["work_h"] = rep["work_w"], rep["work_h"]
         params.setdefault("prefix", f"InpaintStudio/{time.strftime('%Y%m%d-%H%M%S')}")
         client_id = f"inpaint-studio-{uuid.uuid4().hex}"
+        run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+        run: dict | None = None
+        live_n = 0
         graph = graphs.build_edit_graph(params)
         every = int(params.get("save_every") or 0)
         chunk_starts = [a for a, _ in graphs.step_chunks(int(params["steps"]), every)] if every > 0 else []
         async with websockets.connect(f"{COMFY_WS}?clientId={client_id}", max_size=64 * 1024 * 1024) as cws:
             pid = await submit(graph, client_id, {"preview_method": params.get("preview_method", "auto")})
             current_prompt["id"] = pid
-            await ws.send_json({"type": "queued", "prompt_id": pid, "size": rep})
+            run = {"id": run_id, "created": time.time(), "status": "running", "prompt_id": pid,
+                   "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": rep, "frames": []}
+            save_run(run)
+            await ws.send_json({"type": "queued", "prompt_id": pid, "size": rep, "run_id": run_id})
             step = 0
             while True:
                 msg = await cws.recv()
@@ -243,6 +286,11 @@ async def ws_edit(ws: WebSocket):
                     parsed = parse_preview(msg)
                     if parsed:
                         mime, data = parsed
+                        if run and not any(f["kind"] == "saved" and f["step"] == step for f in run["frames"]):
+                            live_n += 1
+                            name = f"live_{live_n:03d}.{'png' if 'png' in mime else 'jpg'}"
+                            (RUNS / run_id / name).write_bytes(data)
+                            run["frames"].append({"kind": "live", "step": step, "mime": mime, "url": f"/data/runs/{run_id}/{name}"})
                         await ws.send_json({"type": "preview", "step": step, "mime": mime, "data": base64.b64encode(data).decode()})
                     continue
                 ev = json.loads(msg)
@@ -258,7 +306,14 @@ async def ws_edit(ws: WebSocket):
                 elif kind == "executed" and str(data.get("node", "")).startswith("stepsave_"):
                     imgs = (data.get("output") or {}).get("images", [])
                     if imgs:
-                        await ws.send_json({"type": "step_image", "step": int(data["node"].split("_")[1]),
+                        sstep = int(data["node"].split("_")[1])
+                        if run:  # the saved render replaces the live preview of the same step
+                            for f in [f for f in run["frames"] if f["kind"] == "live" and f["step"] == sstep]:
+                                (RUNS / run_id / Path(f["url"]).name).unlink(missing_ok=True)
+                                run["frames"].remove(f)
+                            run["frames"].append({"kind": "saved", "step": sstep, "mime": "image/png",
+                                                  "url": view_url(imgs[0]), "filename": imgs[0]["filename"]})
+                        await ws.send_json({"type": "step_image", "step": sstep,
                                             "url": view_url(imgs[0]), "filename": imgs[0]["filename"]})
                 elif kind == "executing" and data.get("node"):
                     await ws.send_json({"type": "node", "node": data["node"]})
@@ -275,7 +330,15 @@ async def ws_edit(ws: WebSocket):
                     before = outs.get("out_before", {}).get("images", [])
                     raw = outs.get("out_raw", {}).get("images", [])
                     pmask = outs.get("out_mask", {}).get("images", [])
-                    await ws.send_json({"type": "done",
+                    if run:
+                        run.update({"status": "done", "finished": time.time(),
+                                    "result_url": view_url(res[0]) if res else None,
+                                    "before_url": view_url(before[0]) if before else None,
+                                    "raw_url": view_url(raw[0]) if raw else None,
+                                    "mask_url": view_url(pmask[0]) if pmask else None,
+                                    "filename": res[0]["filename"] if res else None})
+                        save_run(run)
+                    await ws.send_json({"type": "done", "run_id": run_id,
                                         "result_url": view_url(res[0]) if res else None,
                                         "before_url": view_url(before[0]) if before else None,
                                         "raw_url": view_url(raw[0]) if raw else None,
@@ -301,6 +364,7 @@ async def index():
     return FileResponse(WEB / "index.html")
 
 
+app.mount("/data/runs", StaticFiles(directory=RUNS), name="runs")
 app.mount("/", StaticFiles(directory=WEB), name="web")
 
 if __name__ == "__main__":

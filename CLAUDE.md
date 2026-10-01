@@ -22,4 +22,7 @@ per-step previews. Runs only on Leonard's Mac, no deploy.
 - Gray-noise limit: on MPS the edit breaks at >= 4096 latent tokens for target or reference
   (pixels/16 per side). `graphs.TOKEN_LIMIT`; the UI auto-fixes size by default.
 - Model, text encoder and VAE must match (Qwen-Image 2.1 ↔ qwen3vl_8b ↔ qwen_image_2.1 VAE).
-- Uploads go to ComfyUI `input/inpaint-studio/`, results to `output/InpaintStudio/`.
+- Uploads go to ComfyUI `input/inpaint-studio/`, results (incl. before/raw/mask/step images) to
+  `output/InpaintStudio/<run>/`.
+- Run history: `data/runs/<id>/run.json` + live preview JPEGs (gitignored), served at
+  `/data/runs`, listed by `GET /api/runs`, removed by `DELETE /api/runs/{id}`.

@@ -26,4 +26,7 @@ Set `COMFY_URL` / `PORT` to override the defaults (see `.env.example`).
 ## Edit modes
 - **Inpaint (mask only)** – only the masked area is re-generated.
 - **Free edit + paste** – the whole image is edited, then only the masked area is pasted into
-  the original. Try this when the model keeps redrawing the old content.
+  the original (starting from the original latent, so it stays aligned). Optionally tells the
+  model to keep everything else identical; the UI shows the raw edit and how much it differs
+  from the original outside the mask. Try this when the model keeps redrawing the old content
+  or the inpainted background looks out of context.

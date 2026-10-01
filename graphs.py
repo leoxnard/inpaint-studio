@@ -88,6 +88,17 @@ def build_mask_graph(image: str, megapixels: float, text: str, threshold: float 
     return g
 
 
+KEEP_IDENTICAL = ("Keep everything else in the image exactly identical to the original: same framing, "
+                  "perspective, positions, people, objects, colors, lighting and fine details. "
+                  "Only change what is described above.")
+
+
+def edit_prompt(p: dict[str, Any]) -> str:
+    if p.get("mode") == "paste" and p.get("keep_identical", True):
+        return f"{p['prompt'].strip()}\n\n{KEEP_IDENTICAL}"
+    return p["prompt"]
+
+
 def build_edit_graph(p: dict[str, Any]) -> dict:
     """Step 2: Qwen-Image 2.1 edit, optionally restricted to an uploaded mask.
 
@@ -107,7 +118,7 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
         "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": p["clip"], "type": "qwen_image", "device": "default"}},
         "encode": {"class_type": "TextEncodeQwenImage21", "inputs": {
             "clip": ["clip", 0], "vae": ["vae", 0], "images.image_1": ["scale", 0],
-            "prompt": p["prompt"], "negative_prompt": p.get("negative", ""), "resolution": p["resolution"]}},
+            "prompt": edit_prompt(p), "negative_prompt": p.get("negative", ""), "resolution": p["resolution"]}},
     }
     unet = p["unet"]
     if unet.endswith(".gguf"):
@@ -138,7 +149,10 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
         g["mask_hard_src"] = {"class_type": "ImageToMask", "inputs": {"image": ["mask_grid_up", 0], "channel": "red"}}
         g["mask_hard"] = {"class_type": "ThresholdMask", "inputs": {"mask": ["mask_hard_src", 0], "value": 0.5}}
         if p.get("mode", "inpaint") == "paste":
-            latent = ["encode", 2]
+            # start from the original latent (exact working size, no noise mask): the edit stays
+            # pixel-aligned with the original, and denoise < 1 keeps it even closer
+            g["latent_src"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["scale", 0], "vae": ["vae", 0]}}
+            latent = ["latent_src", 0]
         else:
             g["latent_src"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["scale", 0], "vae": ["vae", 0]}}
             g["latent"] = {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["latent_src", 0], "mask": ["mask_hard", 0]}}
@@ -165,6 +179,10 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
         result = ["composite", 0]
     g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": result, "filename_prefix": p.get("prefix", "InpaintStudio/edit")}}
     g["out_before"] = {"class_type": "PreviewImage", "inputs": {"images": ["scale", 0]}}
+    if use_mask:  # the raw model output before pasting, to judge how well it lines up
+        g["out_raw"] = {"class_type": "PreviewImage", "inputs": {"images": ["decode", 0]}}
+        g["out_mask"] = {"class_type": "PreviewImage", "inputs": {"images": ["mask_preview", 0]}}
+        g["mask_preview"] = {"class_type": "MaskToImage", "inputs": {"mask": ["mask", 0]}}
     return g
 
 

@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "saveEvery", "seed",
+  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "unet", "clip", "vae",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -487,7 +487,7 @@ async function runEdit() {
       megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10),
       prompt: $("prompt").value, negative: $("negative").value,
       steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
-      sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value, save_every: parseInt($("saveEvery").value, 10) || 0,
+      sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value, keep_identical: $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
       unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
     };
     startRun(params);
@@ -611,6 +611,8 @@ function finishRun(run, m) {
   run.done = true;
   run.resultUrl = m.result_url;
   run.beforeUrl = m.before_url;
+  run.rawUrl = m.raw_url || null;
+  run.maskUrl = m.mask_url || null;
   run.filename = m.filename;
   $("progressBar").style.width = "100%";
   $("progressText").textContent = `Done in ${fmtTime((performance.now() - run.t0) / 1000)}`;
@@ -644,6 +646,42 @@ function showRun(run) {
   renderFilmstrip();
   showCompare();
   renderHistory();
+  $("showRaw").hidden = !run.rawUrl;
+  $("matchInfo").textContent = run.match || "";
+  if (run.rawUrl && run.maskUrl && !run.match) measureMatch(run);
+}
+
+$("showRaw").onclick = () => {
+  const run = state.run;
+  if (!run || !run.rawUrl) return;
+  $("liveImg").src = run.rawUrl;
+  $("liveImg").hidden = false;
+  $("compare").hidden = true;
+  $("showCompare").hidden = false;
+};
+
+function loadImg(url) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+}
+
+// How closely the free edit matches the original outside the mask (paste only works if it lines up)
+async function measureMatch(run) {
+  try {
+    const [b, r, m] = await Promise.all([loadImg(run.beforeUrl), loadImg(run.rawUrl), loadImg(run.maskUrl)]);
+    const w = b.naturalWidth, h = b.naturalHeight;
+    const px = (img) => { const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d"); x.drawImage(img, 0, 0, w, h); return x.getImageData(0, 0, w, h).data; };
+    const B = px(b), R = px(r), M = px(m);
+    let sum = 0, n = 0;
+    for (let i = 0; i < B.length; i += 4) {
+      if (M[i] > 20) continue; // only pixels clearly outside the mask
+      sum += (Math.abs(B[i] - R[i]) + Math.abs(B[i + 1] - R[i + 1]) + Math.abs(B[i + 2] - R[i + 2])) / 3;
+      n++;
+    }
+    const diff = n ? sum / n : 0;
+    const verdict = diff < 8 ? "very close" : diff < 16 ? "close" : diff < 28 ? "noticeably different" : "different – paste may not line up";
+    run.match = `Outside-mask difference: ${diff.toFixed(1)} / 255 (${verdict})`;
+    if (state.run === run) $("matchInfo").textContent = run.match;
+  } catch { /* measurement is optional */ }
 }
 
 function showCompare() {
@@ -755,3 +793,7 @@ function init() {
   setInterval(pollStatus, 5000);
 }
 init();
+
+function syncModeUi() { $("keepIdenticalRow").hidden = $("mode").value !== "paste"; }
+$("mode").addEventListener("change", syncModeUi);
+syncModeUi();

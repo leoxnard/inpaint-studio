@@ -273,9 +273,13 @@ async def ws_edit(ws: WebSocket):
                     outs = entry.get("outputs", {})
                     res = outs.get("out_result", {}).get("images", [])
                     before = outs.get("out_before", {}).get("images", [])
+                    raw = outs.get("out_raw", {}).get("images", [])
+                    pmask = outs.get("out_mask", {}).get("images", [])
                     await ws.send_json({"type": "done",
                                         "result_url": view_url(res[0]) if res else None,
                                         "before_url": view_url(before[0]) if before else None,
+                                        "raw_url": view_url(raw[0]) if raw else None,
+                                        "mask_url": view_url(pmask[0]) if pmask else None,
                                         "filename": res[0]["filename"] if res else None})
                     break
     except WebSocketDisconnect:

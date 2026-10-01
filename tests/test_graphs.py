@@ -47,8 +47,9 @@ def test_paste_mode_edits_freely_and_composites():
              steps=4, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=0,
              unet="u.gguf", clip="c", vae="v", work_w=1344, work_h=736)
     g = graphs.build_edit_graph(p)
-    assert g["sampler"]["inputs"]["latent_image"] == ["encode", 2]
-    assert g["composite"]["inputs"]["resize_source"] is True and "latent" not in g
+    assert g["sampler"]["inputs"]["latent_image"] == ["latent_src", 0]
+    assert "latent" not in g and "out_raw" in g
+    assert graphs.KEEP_IDENTICAL in g["encode"]["inputs"]["prompt"]
 
 
 def test_chunks_cover_all_steps():
@@ -65,3 +66,8 @@ def test_chunked_graph_saves_every_n_steps():
     assert g["chunk_1"]["inputs"]["latent_image"] == ["chunk_fix_0", 0]
     assert g["chunk_fix_0"]["inputs"]["source"] == ["latent", 0]
     assert g["decode"]["inputs"]["samples"] == ["chunk_fix_2", 0] and "sampler" not in g
+
+
+def test_keep_identical_only_in_paste_mode():
+    assert graphs.edit_prompt({"prompt": "x", "mode": "inpaint"}) == "x"
+    assert graphs.edit_prompt({"prompt": "x", "mode": "paste", "keep_identical": False}) == "x"

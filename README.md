@@ -12,6 +12,11 @@ A small local web app for mask-based image editing with **Qwen-Image 2.1** throu
 The app predicts the working size and warns (or auto-fixes) when it would exceed ~4096 latent
 tokens, the point where the edit turns into gray noise on Apple Silicon.
 
+## Queue
+"Run edit" adds a job to a server-side queue, so you can keep preparing the next edit. The
+Queue panel shows each job (queued / running step x of y) with a cancel button; jobs keep running
+when the page is reloaded or closed.
+
 ## Run history
 Every finished run is stored in `data/runs/` (gitignored) and listed again after a reload,
 including its step frames, before/after and the raw edit. Deleting a run there keeps the

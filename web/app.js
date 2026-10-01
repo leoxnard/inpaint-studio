@@ -477,20 +477,21 @@ function exportMaskBlob() {
 }
 
 // ------------------------------------------------------------------ step 2: run edit
-function setRunning(on) {
-  state.running = on;
+// Submitting never blocks for the whole run anymore: jobs go into the server queue.
+function setSubmitting(on) {
+  state.submitting = on;
   $("runEdit").disabled = on;
-  $("runEdit").textContent = on ? "Running..." : "Run edit";
+  $("runEdit").textContent = on ? "Adding to queue..." : "Run edit (add to queue)";
 }
 
 async function runEdit() {
-  if (state.running) return;
+  if (state.submitting) return;
   if (!state.imageName) { showError("Load an image first."); return; }
   const useMask = $("useMask").checked;
-  setRunning(true);
+  setSubmitting(true);
   try {
     const rep = await refreshSize();
-    if (!rep) { setRunning(false); return; }
+    if (!rep) return;
     let maskName = null;
     if (useMask) {
       if (!state.hasMask) throw new Error("No mask yet. Compute or paint a mask, or turn off \"Use mask\".");
@@ -513,85 +514,183 @@ async function runEdit() {
       sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value, keep_identical: $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
       unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
     };
-    startRun(params);
+    await submitJob(params);
   } catch (e) {
-    setRunning(false);
     showError(e.message);
+  } finally {
+    setSubmitting(false);
   }
 }
 
-function startRun(params) {
-  freeRunFrames(state.run);
-  const run = {
-    id: Date.now(), prompt: params.prompt, seed: params.seed, frames: [], t0: performance.now(),
-    value: 0, max: params.steps, resultUrl: null, beforeUrl: null, filename: null, done: false, timer: 0,
-  };
-  state.run = run;
+// ------------------------------------------------------------------ job queue (server-side)
+state.jobs = new Map();   // job_id -> run-like object while queued/running
+state.follow = true;      // viewer follows the running job until the user picks something else
+
+function jobFromSummary(sum) {
+  let job = state.jobs.get(sum.job_id);
+  if (!job) {
+    job = { id: sum.job_id, serverId: sum.job_id, prompt: sum.prompt, seed: sum.seed, steps: sum.steps,
+      max: sum.steps, value: 0, frames: [], done: false, status: "queued", t0: null, created: sum.created };
+    state.jobs.set(sum.job_id, job);
+  }
+  job.status = sum.status || job.status;
+  job.value = sum.value || job.value;
+  if (sum.frames) job.frames = sum.frames.map((f) => ({ ...f }));
+  if (job.status === "running" && !job.t0) job.t0 = performance.now();
+  return job;
+}
+
+async function submitJob(params) {
+  const sum = await postJson("/api/jobs", params);
+  const job = jobFromSummary(sum);
+  renderQueue();
+  // show it right away if nothing else is running, otherwise it just waits in the queue
+  if (state.follow && ![...state.jobs.values()].some((j) => j !== job && j.status === "running")) viewJob(job);
   setView("result");
+}
+
+function viewJob(job) {
+  freeRunFrames(state.run);
+  state.run = job;
   $("resultEmpty").hidden = true;
   $("compare").hidden = true;
   $("liveImg").hidden = true;
   $("resultActions").hidden = true;
   $("showCompare").hidden = true;
   $("progressWrap").hidden = false;
-  $("progressBar").style.width = "0%";
-  $("progressText").textContent = "Queued...";
+  $("matchInfo").textContent = "";
+  clearInterval(state.progressTimer);
+  state.progressTimer = setInterval(updateProgressText, 500);
+  updateProgressText();
   renderFilmstrip();
   syncViewerOpts();
-  run.timer = setInterval(updateProgressText, 500);
+  const vis = visibleFrames(job);
+  if (vis.length) showFrame(vis.length - 1);
+  renderQueue();
+  renderHistory();
+}
 
+function addJobFrame(job, frame) {
+  if (job.frames.some((f) => f.url === frame.url)) return;
+  if (frame.kind === "saved") job.frames = job.frames.filter((f) => !(f.kind === "live" && f.step === frame.step));
+  frameAdded(job, frame);
+}
+
+function jobFinished(m) {
+  const job = state.jobs.get(m.job_id);
+  state.jobs.delete(m.job_id);
+  renderQueue();
+  const viewing = job && state.run === job;
+  if (m.type === "done" && m.run) {
+    const run = runFromStored(m.run);
+    if (!state.runs.some((r) => r.serverId === run.serverId)) state.runs.unshift(run);
+    renderHistory();
+    if (viewing) {
+      clearInterval(state.progressTimer);
+      showRun(run);
+      $("progressWrap").hidden = false;
+      $("progressBar").style.width = "100%";
+      $("progressText").textContent = job.t0 ? `Done in ${fmtTime((performance.now() - job.t0) / 1000)}` : "Done";
+    }
+  } else if (viewing) {
+    clearInterval(state.progressTimer);
+    $("progressText").textContent = m.type === "cancelled" ? "Cancelled" : `Failed: ${m.run?.error || "unknown error"}`;
+  }
+  if (m.type === "error") showError(m.run?.error || "Job failed");
+  // keep following: switch to the next running job
+  const next = [...state.jobs.values()].find((j) => j.status === "running");
+  if (next && state.follow && viewing) viewJob(next);
+}
+
+function connectJobs() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws/edit`);
-  state.ws = ws;
-  let finished = false;
-  ws.onopen = () => ws.send(JSON.stringify(params));
+  const ws = new WebSocket(`${proto}://${location.host}/ws/jobs`);
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     switch (m.type) {
-      case "queued": $("progressText").textContent = `Queued – working size ${m.size.work_w}×${m.size.work_h}`; break;
-      case "node": $("progressText").textContent = `Running node: ${m.node}`; break;
-      case "progress": run.value = m.value; run.max = m.max; updateProgressText(); break;
-      case "preview": addFrame(run, m); break;
-      case "step_image": addSavedFrame(run, m); break;
-      case "done": finished = true; finishRun(run, m); break;
-      case "error": finished = true; failRun(run, m.message); break;
+      case "snapshot": {
+        state.jobs.clear();
+        for (const sum of m.jobs) jobFromSummary(sum);
+        renderQueue();
+        const running = [...state.jobs.values()].find((j) => j.status === "running");
+        if (running && state.follow) { setView("result"); viewJob(running); }
+        break;
+      }
+      case "queued": jobFromSummary(m.job); renderQueue(); break;
+      case "running": {
+        const job = state.jobs.get(m.job_id);
+        if (!job) break;
+        job.status = "running"; job.t0 = performance.now();
+        renderQueue();
+        const viewingFinished = !state.run || state.run.done || !state.jobs.has(state.run.id);
+        if (state.follow && (state.run === job || viewingFinished)) viewJob(job);
+        else if (state.run === job) updateProgressText();
+        break;
+      }
+      case "progress": {
+        const job = state.jobs.get(m.job_id);
+        if (!job) break;
+        job.value = m.value; job.max = m.max;
+        if (state.run === job) updateProgressText();
+        renderQueue();
+        break;
+      }
+      case "frame": { const job = state.jobs.get(m.job_id); if (job) addJobFrame(job, m.frame); break; }
+      case "done": case "error": case "cancelled": jobFinished(m); break;
     }
   };
-  ws.onerror = () => { if (!finished) { finished = true; failRun(run, "WebSocket connection failed."); } };
-  ws.onclose = () => { if (!finished) { finished = true; failRun(run, "Connection closed before the edit finished."); } };
+  ws.onclose = () => setTimeout(connectJobs, 2000); // server restart / sleep -> reconnect
+}
+
+function renderQueue() {
+  const box = $("queue");
+  const jobs = [...state.jobs.values()].sort((a, b) => a.created - b.created);
+  $("queueWrap").hidden = !jobs.length;
+  box.innerHTML = "";
+  let pos = 0;
+  for (const job of jobs) {
+    const b = document.createElement("button");
+    b.className = "queue-item" + (job === state.run ? " active" : "");
+    const status = job.status === "running" ? `running · step ${job.value} / ${job.max}` : `queued #${++pos}`;
+    const t = document.createElement("div"); t.className = "t"; t.textContent = job.prompt;
+    const st = document.createElement("div"); st.className = "s"; st.textContent = `${status} · seed ${job.seed}`;
+    const d = document.createElement("div"); d.append(t, st);
+    const x = document.createElement("span"); x.className = "hist-del"; x.textContent = "×";
+    x.title = job.status === "running" ? "Cancel this job" : "Remove from queue";
+    x.onclick = (ev) => { ev.stopPropagation(); cancelJob(job); };
+    b.append(d, x);
+    b.onclick = () => { state.follow = true; setView("result"); viewJob(job); };
+    box.appendChild(b);
+  }
+  renderQueueLabel();
+}
+
+function renderQueueLabel() {
+  const tab = document.querySelector('#viewTabs [data-view="result"]');
+  const n = state.jobs ? state.jobs.size : 0;
+  if (tab) tab.textContent = `Result${state.runs.length ? ` · ${state.runs.length} saved` : ""}${n ? ` · ${n} queued` : ""}`;
+}
+
+async function cancelJob(job) {
+  try { await postJson(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, {}); } catch (e) { showError(e.message); }
 }
 
 function updateProgressText() {
   const run = state.run;
   if (!run || run.done) return;
+  if (run.status === "queued") {
+    const ahead = [...state.jobs.values()].filter((j) => j.created < run.created).length;
+    $("progressBar").style.width = "0%";
+    $("progressText").textContent = `In queue – ${ahead} job${ahead === 1 ? "" : "s"} ahead`;
+    return;
+  }
   const pct = run.max ? (run.value / run.max) * 100 : 0;
   $("progressBar").style.width = `${pct}%`;
-  const el = (performance.now() - run.t0) / 1000;
+  const el = (performance.now() - (run.t0 || performance.now())) / 1000;
   let txt = run.value ? `step ${run.value} / ${run.max}` : "Waiting for sampler...";
   txt += ` · ${fmtTime(el)} elapsed`;
   if (run.value > 0 && run.value < run.max) txt += ` · ~${fmtTime(el / run.value * (run.max - run.value))} left`;
   $("progressText").textContent = txt;
-}
-
-function addFrame(run, m) {
-  // a saved full-quality render for this step already exists -> no extra live preview
-  if (run.frames.some((f) => f.kind === "saved" && f.step === m.step)) return;
-  const bin = atob(m.data);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const url = URL.createObjectURL(new Blob([bytes], { type: m.mime }));
-  frameAdded(run, { url, step: m.step, mime: m.mime, kind: "live" });
-}
-
-// full-quality intermediate image (real VAE decode), saved by ComfyUI every N steps;
-// variant "raw" = full generated image before pasting (free edit + paste mode)
-function addSavedFrame(run, m) {
-  run.frames = run.frames.filter((f) => {
-    const drop = f.kind === "live" && f.step === m.step; // the saved render replaces the live preview
-    if (drop && f.url.startsWith("blob:")) URL.revokeObjectURL(f.url);
-    return !drop;
-  });
-  frameAdded(run, { url: m.url, step: m.step, mime: "image/png", kind: "saved", variant: m.variant || "result", filename: m.filename });
 }
 
 function frameAdded(run, frame) {
@@ -704,43 +803,11 @@ async function deleteRun(run) {
   } catch (e) { showError(e.message); }
 }
 
-function endSocket() {
-  setRunning(false);
-  if (state.ws) { try { state.ws.close(); } catch { /* ignore */ } state.ws = null; }
-}
-
-function finishRun(run, m) {
-  clearInterval(run.timer);
-  run.done = true;
-  run.resultUrl = m.result_url;
-  run.beforeUrl = m.before_url;
-  run.rawUrl = m.raw_url || null;
-  run.maskUrl = m.mask_url || null;
-  run.serverId = m.run_id || null;
-  run.steps = run.max;
-  run.filename = m.filename;
-  $("progressBar").style.width = "100%";
-  $("progressText").textContent = `Done in ${fmtTime((performance.now() - run.t0) / 1000)}`;
-  endSocket();
-  if (!m.result_url) { showError("The run finished without a result image."); return; }
-  state.runs.unshift(run);
-  renderHistory();
-  showRun(run);
-}
-
-function failRun(run, message) {
-  clearInterval(run.timer);
-  run.done = true;
-  $("progressText").textContent = `Failed: ${message}`;
-  endSocket();
-  showError(message);
-}
-
-$("cancelEdit").onclick = async () => {
-  try { await postJson("/api/cancel", {}); } catch (e) { showError(e.message); }
+$("cancelEdit").onclick = () => {
+  const job = (state.run && state.jobs.get(state.run.id)) || [...state.jobs.values()].find((j) => j.status === "running");
+  if (job) cancelJob(job); else showError("No queued or running job.");
 };
 
-// ------------------------------------------------------------------ result display
 function showRun(run) {
   state.run = run;
   $("resultEmpty").hidden = true;
@@ -809,8 +876,7 @@ function setDivider(pct) {
 }
 
 function renderHistory() {
-  const tab = document.querySelector('#viewTabs [data-view="result"]');
-  if (tab) tab.textContent = state.runs.length ? `Result · ${state.runs.length} saved` : "Result";
+  renderQueueLabel();
   const box = $("history");
   box.innerHTML = "";
   if (!state.runs.length) { box.innerHTML = '<div class="hint">No runs yet.</div>'; return; }
@@ -828,7 +894,7 @@ function renderHistory() {
     const del = document.createElement("span"); del.className = "hist-del"; del.textContent = "×"; del.title = "Delete from history";
     del.onclick = (ev) => { ev.stopPropagation(); deleteRun(run); };
     b.append(img, d, del);
-    b.onclick = () => { if (state.running) return; setView("result"); showRun(run); $("progressWrap").hidden = true; };
+    b.onclick = () => { state.follow = false; clearInterval(state.progressTimer); setView("result"); showRun(run); $("progressWrap").hidden = true; };
     box.appendChild(b);
   }
 }
@@ -956,6 +1022,7 @@ async function restoreSession() {
 
 (async () => {
   const [restored] = await Promise.all([restoreSession(), loadStoredRuns()]);
+  connectJobs();
   // nothing to work on yet -> show the latest result instead of an empty page
   if (!restored && state.runs.length) { setView("result"); showRun(state.runs[0]); $("progressWrap").hidden = true; }
 })();

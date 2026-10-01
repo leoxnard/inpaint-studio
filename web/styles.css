@@ -181,3 +181,8 @@ body.dragging::after {
 
 #filmstrip img.raw { outline-color: #f5a524; }
 .viewer-opts { gap: 14px; align-items: center; margin: 6px 0; }
+
+.queue-item { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; }
+.queue-item .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
+.queue-item .s { font-size: 12px; opacity: .7; }
+.queue-item.active { border-color: var(--accent); }

@@ -7,7 +7,6 @@ Step 2 runs the edit; ComfyUI's per-step latent previews are relayed to the brow
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import json
 import os
@@ -39,7 +38,6 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
-current_prompt: dict[str, str | None] = {"id": None}
 
 
 @app.middleware("http")
@@ -198,16 +196,6 @@ async def mask(req: MaskReq):
     return {"mask_url": view_url(imgs[0]), "seconds": round(time.time() - t0, 1)}
 
 
-@app.post("/api/cancel")
-async def cancel():
-    q = await comfy_json("GET", "/queue")
-    running = [item[1] for item in q["queue_running"]]
-    if current_prompt["id"] and current_prompt["id"] in running:
-        await client.post("/interrupt")
-        return {"cancelled": True}
-    return {"cancelled": False, "reason": "no own job running"}
-
-
 # ---------------------------------------------------------------- run history (persisted on disk)
 
 def save_run(run: dict) -> None:
@@ -257,107 +245,178 @@ def parse_preview(msg: bytes) -> tuple[str, bytes] | None:
     return None
 
 
-@app.websocket("/ws/edit")
-async def ws_edit(ws: WebSocket):
-    await ws.accept()
+# ---------------------------------------------------------------- job queue
+# Every "Run edit" becomes a job: it is submitted to ComfyUI right away (ComfyUI queues it) and
+# a background task follows it on its own ComfyUI websocket. Browsers only subscribe to
+# /ws/jobs, so jobs keep running and get recorded when the page is reloaded or closed.
+
+JOBS: dict[str, dict] = {}            # job_id -> job (job["run"] is what ends up in run.json)
+SUBSCRIBERS: set[WebSocket] = set()
+
+
+async def broadcast(event: dict) -> None:
+    dead = []
+    for sub in list(SUBSCRIBERS):
+        try:
+            await sub.send_json(event)
+        except Exception:
+            dead.append(sub)
+    for sub in dead:
+        SUBSCRIBERS.discard(sub)
+
+
+def job_summary(job: dict) -> dict:
+    run = job["run"]
+    return {"job_id": run["id"], "status": run["status"], "prompt": run["params"].get("prompt", ""),
+            "seed": run["params"].get("seed"), "steps": run["params"].get("steps"), "value": job.get("value", 0),
+            "created": run["created"], "size": run.get("size"), "frames": run["frames"], "error": run.get("error")}
+
+
+async def finish_job(job: dict, status: str, **extra) -> None:
+    run = job["run"]
+    run.update({"status": status, "finished": time.time(), **extra})
+    save_run(run)
+    await broadcast({"type": status, "job_id": run["id"], "run": run})
+    JOBS.pop(run["id"], None)
+
+
+async def run_job(job: dict) -> None:
+    run, params, run_id = job["run"], job["params"], job["run"]["id"]
+    every = int(params.get("save_every") or 0)
+    chunk_starts = [a for a, _ in graphs.step_chunks(int(params["steps"]), every)] if every > 0 else []
+    client_id = f"inpaint-studio-{uuid.uuid4().hex}"
+    live_n, step = 0, 0
     try:
-        params = await ws.receive_json()
-        rep = graphs.size_report(params["src_w"], params["src_h"], params["megapixels"], params["resolution"])
-        params["work_w"], params["work_h"] = rep["work_w"], rep["work_h"]
-        params.setdefault("prefix", f"InpaintStudio/{time.strftime('%Y%m%d-%H%M%S')}")
-        client_id = f"inpaint-studio-{uuid.uuid4().hex}"
-        run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
-        run: dict | None = None
-        live_n = 0
-        graph = graphs.build_edit_graph(params)
-        every = int(params.get("save_every") or 0)
-        chunk_starts = [a for a, _ in graphs.step_chunks(int(params["steps"]), every)] if every > 0 else []
         async with websockets.connect(f"{COMFY_WS}?clientId={client_id}", max_size=64 * 1024 * 1024) as cws:
-            pid = await submit(graph, client_id, {"preview_method": params.get("preview_method", "auto")})
-            current_prompt["id"] = pid
-            run = {"id": run_id, "created": time.time(), "status": "running", "prompt_id": pid,
-                   "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": rep, "frames": []}
+            pid = await submit(job["graph"], client_id, {"preview_method": "auto"})
+            run["prompt_id"] = pid
             save_run(run)
-            await ws.send_json({"type": "queued", "prompt_id": pid, "size": rep, "run_id": run_id})
-            step = 0
+            await broadcast({"type": "queued", "job_id": run_id, "job": job_summary(job)})
             while True:
                 msg = await cws.recv()
                 if isinstance(msg, bytes):
                     parsed = parse_preview(msg)
-                    if parsed:
+                    if parsed and not any(f["kind"] == "saved" and f["step"] == step for f in run["frames"]):
                         mime, data = parsed
-                        if run and not any(f["kind"] == "saved" and f["step"] == step for f in run["frames"]):
-                            live_n += 1
-                            name = f"live_{live_n:03d}.{'png' if 'png' in mime else 'jpg'}"
-                            (RUNS / run_id / name).write_bytes(data)
-                            run["frames"].append({"kind": "live", "step": step, "mime": mime, "url": f"/data/runs/{run_id}/{name}"})
-                        await ws.send_json({"type": "preview", "step": step, "mime": mime, "data": base64.b64encode(data).decode()})
+                        live_n += 1
+                        name = f"live_{live_n:03d}.{'png' if 'png' in mime else 'jpg'}"
+                        (RUNS / run_id / name).write_bytes(data)
+                        frame = {"kind": "live", "step": step, "mime": mime, "url": f"/data/runs/{run_id}/{name}"}
+                        run["frames"].append(frame)
+                        await broadcast({"type": "frame", "job_id": run_id, "frame": frame})
                     continue
                 ev = json.loads(msg)
                 kind, data = ev.get("type"), ev.get("data", {})
                 if data.get("prompt_id") not in (None, pid):
                     continue
                 node = str(data.get("node") or "")
-                if kind == "progress" and (node == "sampler" or node.startswith("chunk_")):
+                if kind == "execution_start":
+                    run["status"] = "running"
+                    save_run(run)
+                    await broadcast({"type": "running", "job_id": run_id})
+                elif kind == "progress" and (node == "sampler" or node.startswith("chunk_")):
                     # chunked runs report per chunk; convert to overall step numbers
                     offset = chunk_starts[int(node.split("_")[1])] if node.startswith("chunk_") else 0
-                    step = offset + data["value"]
-                    await ws.send_json({"type": "progress", "value": step, "max": int(params["steps"])})
-                elif kind == "executed" and str(data.get("node", "")).startswith(("stepsave_", "stepraw_")):
+                    step = job["value"] = offset + data["value"]
+                    await broadcast({"type": "progress", "job_id": run_id, "value": step, "max": int(params["steps"])})
+                elif kind == "executed" and node.startswith(("stepsave_", "stepraw_")):
                     imgs = (data.get("output") or {}).get("images", [])
-                    variant = "raw" if data["node"].startswith("stepraw_") else "result"
-                    if imgs:
-                        sstep = int(data["node"].split("_")[1])
-                        if run:  # the saved render replaces the live preview of the same step
-                            for f in [f for f in run["frames"] if f["kind"] == "live" and f["step"] == sstep]:
-                                (RUNS / run_id / Path(f["url"]).name).unlink(missing_ok=True)
-                                run["frames"].remove(f)
-                            run["frames"].append({"kind": "saved", "variant": variant, "step": sstep, "mime": "image/png",
-                                                  "url": view_url(imgs[0]), "filename": imgs[0]["filename"]})
-                        await ws.send_json({"type": "step_image", "step": sstep, "variant": variant,
-                                            "url": view_url(imgs[0]), "filename": imgs[0]["filename"]})
-                elif kind == "executing" and data.get("node"):
-                    await ws.send_json({"type": "node", "node": data["node"]})
+                    if not imgs:
+                        continue
+                    sstep = int(node.split("_")[1])
+                    for f in [f for f in run["frames"] if f["kind"] == "live" and f["step"] == sstep]:
+                        (RUNS / run_id / Path(f["url"]).name).unlink(missing_ok=True)
+                        run["frames"].remove(f)  # the saved render replaces the live preview
+                    frame = {"kind": "saved", "variant": "raw" if node.startswith("stepraw_") else "result",
+                             "step": sstep, "mime": "image/png", "url": view_url(imgs[0]), "filename": imgs[0]["filename"]}
+                    run["frames"].append(frame)
+                    await broadcast({"type": "frame", "job_id": run_id, "frame": frame})
                 elif kind == "execution_error":
-                    await ws.send_json({"type": "error", "message": f"{data.get('node_type')}: {data.get('exception_message')}"})
-                    break
+                    await finish_job(job, "error", error=f"{data.get('node_type')}: {data.get('exception_message')}")
+                    return
                 elif kind == "execution_interrupted":
-                    await ws.send_json({"type": "error", "message": "Cancelled"})
-                    break
+                    await finish_job(job, "cancelled", error="Cancelled")
+                    return
                 elif kind == "execution_success" or (kind == "executing" and data.get("node") is None and data.get("prompt_id") == pid):
-                    entry = await wait_history(pid, timeout=30)
-                    outs = entry.get("outputs", {})
-                    res = outs.get("out_result", {}).get("images", [])
-                    before = outs.get("out_before", {}).get("images", [])
-                    raw = outs.get("out_raw", {}).get("images", [])
-                    pmask = outs.get("out_mask", {}).get("images", [])
-                    if run:
-                        run.update({"status": "done", "finished": time.time(),
-                                    "result_url": view_url(res[0]) if res else None,
-                                    "before_url": view_url(before[0]) if before else None,
-                                    "raw_url": view_url(raw[0]) if raw else None,
-                                    "mask_url": view_url(pmask[0]) if pmask else None,
-                                    "filename": res[0]["filename"] if res else None})
-                        save_run(run)
-                    await ws.send_json({"type": "done", "run_id": run_id,
-                                        "result_url": view_url(res[0]) if res else None,
-                                        "before_url": view_url(before[0]) if before else None,
-                                        "raw_url": view_url(raw[0]) if raw else None,
-                                        "mask_url": view_url(pmask[0]) if pmask else None,
-                                        "filename": res[0]["filename"] if res else None})
-                    break
-    except WebSocketDisconnect:
-        return
+                    outs = (await wait_history(pid, timeout=30)).get("outputs", {})
+                    first = lambda key: (outs.get(key, {}).get("images") or [None])[0]  # noqa: E731
+                    res, before, raw, pmask = first("out_result"), first("out_before"), first("out_raw"), first("out_mask")
+                    await finish_job(job, "done",
+                                     result_url=view_url(res) if res else None, before_url=view_url(before) if before else None,
+                                     raw_url=view_url(raw) if raw else None, mask_url=view_url(pmask) if pmask else None,
+                                     filename=res["filename"] if res else None)
+                    return
+    except asyncio.CancelledError:
+        raise
     except HTTPException as e:
-        await ws.send_json({"type": "error", "message": str(e.detail)})
-    except Exception as e:  # surface anything unexpected to the UI
-        await ws.send_json({"type": "error", "message": repr(e)})
+        await finish_job(job, "error", error=str(e.detail))
+    except Exception as e:  # keep the queue alive, report to the UI
+        await finish_job(job, "error", error=repr(e))
+
+
+@app.post("/api/jobs")
+async def create_job(params: dict):
+    rep = graphs.size_report(params["src_w"], params["src_h"], params["megapixels"], params["resolution"])
+    params["work_w"], params["work_h"] = rep["work_w"], rep["work_h"]
+    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    params["prefix"] = f"InpaintStudio/{run_id}"
+    graph = graphs.build_edit_graph(params)
+    run = {"id": run_id, "created": time.time(), "status": "queued",
+           "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": rep, "frames": []}
+    save_run(run)
+    job = {"run": run, "params": params, "graph": graph, "value": 0}
+    JOBS[run_id] = job
+    job["task"] = asyncio.create_task(run_job(job))
+    return job_summary(job)
+
+
+@app.get("/api/jobs")
+async def list_jobs():
+    return [job_summary(j) for j in JOBS.values()]
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found or already finished")
+    pid = job["run"].get("prompt_id")
+    q = await comfy_json("GET", "/queue")
+    if pid and pid in [item[1] for item in q["queue_running"]]:
+        await client.post("/interrupt", json={"prompt_id": pid})
+        return {"cancelled": True, "was": "running"}
+    if pid and pid in [item[1] for item in q["queue_pending"]]:
+        await client.post("/queue", json={"delete": [pid]})
+    job["task"].cancel()
+    await finish_job(job, "cancelled", error="Removed from queue")
+    return {"cancelled": True, "was": "queued"}
+
+
+@app.websocket("/ws/jobs")
+async def ws_jobs(ws: WebSocket):
+    await ws.accept()
+    SUBSCRIBERS.add(ws)
+    await ws.send_json({"type": "snapshot", "jobs": [job_summary(j) for j in JOBS.values()]})
+    try:
+        while True:
+            await ws.receive_text()  # keep-alive; the client does not send anything meaningful
+    except WebSocketDisconnect:
+        pass
     finally:
-        current_prompt["id"] = None
+        SUBSCRIBERS.discard(ws)
+
+
+@app.on_event("startup")
+async def mark_orphaned_runs():
+    # jobs live in memory; runs left "queued"/"running" by a previous server process are stale
+    for f in RUNS.glob("*/run.json"):
         try:
-            await ws.close()
-        except RuntimeError:
-            pass
+            run = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if run.get("status") in ("queued", "running"):
+            run.update({"status": "error", "error": "Server restarted before the job finished"})
+            save_run(run)
 
 
 @app.get("/")

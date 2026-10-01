@@ -131,7 +131,7 @@
           <label>VAE <select id="vae"></select></label>
         </details>
         <div class="row">
-          <button class="primary" id="runEdit">Run edit</button>
+          <button class="primary" id="runEdit">Run edit (add to queue)</button>
           <button id="cancelEdit">Cancel</button>
         </div>
       </section>
@@ -176,6 +176,10 @@
             <button id="useResult">Use result as new input</button>
             <button id="showCompare" hidden>Show comparison</button>
             <span class="hint" id="matchInfo"></span>
+          </div>
+          <div id="queueWrap" hidden>
+            <h3>Queue</h3>
+            <div class="history" id="queue"></div>
           </div>
           <div class="row wrap viewer-opts" id="viewerOpts" hidden>
             <label class="check"><input type="checkbox" id="viewLive"> Live previews</label>

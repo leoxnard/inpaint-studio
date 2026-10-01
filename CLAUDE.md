@@ -8,14 +8,17 @@ per-step previews. Runs only on Leonard's Mac, no deploy.
 
 ## Commands
 - Run: `./run.sh` (http://127.0.0.1:7380)
-- Tests: `uv run pytest`
+- Tests: `uv run pytest` (the queue integration test uses a tiny CPU-only graph against the
+  running ComfyUI and is skipped when ComfyUI is down)
 
 ## Architecture
 - `graphs.py` – size math (mirrors ImageScaleToTotalPixels / TextEncodeQwenImage21) and the
   ComfyUI API graph builders. Pure functions, unit-tested.
-- `server.py` – FastAPI. Proxies uploads/views to ComfyUI, runs the mask graph synchronously,
-  and relays an edit job over `/ws/edit` (ComfyUI ws progress + binary latent previews via
-  `extra_data.preview_method`).
+- `server.py` – FastAPI. Proxies uploads/views to ComfyUI, runs the mask graph synchronously.
+  Edits are server-side jobs (`POST /api/jobs`): each job is submitted to ComfyUI at once and
+  followed by a background task on its own ComfyUI ws (progress + binary latent previews via
+  `extra_data.preview_method`). Browsers subscribe to `/ws/jobs`; jobs survive page reloads.
+  Jobs live in memory: a server restart marks unfinished runs as errors.
 - `web/` – vanilla HTML/JS/CSS, no build step.
 
 ## Rules

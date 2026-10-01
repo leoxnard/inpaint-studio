@@ -19,6 +19,8 @@ per-step previews. Runs only on Leonard's Mac, no deploy.
   followed by a background task on its own ComfyUI ws (progress + binary latent previews via
   `extra_data.preview_method`). Browsers subscribe to `/ws/jobs`; jobs survive page reloads.
   Jobs live in memory: a server restart marks unfinished runs as errors.
+- `align.py` – post-hoc alignment of a paste-mode free edit to the original (numpy phase
+  correlation, coarse scale search + full-res sub-pixel pass). `POST /api/runs/{id}/align`.
 - `web/` – vanilla HTML/JS/CSS, no build step.
 
 ## Rules

@@ -10,6 +10,7 @@ dependencies = [
     "websockets>=13",
     "python-multipart>=0.0.9",
     "pillow>=12.3.0",
+    "numpy>=2.5.3",
 ]
 
 [dependency-groups]

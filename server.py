@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import align
 import graphs
 
 ROOT = Path(__file__).parent
@@ -243,6 +244,60 @@ def parse_preview(msg: bytes) -> tuple[str, bytes] | None:
         meta = json.loads(msg[8:8 + n] or b"{}")
         return (meta.get("image_type", "image/jpeg"), msg[8 + n:])
     return None
+
+
+# ---------------------------------------------------------------- post-hoc alignment (advanced)
+
+_align_cache: dict[str, tuple] = {}
+
+
+async def _fetch_view(url: str) -> Image.Image:
+    params = dict(httpx.URL(url).params)
+    r = await client.get("/view", params=params)
+    if r.status_code != 200:
+        raise HTTPException(404, f"image not found: {params.get('filename')}")
+    return Image.open(io.BytesIO(r.content))
+
+
+class AlignReq(BaseModel):
+    auto: bool = False
+    dx: float = 0
+    dy: float = 0
+    scale: float = 1.0
+    save: bool = False
+
+
+@app.post("/api/runs/{run_id}/align")
+async def align_run(run_id: str, req: AlignReq):
+    f = RUNS / run_id / "run.json"
+    if not f.is_file():
+        raise HTTPException(404, "run not found")
+    run = json.loads(f.read_text())
+    if not (run.get("before_url") and run.get("raw_url") and run.get("mask_url")):
+        raise HTTPException(400, "alignment needs a free edit + paste run (raw image and mask)")
+    if run_id not in _align_cache:
+        _align_cache.clear()  # keep only the run being aligned in memory
+        _align_cache[run_id] = tuple([await _fetch_view(run[k]) for k in ("before_url", "raw_url", "mask_url")])
+    original, raw, mask = _align_cache[run_id]
+    result: dict[str, Any] = {}
+    dx, dy, scale = req.dx, req.dy, req.scale
+    if req.auto:
+        est = await asyncio.to_thread(align.estimate, original, raw, mask)
+        dx, dy, scale = est["dx"], est["dy"], est["scale"]
+        result["confidence"] = est["confidence"]
+    if not 0.8 <= scale <= 1.25 or abs(dx) > 500 or abs(dy) > 500:
+        raise HTTPException(400, "alignment values out of range")
+    composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale)
+    _, base = await asyncio.to_thread(align.compose, original, raw, mask, 0, 0, 1.0)
+    name = "aligned.png" if req.save else "aligned_preview.jpg"
+    composed.save(RUNS / run_id / name, quality=92)
+    url = f"/data/runs/{run_id}/{name}?t={int(time.time() * 1000)}"
+    result.update({"dx": dx, "dy": dy, "scale": scale, "outside_diff": stats["outside_diff"],
+                   "unaligned_diff": base["outside_diff"], "url": url, "saved": req.save})
+    if req.save:
+        run["aligned"] = {"dx": dx, "dy": dy, "scale": scale, "outside_diff": stats["outside_diff"], "url": url}
+        save_run(run)
+    return result
 
 
 # ---------------------------------------------------------------- job queue

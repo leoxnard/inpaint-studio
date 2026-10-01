@@ -175,7 +175,30 @@
             <button id="downloadSteps">Download all steps</button>
             <button id="useResult">Use result as new input</button>
             <button id="showCompare" hidden>Show comparison</button>
+            <button id="alignBtn" hidden title="Advanced: shift/scale the free edit so it lines up with the original before pasting">Align…</button>
             <span class="hint" id="matchInfo"></span>
+          </div>
+          <div class="align-panel" id="alignPanel" hidden>
+            <div class="row wrap">
+              <button id="alignAuto" class="primary">Auto-align</button>
+              <div class="nudge">
+                <button data-nudge="0,-1" title="Up (Shift = 5 px)">↑</button>
+                <button data-nudge="-1,0" title="Left (Shift = 5 px)">←</button>
+                <button data-nudge="1,0" title="Right (Shift = 5 px)">→</button>
+                <button data-nudge="0,1" title="Down (Shift = 5 px)">↓</button>
+              </div>
+              <label>dx <input type="number" id="alignDx" step="0.5" value="0"></label>
+              <label>dy <input type="number" id="alignDy" step="0.5" value="0"></label>
+              <label>scale % <input type="number" id="alignScale" step="0.1" value="100"></label>
+            </div>
+            <div class="row wrap">
+              <span class="hint" id="alignInfo">Shifts and scales the full generated image, then pastes only the masked area into the original. Uncovered edges keep the original.</span>
+            </div>
+            <div class="row wrap">
+              <button id="alignReset">Reset</button>
+              <button id="alignSave">Save aligned result</button>
+              <button id="alignClose">Close</button>
+            </div>
           </div>
           <div id="queueWrap" hidden>
             <h3>Queue</h3>

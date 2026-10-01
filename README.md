@@ -12,6 +12,12 @@ A small local web app for mask-based image editing with **Qwen-Image 2.1** throu
 The app predicts the working size and warns (or auto-fixes) when it would exceed ~4096 latent
 tokens, the point where the edit turns into gray noise on Apple Silicon.
 
+## Align (advanced)
+For free edit + paste runs, **Align…** in the viewer lines the generated image up with the
+original before pasting: Auto-align estimates shift and scale from the area outside the mask
+(phase correlation), then fine-tune with the arrows (Shift = 5 px) and scale. Uncovered edges keep
+the original. The aligned result is saved next to the run; the original result stays.
+
 ## Queue
 "Run edit" adds a job to a server-side queue, so you can keep preparing the next edit. The
 Queue panel shows each job (queued / running step x of y) with a cancel button; jobs keep running

@@ -782,6 +782,7 @@ function runFromStored(r) {
     id: r.id, serverId: r.id, prompt: r.params?.prompt || "", seed: r.params?.seed, steps: r.params?.steps,
     frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
+    aligned: r.aligned || null,
     value: r.params?.steps, max: r.params?.steps, created: r.created,
   };
 }
@@ -819,6 +820,9 @@ function showRun(run) {
   showCompare();
   renderHistory();
   syncViewerOpts();
+  $("alignBtn").hidden = !(run.serverId && run.rawUrl && run.maskUrl);
+  $("alignPanel").hidden = true;
+  if (run.aligned) $("downloadBtn").href = run.aligned.url;
   $("matchInfo").textContent = run.match || "";
   if (run.rawUrl && run.maskUrl && !run.match) measureMatch(run);
 }
@@ -851,7 +855,7 @@ function showCompare() {
   const run = state.run;
   if (!run || !run.resultUrl) return;
   $("cmpBefore").src = run.beforeUrl || run.resultUrl;
-  $("cmpAfter").src = $("viewRaw").checked && run.rawUrl ? run.rawUrl : run.resultUrl;
+  $("cmpAfter").src = $("viewRaw").checked && run.rawUrl ? run.rawUrl : (run.aligned?.url || run.resultUrl);
   $("liveImg").hidden = true;
   $("compare").hidden = false;
   $("showCompare").hidden = true;
@@ -1026,3 +1030,56 @@ async function restoreSession() {
   // nothing to work on yet -> show the latest result instead of an empty page
   if (!restored && state.runs.length) { setView("result"); showRun(state.runs[0]); $("progressWrap").hidden = true; }
 })();
+
+// ------------------------------------------------------------------ advanced: post-hoc alignment
+let alignTimer = 0;
+function alignValues() {
+  return { dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100 };
+}
+function setAlignValues(v) {
+  $("alignDx").value = Math.round(v.dx * 10) / 10;
+  $("alignDy").value = Math.round(v.dy * 10) / 10;
+  $("alignScale").value = Math.round(v.scale * 10000) / 100;
+}
+async function alignRequest(body) {
+  const run = state.run;
+  if (!run?.serverId) return;
+  $("alignInfo").textContent = "Working...";
+  try {
+    const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/align`, body);
+    setAlignValues(res);
+    $("cmpBefore").src = run.beforeUrl;
+    $("cmpAfter").src = res.url;
+    $("liveImg").hidden = true; $("compare").hidden = false;
+    $("alignInfo").textContent = `Outside-mask difference: ${res.unaligned_diff} → ${res.outside_diff} / 255`
+      + (res.confidence ? ` · match confidence ${res.confidence}` : "") + (res.saved ? " · saved" : "");
+    if (res.saved) {
+      run.aligned = { dx: res.dx, dy: res.dy, scale: res.scale, outside_diff: res.outside_diff, url: res.url };
+      $("downloadBtn").href = res.url;
+    }
+  } catch (e) { $("alignInfo").textContent = ""; showError(e.message); }
+}
+function schedulePreview() {
+  clearTimeout(alignTimer);
+  alignTimer = setTimeout(() => alignRequest({ ...alignValues(), save: false }), 250);
+}
+$("alignBtn").onclick = () => {
+  const run = state.run;
+  $("alignPanel").hidden = false;
+  setAlignValues(run.aligned || { dx: 0, dy: 0, scale: 1 });
+  $("alignInfo").textContent = "Try Auto-align, then fine-tune with the arrows (Shift = 5 px).";
+};
+$("alignClose").onclick = () => { $("alignPanel").hidden = true; showCompare(); };
+$("alignAuto").onclick = () => alignRequest({ auto: true, save: false });
+$("alignReset").onclick = () => { setAlignValues({ dx: 0, dy: 0, scale: 1 }); schedulePreview(); };
+$("alignSave").onclick = () => alignRequest({ ...alignValues(), save: true });
+for (const id of ["alignDx", "alignDy", "alignScale"]) $(id).addEventListener("input", schedulePreview);
+for (const b of document.querySelectorAll("#alignPanel [data-nudge]")) {
+  b.onclick = (e) => {
+    const [x, y] = b.dataset.nudge.split(",").map(Number);
+    const step = e.shiftKey ? 5 : 1;
+    const v = alignValues();
+    setAlignValues({ ...v, dx: v.dx + x * step, dy: v.dy + y * step });
+    schedulePreview();
+  };
+}

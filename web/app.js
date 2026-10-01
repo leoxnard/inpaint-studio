@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "seed",
+  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "saveEvery", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "unet", "clip", "vae",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -487,7 +487,7 @@ async function runEdit() {
       megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10),
       prompt: $("prompt").value, negative: $("negative").value,
       steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
-      sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value,
+      sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value, save_every: parseInt($("saveEvery").value, 10) || 0,
       unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
     };
     startRun(params);
@@ -528,6 +528,7 @@ function startRun(params) {
       case "node": $("progressText").textContent = `Running node: ${m.node}`; break;
       case "progress": run.value = m.value; run.max = m.max; updateProgressText(); break;
       case "preview": addFrame(run, m); break;
+      case "step_image": addSavedFrame(run, m); break;
       case "done": finished = true; finishRun(run, m); break;
       case "error": finished = true; failRun(run, m.message); break;
     }
@@ -553,7 +554,14 @@ function addFrame(run, m) {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const url = URL.createObjectURL(new Blob([bytes], { type: m.mime }));
-  run.frames.push({ url, step: m.step, mime: m.mime });
+  run.frames.push({ url, step: m.step, mime: m.mime, kind: "live" });
+  if (state.run === run && !run.done) showFrame(run.frames.length - 1);
+  renderFilmstrip();
+}
+
+// full-quality intermediate image (real VAE decode), saved by ComfyUI every N steps
+function addSavedFrame(run, m) {
+  run.frames.push({ url: m.url, step: m.step, mime: "image/png", kind: "saved", filename: m.filename });
   if (state.run === run && !run.done) showFrame(run.frames.length - 1);
   renderFilmstrip();
 }
@@ -578,7 +586,8 @@ function renderFilmstrip() {
   run.frames.forEach((f, i) => {
     const img = document.createElement("img");
     img.src = f.url;
-    img.title = `Step ${f.step}`;
+    img.title = f.kind === "saved" ? `Step ${f.step} – full quality (saved)` : `Step ${f.step} – live preview`;
+    if (f.kind === "saved") img.classList.add("saved");
     img.onclick = () => showFrame(i);
     if (i === run.shown) img.classList.add("active");
     fs.appendChild(img);
@@ -589,7 +598,7 @@ function renderFilmstrip() {
 
 function freeRunFrames(run) {
   if (!run || state.runs.some((r) => r === run)) return;
-  for (const f of run.frames) URL.revokeObjectURL(f.url);
+  for (const f of run.frames) if (f.kind !== "saved") URL.revokeObjectURL(f.url);
 }
 
 function endSocket() {
@@ -687,10 +696,14 @@ function renderHistory() {
 $("downloadSteps").onclick = async () => {
   const run = state.run;
   if (!run || !run.frames.length) { showError("No step frames to download."); return; }
-  for (const [i, f] of run.frames.entries()) {
+  // prefer the full-quality saved steps; fall back to the live previews
+  const saved = run.frames.filter((f) => f.kind === "saved");
+  const list = saved.length ? saved : run.frames;
+  for (const [i, f] of list.entries()) {
     const a = document.createElement("a");
     a.href = f.url;
-    a.download = `step-${String(i + 1).padStart(2, "0")}.${f.mime.includes("png") ? "png" : "jpg"}`;
+    a.download = f.kind === "saved" ? `step-${String(f.step).padStart(3, "0")}.png`
+      : `preview-${String(i + 1).padStart(2, "0")}.${f.mime.includes("png") ? "png" : "jpg"}`;
     document.body.appendChild(a); a.click(); a.remove();
     await new Promise((r) => setTimeout(r, 150));
   }

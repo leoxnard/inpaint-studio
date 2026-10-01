@@ -230,6 +230,8 @@ async def ws_edit(ws: WebSocket):
         params.setdefault("prefix", f"InpaintStudio/{time.strftime('%Y%m%d-%H%M%S')}")
         client_id = f"inpaint-studio-{uuid.uuid4().hex}"
         graph = graphs.build_edit_graph(params)
+        every = int(params.get("save_every") or 0)
+        chunk_starts = [a for a, _ in graphs.step_chunks(int(params["steps"]), every)] if every > 0 else []
         async with websockets.connect(f"{COMFY_WS}?clientId={client_id}", max_size=64 * 1024 * 1024) as cws:
             pid = await submit(graph, client_id, {"preview_method": params.get("preview_method", "auto")})
             current_prompt["id"] = pid
@@ -247,9 +249,17 @@ async def ws_edit(ws: WebSocket):
                 kind, data = ev.get("type"), ev.get("data", {})
                 if data.get("prompt_id") not in (None, pid):
                     continue
-                if kind == "progress" and data.get("node") == "sampler":
-                    step = data["value"]
-                    await ws.send_json({"type": "progress", "value": data["value"], "max": data["max"]})
+                node = str(data.get("node") or "")
+                if kind == "progress" and (node == "sampler" or node.startswith("chunk_")):
+                    # chunked runs report per chunk; convert to overall step numbers
+                    offset = chunk_starts[int(node.split("_")[1])] if node.startswith("chunk_") else 0
+                    step = offset + data["value"]
+                    await ws.send_json({"type": "progress", "value": step, "max": int(params["steps"])})
+                elif kind == "executed" and str(data.get("node", "")).startswith("stepsave_"):
+                    imgs = (data.get("output") or {}).get("images", [])
+                    if imgs:
+                        await ws.send_json({"type": "step_image", "step": int(data["node"].split("_")[1]),
+                                            "url": view_url(imgs[0]), "filename": imgs[0]["filename"]})
                 elif kind == "executing" and data.get("node"):
                     await ws.send_json({"type": "node", "node": data["node"]})
                 elif kind == "execution_error":

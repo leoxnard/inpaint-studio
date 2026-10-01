@@ -171,3 +171,6 @@ body.dragging::after {
 }
 
 [hidden] { display: none !important; }
+
+/* full-quality saved step frames */
+#filmstrip img.saved { outline: 2px solid var(--ok, #4ade80); outline-offset: -2px; }

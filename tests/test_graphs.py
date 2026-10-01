@@ -49,3 +49,19 @@ def test_paste_mode_edits_freely_and_composites():
     g = graphs.build_edit_graph(p)
     assert g["sampler"]["inputs"]["latent_image"] == ["encode", 2]
     assert g["composite"]["inputs"]["resize_source"] is True and "latent" not in g
+
+
+def test_chunks_cover_all_steps():
+    assert graphs.step_chunks(20, 6) == [(0, 6), (6, 12), (12, 18), (18, 20)]
+
+
+def test_chunked_graph_saves_every_n_steps():
+    p = dict(image="a.png", mask="m.png", use_mask=True, megapixels=0.95, resolution=1008, prompt="x",
+             steps=6, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=0,
+             unet="u.gguf", clip="c", vae="v", work_w=1344, work_h=736, save_every=2, prefix="P")
+    g = graphs.build_edit_graph(p)
+    assert [k for k in g if k.startswith("stepsave_")] == ["stepsave_2", "stepsave_4", "stepsave_6"]
+    assert g["chunk_0"]["inputs"]["noise"] == ["noise", 0] and g["chunk_1"]["inputs"]["noise"] == ["no_noise", 0]
+    assert g["chunk_1"]["inputs"]["latent_image"] == ["chunk_fix_0", 0]
+    assert g["chunk_fix_0"]["inputs"]["source"] == ["latent", 0]
+    assert g["decode"]["inputs"]["samples"] == ["chunk_fix_2", 0] and "sampler" not in g

@@ -128,20 +128,34 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
             g["feather"] = {"class_type": "ImageBlur", "inputs": {"image": mask_img, "blur_radius": int(p["feather"]), "sigma": max(1.0, p["feather"] / 3)}}
             mask_img = ["feather", 0]
         g["mask"] = {"class_type": "ImageToMask", "inputs": {"image": mask_img, "channel": "red"}}
+        # hard 0/1 mask for sampling: soft edges let the chunked sampler leak garbage from the
+        # unmasked context into the result; the soft mask is only used for pasting
+        # snapped to the 16 px latent grid so every latent cell is fully inside or outside
+        g["mask_grid_down"] = {"class_type": "ImageScale", "inputs": {
+            "image": ["mask_fit", 0], "upscale_method": "area", "width": p["work_w"] // 16, "height": p["work_h"] // 16, "crop": "disabled"}}
+        g["mask_grid_up"] = {"class_type": "ImageScale", "inputs": {
+            "image": ["mask_grid_down", 0], "upscale_method": "nearest-exact", "width": p["work_w"], "height": p["work_h"], "crop": "disabled"}}
+        g["mask_hard_src"] = {"class_type": "ImageToMask", "inputs": {"image": ["mask_grid_up", 0], "channel": "red"}}
+        g["mask_hard"] = {"class_type": "ThresholdMask", "inputs": {"mask": ["mask_hard_src", 0], "value": 0.5}}
         if p.get("mode", "inpaint") == "paste":
             latent = ["encode", 2]
         else:
             g["latent_src"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["scale", 0], "vae": ["vae", 0]}}
-            g["latent"] = {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["latent_src", 0], "mask": ["mask", 0]}}
+            g["latent"] = {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["latent_src", 0], "mask": ["mask_hard", 0]}}
             latent = ["latent", 0]
     else:
         latent = ["encode", 2]
 
-    g["sampler"] = {"class_type": "KSampler", "inputs": {
-        "model": ["model", 0], "positive": ["encode", 0], "negative": ["encode", 1], "latent_image": latent,
-        "seed": int(p["seed"]), "steps": int(p["steps"]), "cfg": float(p["cfg"]),
-        "sampler_name": p["sampler"], "scheduler": p["scheduler"], "denoise": float(p["denoise"])}}
-    g["decode"] = {"class_type": "VAEDecode", "inputs": {"samples": ["sampler", 0], "vae": ["vae", 0]}}
+    every = int(p.get("save_every") or 0)
+    if every > 0:
+        final_latent = _chunked_sampler(g, p, latent, every)
+    else:
+        g["sampler"] = {"class_type": "KSampler", "inputs": {
+            "model": ["model", 0], "positive": ["encode", 0], "negative": ["encode", 1], "latent_image": latent,
+            "seed": int(p["seed"]), "steps": int(p["steps"]), "cfg": float(p["cfg"]),
+            "sampler_name": p["sampler"], "scheduler": p["scheduler"], "denoise": float(p["denoise"])}}
+        final_latent = ["sampler", 0]
+    g["decode"] = {"class_type": "VAEDecode", "inputs": {"samples": final_latent, "vae": ["vae", 0]}}
     result = ["decode", 0]
     if use_mask:
         g["composite"] = {"class_type": "ImageCompositeMasked", "inputs": {
@@ -152,3 +166,50 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
     g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": result, "filename_prefix": p.get("prefix", "InpaintStudio/edit")}}
     g["out_before"] = {"class_type": "PreviewImage", "inputs": {"images": ["scale", 0]}}
     return g
+
+
+def step_chunks(steps: int, every: int) -> list[tuple[int, int]]:
+    return [(a, min(a + every, steps)) for a in range(0, steps, every)]
+
+
+def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int) -> list:
+    """Same scheme as the 'Qwen2.1 GGUF Steps' workflow, unrolled instead of a loop node:
+    each chunk samples sigmas[start..end] with SamplerCustomAdvanced (noise only in the first
+    chunk), and the chunk's denoised prediction is decoded and saved as step_START-END."""
+    steps = int(p["steps"])
+    g["noise"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": int(p["seed"])}}
+    g["no_noise"] = {"class_type": "DisableNoise", "inputs": {}}
+    g["guider"] = {"class_type": "CFGGuider", "inputs": {
+        "model": ["model", 0], "positive": ["encode", 0], "negative": ["encode", 1], "cfg": float(p["cfg"])}}
+    g["ksel"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": p["sampler"]}}
+    g["sched"] = {"class_type": "BasicScheduler", "inputs": {
+        "model": ["model", 0], "scheduler": p["scheduler"], "steps": steps, "denoise": float(p["denoise"])}}
+    prefix = p.get("prefix", "InpaintStudio/edit")
+    paste_mask = ["mask", 0] if "mask" in g else None
+    noise_masked = "latent" in g
+    if noise_masked:
+        # Each chunk divides the whole latent by (1 - sigma_end); a single run does that once,
+        # chunks compound it and the unmasked area drifts (turns purple). Restoring the area
+        # outside the mask after every chunk keeps it at the clean original.
+        g["outside"] = {"class_type": "InvertMask", "inputs": {"mask": ["mask_hard", 0]}}
+    for i, (a, b) in enumerate(step_chunks(steps, every)):
+        g[f"upto_{i}"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": ["sched", 0], "step": b}}
+        g[f"from_{i}"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": [f"upto_{i}", 0], "step": a}}
+        g[f"chunk_{i}"] = {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["noise", 0] if i == 0 else ["no_noise", 0], "guider": ["guider", 0], "sampler": ["ksel", 0],
+            "sigmas": [f"from_{i}", 1], "latent_image": latent}}
+        g[f"chunk_dec_{i}"] = {"class_type": "VAEDecode", "inputs": {"samples": [f"chunk_{i}", 1], "vae": ["vae", 0]}}
+        step_img = [f"chunk_dec_{i}", 0]
+        if paste_mask:  # show each step the way the final result will look: pasted into the original
+            g[f"chunk_paste_{i}"] = {"class_type": "ImageCompositeMasked", "inputs": {
+                "destination": ["scale", 0], "source": step_img, "x": 0, "y": 0, "resize_source": True, "mask": paste_mask}}
+            step_img = [f"chunk_paste_{i}", 0]
+        g[f"stepsave_{b}"] = {"class_type": "SaveImage", "inputs": {
+            "images": step_img, "filename_prefix": f"{prefix}/step_{a:03d}-{b:03d}"}}
+        if noise_masked:
+            g[f"chunk_fix_{i}"] = {"class_type": "LatentCompositeMasked", "inputs": {
+                "destination": [f"chunk_{i}", 0], "source": latent, "x": 0, "y": 0, "resize_source": False, "mask": ["outside", 0]}}
+            latent = [f"chunk_fix_{i}", 0]
+        else:
+            latent = [f"chunk_{i}", 0]
+    return latent

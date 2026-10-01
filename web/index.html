@@ -100,6 +100,9 @@
               <option value="paste">Free edit + paste</option>
             </select>
           </label>
+          <label title="Decode the real intermediate image with the VAE and save it every N steps (like the Steps workflow). 0 = off; the quick live preview is always shown.">Save step every N (0 = off)
+            <input type="number" id="saveEvery" min="0" max="50" step="1" value="2">
+          </label>
           <label>Feather (px)
             <input type="number" id="feather" min="0" max="100" step="1" value="12">
           </label>

@@ -40,6 +40,12 @@ images in the ComfyUI output folder.
   a Qwen-Image 2.1 model, `qwen3vl_8b_*` text encoder and the Qwen-Image 2.1 VAE.
 - [uv](https://docs.astral.sh/uv/)
 
+## Mac app
+`macos/build-app.sh` builds **Inpaint Studio.app** into `~/Applications` (a stay-open AppleScript
+applet, source in `macos/InpaintStudio.applescript`). Opening it starts the server and the UI;
+quitting it (⌘Q / Dock) stops the server and warns first if jobs are still running.
+Server log: `~/Library/Logs/InpaintStudio.log`.
+
 ## Run
 ```bash
 ./run.sh

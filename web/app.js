@@ -351,6 +351,14 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault(); undo();
     return;
   }
+  // in the Mask view, arrow keys switch between batch images
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && $("resultView").hidden && state.batch.length) {
+    e.preventDefault();
+    const n = state.batch.length;
+    const i = state.batchIdx < 0 ? 0 : (state.batchIdx + (e.key === "ArrowRight" ? 1 : -1) + n) % n;
+    openBatchItem(i);
+    return;
+  }
   // arrow keys step through the visible filmstrip; past the last frame shows the final comparison
   if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && !$("resultView").hidden) {
     const run = state.run;
@@ -393,15 +401,16 @@ async function setImageFile(file) {
     showError(e.message);
   }
 }
-$("fileInput").addEventListener("change", (e) => { setImageFile(e.target.files[0]); e.target.value = ""; });
+$("fileInput").addEventListener("change", (e) => { openFiles([...e.target.files]); e.target.value = ""; });
+$("folderInput").addEventListener("change", (e) => { openFiles([...e.target.files]); e.target.value = ""; });
 let dragDepth = 0;
 window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
 window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => {
   e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragging");
-  const f = e.dataTransfer && e.dataTransfer.files[0];
-  if (f) setImageFile(f);
+  const files = e.dataTransfer ? [...e.dataTransfer.files] : [];
+  if (files.length) openFiles(files);
 });
 
 // ------------------------------------------------------------------ step 1: compute mask
@@ -456,8 +465,7 @@ function applyMaskImage(im, mp = num("megapixels")) {
 $("computeMask").onclick = computeMask;
 
 // Exports the mask as a strict black/white PNG at working size (white = replace).
-function exportMaskBlob() {
-  const src = state.mask;
+function exportMaskBlob(src = state.mask) {
   const c = document.createElement("canvas");
   c.width = src.width; c.height = src.height;
   const ctx = c.getContext("2d", { willReadFrequently: true });
@@ -484,7 +492,28 @@ function setSubmitting(on) {
   $("runEdit").textContent = on ? "Adding to queue..." : "Run edit (add to queue)";
 }
 
-async function runEdit() {
+// edit parameters from the form for one image (seed is drawn per job when "Random" is on)
+function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resolution }) {
+  let seed = parseInt($("seed").value, 10) || 0;
+  if ($("randomSeed").checked) { seed = Math.floor(Math.random() * 2 ** 32); $("seed").value = seed; }
+  return {
+    image, mask: maskName, use_mask: useMask, src_w: srcW, src_h: srcH,
+    megapixels: megapixels ?? num("megapixels"), resolution: resolution ?? parseInt($("resolution").value, 10),
+    prompt: $("prompt").value, negative: $("negative").value,
+    steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
+    sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value,
+    keep_identical: $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
+    unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
+  };
+}
+
+async function uploadMaskBlob(blob) {
+  const fd = new FormData();
+  fd.append("file", blob, "mask.png");
+  return (await api("/api/upload-mask", { method: "POST", body: fd })).name;
+}
+
+async function runEdit({ thenNext = false } = {}) {
   if (state.submitting) return;
   if (!state.imageName) { showError("Load an image first."); return; }
   const useMask = $("useMask").checked;
@@ -498,23 +527,12 @@ async function runEdit() {
       if (isStale()) throw new Error("Size changed – recompute the mask first.");
       const { blob, white } = await exportMaskBlob();
       if (!white) throw new Error("The mask is empty. Paint or compute a mask, or turn off \"Use mask\".");
-      const fd = new FormData();
-      fd.append("file", blob, "mask.png");
-      maskName = (await api("/api/upload-mask", { method: "POST", body: fd })).name;
+      maskName = await uploadMaskBlob(blob);
     }
-    let seed = parseInt($("seed").value, 10) || 0;
-    if ($("randomSeed").checked) { seed = Math.floor(Math.random() * 2 ** 32); $("seed").value = seed; }
     saveForm();
-    const params = {
-      image: state.imageName, mask: maskName, use_mask: useMask,
-      src_w: state.srcW, src_h: state.srcH,
-      megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10),
-      prompt: $("prompt").value, negative: $("negative").value,
-      steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
-      sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value, keep_identical: $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
-      unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
-    };
-    await submitJob(params);
+    await submitJob(editParams({ image: state.imageName, srcW: state.srcW, srcH: state.srcH, maskName, useMask }));
+    const item = currentBatchItem();
+    if (item) { item.status = "queued"; renderBatch(); if (thenNext) openNextBatchItem(); }
   } catch (e) {
     showError(e.message);
   } finally {
@@ -954,7 +972,7 @@ function init() {
   }
   $("autofix").addEventListener("change", refreshSizeDebounced);
   $("opacity").addEventListener("input", render);
-  $("runEdit").onclick = runEdit;
+  $("runEdit").onclick = () => runEdit();
   $("maskText").addEventListener("keydown", (e) => { if (e.key === "Enter") computeMask(); });
   setMode("paint");
   renderHistory();
@@ -1083,3 +1101,281 @@ for (const b of document.querySelectorAll("#alignPanel [data-nudge]")) {
     schedulePreview();
   };
 }
+
+// ------------------------------------------------------------------ batch (folder / several images)
+state.batch = [];
+state.batchIdx = -1;
+
+function openFiles(files) {
+  const imgs = files.filter((f) => f.type.startsWith("image/")).sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
+  if (!imgs.length) { showError("No images found."); return; }
+  if (imgs.length === 1 && !state.batch.length) { setImageFile(imgs[0]); return; }
+  for (const it of state.batch) URL.revokeObjectURL(it.thumbUrl);
+  state.batch = imgs.map((file, i) => ({ id: i, file, label: file.name, thumbUrl: URL.createObjectURL(file),
+    name: null, srcW: 0, srcH: 0, status: "open", mask: null, maskMeta: null }));
+  state.batchIdx = -1;
+  renderBatch();
+  openBatchItem(0);
+}
+
+function currentBatchItem() {
+  const it = state.batch[state.batchIdx];
+  return it && it.name === state.imageName ? it : null;
+}
+
+function renderBatch() {
+  $("batchWrap").hidden = !state.batch.length;
+  const grid = $("batchGrid");
+  grid.innerHTML = "";
+  const counts = { open: 0, masked: 0, queued: 0, nomask: 0, error: 0, skipped: 0 };
+  state.batch.forEach((it, i) => {
+    counts[it.status] = (counts[it.status] || 0) + 1;
+    const b = document.createElement("button");
+    b.className = `batch-item ${it.status}` + (i === state.batchIdx ? " active" : "");
+    b.title = `${it.label} – ${{ nomask: "nothing found to mask", skipped: "skipped (click to open, Submit still works)" }[it.status] || it.status}`;
+    const img = document.createElement("img"); img.src = it.thumbUrl; img.alt = "";
+    const tag = document.createElement("span"); tag.className = "tag";
+    tag.textContent = { open: "", masked: "mask", queued: "✓", nomask: "∅", error: "!", skipped: "skip" }[it.status] || "";
+    b.append(img, tag);
+    b.onclick = () => openBatchItem(i);
+    grid.appendChild(b);
+  });
+  $("batchInfo").textContent = `${state.batch.length} images · ${counts.queued} queued · ${counts.open + counts.masked} open`
+    + (counts.nomask ? ` · ${counts.nomask} without mask found` : "") + (counts.skipped ? ` · ${counts.skipped} skipped` : "")
+    + (counts.error ? ` · ${counts.error} failed` : "");
+}
+
+function stashCurrentMask() {
+  const it = currentBatchItem();
+  if (!it || !state.hasMask || !state.mask) return;
+  const c = document.createElement("canvas");
+  c.width = state.mask.width; c.height = state.mask.height;
+  c.getContext("2d").drawImage(state.mask, 0, 0);
+  it.mask = c; it.maskMeta = state.maskMeta;
+  if (it.status === "open") it.status = "masked";
+}
+
+async function ensureUploaded(it) {
+  if (it.name) return it;
+  const fd = new FormData();
+  fd.append("file", it.file, it.file.name || "image.png");
+  const up = await api("/api/upload", { method: "POST", body: fd });
+  Object.assign(it, { name: up.name, srcW: up.width, srcH: up.height });
+  return it;
+}
+
+async function openBatchItem(i) {
+  const it = state.batch[i];
+  if (!it) return;
+  stashCurrentMask();
+  try {
+    await ensureUploaded(it);
+    const im = await loadImage(it.thumbUrl);
+    state.imgEl = im; state.imgUrl = null;
+    state.imageName = it.name; state.srcW = it.srcW; state.srcH = it.srcH;
+    state.batchIdx = i;
+    $("imageInfo").textContent = `${it.label} – original ${it.srcW}×${it.srcH} (${i + 1} / ${state.batch.length})`;
+    saveSession({ imageName: it.name, srcW: it.srcW, srcH: it.srcH, label: it.label, maskName: null, maskMeta: null });
+    resetMask();
+    state.size = null;
+    await refreshSize();
+    if (it.mask) {
+      newMask(it.mask.width, it.mask.height);
+      state.mask.getContext("2d").drawImage(it.mask, 0, 0);
+      state.hasMask = true; state.maskMeta = it.maskMeta;
+      updateStale();
+    }
+    setView("mask");
+    render();
+  } catch (e) {
+    it.status = "error";
+    showError(`${it.label}: ${e.message}`);
+  }
+  renderBatch();
+}
+
+function openNextBatchItem() {
+  const n = state.batch.length;
+  for (let k = 1; k <= n; k++) {
+    const j = (state.batchIdx + k) % n;
+    if (state.batch[j].status === "open" || state.batch[j].status === "masked") { openBatchItem(j); return; }
+  }
+  showError("No open images left in the batch.");
+}
+
+// size settings for one image: current form values, auto-fixed below the gray-noise limit
+async function sizeFor(it) {
+  const body = { width: it.srcW, height: it.srcH, megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10) };
+  const rep = await postJson("/api/size", body);
+  if (!rep.safe && $("autofix").checked && rep.suggested) return { ...rep.suggested };
+  return { ...rep, megapixels: body.megapixels, resolution: body.resolution };
+}
+
+function maskHasWhite(im) {
+  const c = document.createElement("canvas");
+  c.width = im.naturalWidth; c.height = im.naturalHeight;
+  const x = c.getContext("2d", { willReadFrequently: true });
+  x.drawImage(im, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height).data;
+  for (let i = 0; i < d.length; i += 4) if (d[i] > 127) return true;
+  return false;
+}
+
+async function batchSubmitAll(withMask) {
+  if (state.batchBusy) return;
+  stashCurrentMask();
+  // "without mask" also takes images where auto-masking found nothing
+  const todo = state.batch.filter((it) => it.status === "open" || it.status === "masked" || (!withMask && it.status === "nomask"));
+  if (!todo.length) { showError("No open images in the batch."); return; }
+  if (withMask && !$("maskText").value.trim()) { showError("Enter what to mask first."); return; }
+  setBatchBusy(true);
+  let done = 0;
+  try {
+    for (const it of todo) {
+      $("batchInfo").textContent = `${withMask ? "Masking and queueing" : "Queueing"} ${++done} / ${todo.length}: ${it.label}`;
+      try {
+        await ensureUploaded(it);
+        const size = await sizeFor(it);
+        let maskName = null;
+        if (withMask) {
+          let blob;
+          if (it.mask && it.maskMeta && it.maskMeta.w === size.work_w && it.maskMeta.h === size.work_h) {
+            ({ blob } = await exportMaskBlob(it.mask)); // keep a mask you already made/painted
+          } else {
+            const res = await postJson("/api/mask", {
+              image: it.name, megapixels: size.megapixels, text: $("maskText").value.trim(),
+              threshold: num("threshold"), refine: parseInt($("refine").value, 10) || 0,
+              expand: parseInt($("expand").value, 10) || 0, invert: $("invert").checked,
+            });
+            const im = await loadImage(res.mask_url);
+            if (!maskHasWhite(im)) { it.status = "nomask"; renderBatch(); continue; }
+            blob = await (await fetch(res.mask_url)).blob();
+          }
+          maskName = await uploadMaskBlob(blob);
+        }
+        await submitJob(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: withMask,
+          megapixels: size.megapixels, resolution: size.resolution }));
+        it.status = "queued";
+      } catch (e) {
+        it.status = "error";
+        showError(`${it.label}: ${e.message}`);
+      }
+      renderBatch();
+    }
+  } finally {
+    setBatchBusy(false);
+    renderBatch();
+  }
+}
+
+// black/white mask image -> white-on-transparent canvas (same format as the painted mask)
+function maskCanvasFromImage(im) {
+  const c = document.createElement("canvas");
+  c.width = im.naturalWidth; c.height = im.naturalHeight;
+  const x = c.getContext("2d", { willReadFrequently: true });
+  x.drawImage(im, 0, 0);
+  const data = x.getImageData(0, 0, c.width, c.height);
+  const px = data.data;
+  let white = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const on = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2] > 127;
+    px[i] = px[i + 1] = px[i + 2] = 255; px[i + 3] = on ? 255 : 0;
+    if (on) white++;
+  }
+  x.putImageData(data, 0, 0);
+  return { canvas: c, white };
+}
+
+function setBatchBusy(on) {
+  state.batchBusy = on;
+  for (const id of ["batchSubmitNext", "batchSkip", "batchMaskAll", "batchSubmitMasked", "batchAutoAll", "batchNoMaskAll"]) $(id).disabled = on;
+}
+
+// step 1 for the whole batch: masks only, nothing is queued
+async function batchMaskAll() {
+  if (state.batchBusy) return;
+  if (!$("maskText").value.trim()) { showError("Enter what to mask first."); return; }
+  stashCurrentMask();
+  const todo = state.batch.filter((it) => it.status === "open" || it.status === "nomask");
+  if (!todo.length) { showError("No open images without a mask."); return; }
+  setBatchBusy(true);
+  let n = 0;
+  try {
+    for (const it of todo) {
+      $("batchInfo").textContent = `Masking ${++n} / ${todo.length}: ${it.label}`;
+      try {
+        await ensureUploaded(it);
+        const size = await sizeFor(it);
+        const res = await postJson("/api/mask", {
+          image: it.name, megapixels: size.megapixels, text: $("maskText").value.trim(),
+          threshold: num("threshold"), refine: parseInt($("refine").value, 10) || 0,
+          expand: parseInt($("expand").value, 10) || 0, invert: $("invert").checked,
+        });
+        const { canvas, white } = maskCanvasFromImage(await loadImage(res.mask_url));
+        if (!white) { it.status = "nomask"; it.mask = null; }
+        else { it.mask = canvas; it.maskMeta = { w: canvas.width, h: canvas.height, mp: size.megapixels }; it.status = "masked"; }
+        if (state.batch[state.batchIdx] === it) await openBatchItem(state.batchIdx); // refresh the open image
+      } catch (e) {
+        it.status = "error";
+        showError(`${it.label}: ${e.message}`);
+      }
+      renderBatch();
+    }
+  } finally {
+    setBatchBusy(false);
+    renderBatch();
+  }
+}
+
+// step 2 for the whole batch: queue everything that has a mask
+async function batchSubmitMasked() {
+  if (state.batchBusy) return;
+  stashCurrentMask();
+  const todo = state.batch.filter((it) => it.status === "masked" && it.mask);
+  if (!todo.length) { showError("No masked images to submit."); return; }
+  setBatchBusy(true);
+  let n = 0;
+  try {
+    for (const it of todo) {
+      $("batchInfo").textContent = `Queueing ${++n} / ${todo.length}: ${it.label}`;
+      try {
+        const size = await sizeFor(it);
+        if (it.maskMeta && (it.maskMeta.w !== size.work_w || it.maskMeta.h !== size.work_h)) {
+          throw new Error("size changed since the mask was made – open it and recompute the mask");
+        }
+        const { blob, white } = await exportMaskBlob(it.mask);
+        if (!white) throw new Error("mask is empty");
+        const maskName = await uploadMaskBlob(blob);
+        await submitJob(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: true,
+          megapixels: size.megapixels, resolution: size.resolution }));
+        it.status = "queued";
+      } catch (e) {
+        it.status = "error";
+        showError(`${it.label}: ${e.message}`);
+      }
+      renderBatch();
+    }
+  } finally {
+    setBatchBusy(false);
+    renderBatch();
+  }
+}
+
+$("batchMaskAll").onclick = batchMaskAll;
+$("batchSubmitMasked").onclick = batchSubmitMasked;
+$("batchSubmitNext").onclick = () => runEdit({ thenNext: true });
+$("batchSkip").onclick = () => {
+  const it = currentBatchItem();
+  if (!it) { showError("No batch image open."); return; }
+  stashCurrentMask();   // keep a mask you already made, in case you come back
+  it.status = "skipped";
+  renderBatch();
+  openNextBatchItem();
+};
+$("batchAutoAll").onclick = () => batchSubmitAll(true);
+$("batchNoMaskAll").onclick = () => batchSubmitAll(false);
+$("batchClear").onclick = () => {
+  for (const it of state.batch) URL.revokeObjectURL(it.thumbUrl);
+  state.batch = []; state.batchIdx = -1;
+  renderBatch();
+};

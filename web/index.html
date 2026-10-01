@@ -18,10 +18,28 @@
       <section class="card">
         <h2>Image</h2>
         <label class="dropzone" id="dropzone">
-          <input type="file" id="fileInput" accept="image/*" hidden>
-          <span id="dropText">Drop an image here or click to choose</span>
+          <input type="file" id="fileInput" accept="image/*" multiple hidden>
+          <span id="dropText">Drop an image (or several) here or click to choose</span>
         </label>
+        <div class="row wrap">
+          <label class="btn" for="folderInput">Open folder…</label>
+          <input type="file" id="folderInput" webkitdirectory multiple hidden>
+        </div>
         <div class="hint" id="imageInfo">No image loaded.</div>
+        <div id="batchWrap" hidden>
+          <div class="hint" id="batchInfo"></div>
+          <div class="hint">← → in the Mask view switch images.</div>
+          <div class="batch-grid" id="batchGrid"></div>
+          <div class="row wrap">
+            <button id="batchSubmitNext" class="primary" title="Queue the current image with its mask and open the next open one">Submit &amp; next</button>
+            <button id="batchSkip" title="Skip this image: it is left out of the batch (also of the submit-all buttons) and the next open image opens. Submitting it later still works.">Skip</button>
+            <button id="batchMaskAll" title="Compute masks for all open images one after another (nothing is queued). Then review them with ← → and submit.">Mask all</button>
+            <button id="batchSubmitMasked" title="Queue every image that has a mask (computed or painted)">Submit all masked</button>
+            <button id="batchAutoAll" title="Compute a mask with the current mask settings for every open image and queue them; images where nothing is found are skipped">Auto-mask &amp; submit all</button>
+            <button id="batchNoMaskAll" title="Queue every open image without a mask (whole image is edited)">Submit all without mask</button>
+            <button id="batchClear">Clear batch</button>
+          </div>
+        </div>
       </section>
 
       <section class="card">

@@ -12,6 +12,13 @@ A small local web app for mask-based image editing with **Qwen-Image 2.1** throu
 The app predicts the working size and warns (or auto-fixes) when it would exceed ~4096 latent
 tokens, the point where the edit turns into gray noise on Apple Silicon.
 
+## Batch (folder)
+Open a folder or drop several images: they appear as a thumbnail grid and nothing starts on its
+own. Go through them one by one (mask, refine, **Submit & next**; each image keeps its own mask),
+or **Mask all** first (masks only, nothing queued), review them with ← → and submit them
+together with **Submit all masked**. Or use **Auto-mask & submit all** (current mask settings; images where nothing is found are
+marked and skipped) or **Submit all without mask**.
+
 ## Align (advanced)
 For free edit + paste runs, **Align…** in the viewer lines the generated image up with the
 original before pasting: Auto-align estimates shift and scale from the area outside the mask

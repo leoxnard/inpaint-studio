@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "seed",
+  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "saveLast", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "unet", "clip", "vae",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -503,6 +503,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
     sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value,
     keep_identical: $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
+    save_last: parseInt($("saveLast").value, 10) || 0,
     unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
   };
 }
@@ -814,7 +815,6 @@ async function loadStoredRuns() {
 }
 
 async function deleteRun(run) {
-  if (!confirm("Delete this run from the history? (Images in the ComfyUI output folder are kept.)")) return;
   try {
     if (run.serverId) await api(`/api/runs/${encodeURIComponent(run.serverId)}`, { method: "DELETE" });
     state.runs = state.runs.filter((r) => r !== run);

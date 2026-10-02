@@ -160,9 +160,9 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
     else:
         latent = ["encode", 2]
 
-    every = int(p.get("save_every") or 0)
-    if every > 0:
-        final_latent = _chunked_sampler(g, p, latent, every)
+    every, last = int(p.get("save_every") or 0), int(p.get("save_last") or 0)
+    if every > 0 or last > 0:
+        final_latent = _chunked_sampler(g, p, latent, every, last)
     else:
         g["sampler"] = {"class_type": "KSampler", "inputs": {
             "model": ["model", 0], "positive": ["encode", 0], "negative": ["encode", 1], "latent_image": latent,
@@ -177,25 +177,35 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
             # in paste mode the free edit is reference-sized, which can differ by a few pixels
             "resize_source": True, "mask": ["mask", 0]}}
         result = ["composite", 0]
-    g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": result, "filename_prefix": p.get("prefix", "InpaintStudio/edit")}}
-    # saved (not temp previews) so the run history survives reloads and ComfyUI restarts
+    # saved (not temp previews) so the run history survives reloads and ComfyUI restarts;
+    # the server strips ComfyUI's _00001_ counter afterwards (every run has its own prefix)
     prefix = p.get("prefix", "InpaintStudio/edit")
+    g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": result, "filename_prefix": prefix}}
     g["out_before"] = {"class_type": "SaveImage", "inputs": {"images": ["scale", 0], "filename_prefix": f"{prefix}/before"}}
     if use_mask:  # the raw model output before pasting, to judge how well it lines up
-        g["out_raw"] = {"class_type": "SaveImage", "inputs": {"images": ["decode", 0], "filename_prefix": f"{prefix}/raw"}}
-        g["out_mask"] = {"class_type": "SaveImage", "inputs": {"images": ["mask_preview", 0], "filename_prefix": f"{prefix}/mask"}}
-        g["mask_preview"] = {"class_type": "MaskToImage", "inputs": {"mask": ["mask", 0]}}
+        g["out_raw"] = {"class_type": "SaveImage", "inputs": {"images": ["decode", 0], "filename_prefix": f"{prefix}_raw"}}
     return g
 
 
-def step_chunks(steps: int, every: int) -> list[tuple[int, int]]:
-    return [(a, min(a + every, steps)) for a in range(0, steps, every)]
+def step_chunks(steps: int, every: int, last: int = 0) -> list[tuple[int, int]]:
+    """Chunk boundaries: every N steps, each of the last N steps, and the final step."""
+    ends = {steps}
+    if every > 0:
+        ends.update(range(every, steps, every))
+    if last > 0:
+        ends.update(range(max(1, steps - last), steps))
+    ends = sorted(ends)
+    return list(zip([0] + ends[:-1], ends))
 
 
-def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int) -> list:
+def step_name(step: int, steps: int) -> str:
+    return f"{step:0{len(str(steps))}d}_{steps}"
+
+
+def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int, last: int = 0) -> list:
     """Same scheme as the 'Qwen2.1 GGUF Steps' workflow, unrolled instead of a loop node:
     each chunk samples sigmas[start..end] with SamplerCustomAdvanced (noise only in the first
-    chunk), and the chunk's denoised prediction is decoded and saved as step_START-END."""
+    chunk), and the chunk's denoised prediction is decoded and saved as step_END_STEPS."""
     steps = int(p["steps"])
     g["noise"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": int(p["seed"])}}
     g["no_noise"] = {"class_type": "DisableNoise", "inputs": {}}
@@ -212,7 +222,7 @@ def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int) -> li
         # chunks compound it and the unmasked area drifts (turns purple). Restoring the area
         # outside the mask after every chunk keeps it at the clean original.
         g["outside"] = {"class_type": "InvertMask", "inputs": {"mask": ["mask_hard", 0]}}
-    for i, (a, b) in enumerate(step_chunks(steps, every)):
+    for i, (a, b) in enumerate(step_chunks(steps, every, last)):
         g[f"upto_{i}"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": ["sched", 0], "step": b}}
         g[f"from_{i}"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": [f"upto_{i}", 0], "step": a}}
         g[f"chunk_{i}"] = {"class_type": "SamplerCustomAdvanced", "inputs": {
@@ -222,13 +232,13 @@ def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int) -> li
         step_img = [f"chunk_dec_{i}", 0]
         if paste_mask and not noise_masked:  # paste mode: also keep the full generated image
             g[f"stepraw_{b}"] = {"class_type": "SaveImage", "inputs": {
-                "images": step_img, "filename_prefix": f"{prefix}/raw_step_{a:03d}-{b:03d}"}}
+                "images": step_img, "filename_prefix": f"{prefix}/raw_step_{step_name(b, steps)}"}}
         if paste_mask:  # show each step the way the final result will look: pasted into the original
             g[f"chunk_paste_{i}"] = {"class_type": "ImageCompositeMasked", "inputs": {
                 "destination": ["scale", 0], "source": step_img, "x": 0, "y": 0, "resize_source": True, "mask": paste_mask}}
             step_img = [f"chunk_paste_{i}", 0]
         g[f"stepsave_{b}"] = {"class_type": "SaveImage", "inputs": {
-            "images": step_img, "filename_prefix": f"{prefix}/step_{a:03d}-{b:03d}"}}
+            "images": step_img, "filename_prefix": f"{prefix}/step_{step_name(b, steps)}"}}
         if noise_masked:
             g[f"chunk_fix_{i}"] = {"class_type": "LatentCompositeMasked", "inputs": {
                 "destination": [f"chunk_{i}", 0], "source": latent, "x": 0, "y": 0, "resize_source": False, "mask": ["outside", 0]}}

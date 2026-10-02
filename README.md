@@ -35,6 +35,15 @@ Every finished run is stored in `data/runs/` (gitignored) and listed again after
 including its step frames, before/after and the raw edit. Deleting a run there keeps the
 images in the ComfyUI output folder.
 
+## Output files
+Per run in the ComfyUI output folder (`InpaintStudio/`):
+- `<run>.png` – result, `<run>_raw.png` – raw edit before pasting (masked runs)
+- `<run>/before.png`, `<run>/step_17_20.png`, `<run>/raw_step_17_20.png` (free edit + paste)
+
+Steps are saved every N steps and/or for the last N steps, always including the final step.
+ComfyUI's `_00001_` counter is removed by the server; set `COMFY_OUTPUT_DIR` if the output
+folder is not `~/ComfyUI-Shared/output`.
+
 ## Requirements
 - ComfyUI with ComfyUI-GGUF, the SAM3 checkpoint `sam3.1_multiplex_fp16.safetensors`,
   a Qwen-Image 2.1 model, `qwen3vl_8b_*` text encoder and the Qwen-Image 2.1 VAE.

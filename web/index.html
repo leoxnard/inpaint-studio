@@ -122,6 +122,9 @@
           <label title="Decode the real intermediate image with the VAE and save it every N steps (like the Steps workflow). 0 = off. Live previews are always recorded and can be shown in the viewer.">Save step every N (0 = off)
             <input type="number" id="saveEvery" min="0" max="50" step="1" value="2">
           </label>
+          <label title="Also save each of the last N steps before the result. With 3 and 20 steps: steps 17, 18 and 19 (plus the result). 0 = off.">Save last N steps (0 = off)
+            <input type="number" id="saveLast" min="0" max="50" step="1" value="0">
+          </label>
           <label>Feather (px)
             <input type="number" id="feather" min="0" max="100" step="1" value="12">
           </label>

@@ -10,6 +10,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import struct
 import time
 import uuid
@@ -18,7 +19,7 @@ from typing import Any
 
 import httpx
 import websockets
-from PIL import Image
+from PIL import Image, ImageFilter
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -32,10 +33,13 @@ WEB = ROOT / "web"
 COMFY = os.environ.get("COMFY_URL") or "http://127.0.0.1:8188"
 COMFY_WS = COMFY.replace("http", "ws", 1) + "/ws"
 SUBFOLDER = "inpaint-studio"
+# ComfyUI's output folder, used to drop the _00001_ counter from saved file names
+COMFY_OUTPUT = Path(os.environ.get("COMFY_OUTPUT_DIR") or Path.home() / "ComfyUI-Shared/output").expanduser()
 RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or ROOT / "data") / "runs"
 RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
-                  "scheduler", "feather", "megapixels", "resolution", "save_every", "unet", "keep_identical")
+                  "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
+                  "keep_identical")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -82,6 +86,26 @@ async def wait_history(prompt_id: str, timeout: float = 300) -> dict:
             return entry
         await asyncio.sleep(0.5)
     raise HTTPException(504, "ComfyUI job timed out")
+
+
+def drop_counter(img: dict) -> dict:
+    """Rename ComfyUI's 'name_00001_.png' to 'name.png'. Every run has its own prefix, so the
+    counter never matters; if the output folder is not reachable the name is kept."""
+    new = re.sub(r"_\d{5}_(\.\w+)$", r"\1", img["filename"])
+    src = COMFY_OUTPUT / img.get("subfolder", "") / img["filename"]
+    dst = src.with_name(new)
+    if new == img["filename"] or img.get("type", "output") != "output" or not src.is_file() or dst.exists():
+        return img
+    try:
+        src.rename(dst)
+    except OSError:
+        return img
+    return {**img, "filename": new}
+
+
+def input_mask_url(name: str) -> str:
+    sub, _, fname = name.rpartition("/")
+    return view_url({"filename": fname, "subfolder": sub, "type": "input"})
 
 
 def view_url(img: dict) -> str:
@@ -279,6 +303,9 @@ async def align_run(run_id: str, req: AlignReq):
         _align_cache.clear()  # keep only the run being aligned in memory
         _align_cache[run_id] = tuple([await _fetch_view(run[k]) for k in ("before_url", "raw_url", "mask_url")])
     original, raw, mask = _align_cache[run_id]
+    feather = int(run.get("params", {}).get("feather") or 0)
+    if feather > 0 and "type=input" in run["mask_url"]:  # newer runs keep only the uploaded hard mask
+        mask = mask.convert("L").filter(ImageFilter.GaussianBlur(max(1.0, feather / 3)))
     result: dict[str, Any] = {}
     dx, dy, scale = req.dx, req.dy, req.scale
     if req.auto:
@@ -337,8 +364,9 @@ async def finish_job(job: dict, status: str, **extra) -> None:
 
 async def run_job(job: dict) -> None:
     run, params, run_id = job["run"], job["params"], job["run"]["id"]
-    every = int(params.get("save_every") or 0)
-    chunk_starts = [a for a, _ in graphs.step_chunks(int(params["steps"]), every)] if every > 0 else []
+    every, last = int(params.get("save_every") or 0), int(params.get("save_last") or 0)
+    chunks = graphs.step_chunks(int(params["steps"]), every, last) if every > 0 or last > 0 else []
+    chunk_starts = [a for a, _ in chunks]
     client_id = f"inpaint-studio-{uuid.uuid4().hex}"
     live_n, step = 0, 0
     try:
@@ -379,6 +407,7 @@ async def run_job(job: dict) -> None:
                     if not imgs:
                         continue
                     sstep = int(node.split("_")[1])
+                    imgs = [drop_counter(imgs[0])]
                     for f in [f for f in run["frames"] if f["kind"] == "live" and f["step"] == sstep]:
                         (RUNS / run_id / Path(f["url"]).name).unlink(missing_ok=True)
                         run["frames"].remove(f)  # the saved render replaces the live preview
@@ -394,11 +423,15 @@ async def run_job(job: dict) -> None:
                     return
                 elif kind == "execution_success" or (kind == "executing" and data.get("node") is None and data.get("prompt_id") == pid):
                     outs = (await wait_history(pid, timeout=30)).get("outputs", {})
-                    first = lambda key: (outs.get(key, {}).get("images") or [None])[0]  # noqa: E731
-                    res, before, raw, pmask = first("out_result"), first("out_before"), first("out_raw"), first("out_mask")
+                    def first(key: str) -> dict | None:
+                        img = (outs.get(key, {}).get("images") or [None])[0]
+                        return drop_counter(img) if img else None
+                    res, before, raw = first("out_result"), first("out_before"), first("out_raw")
+                    use_mask = params.get("use_mask") and params.get("mask")
                     await finish_job(job, "done",
                                      result_url=view_url(res) if res else None, before_url=view_url(before) if before else None,
-                                     raw_url=view_url(raw) if raw else None, mask_url=view_url(pmask) if pmask else None,
+                                     raw_url=view_url(raw) if raw else None,
+                                     mask_url=input_mask_url(params["mask"]) if use_mask else None,
                                      filename=res["filename"] if res else None)
                     return
     except asyncio.CancelledError:

@@ -81,3 +81,31 @@ def test_paste_mode_saves_raw_steps_inpaint_does_not():
     inpaint = graphs.build_edit_graph(dict(base, mode="inpaint"))
     assert [k for k in paste if k.startswith("stepraw_")] == ["stepraw_2", "stepraw_4"]
     assert not any(k.startswith("stepraw_") for k in inpaint)
+
+
+def test_save_last_n_steps():
+    assert graphs.step_chunks(20, 0, 3) == [(0, 17), (17, 18), (18, 19), (19, 20)]
+    assert graphs.step_chunks(10, 4, 2) == [(0, 4), (4, 8), (8, 9), (9, 10)]
+
+
+def test_output_names_without_mask_png():
+    p = dict(image="a.png", mask="m.png", use_mask=True, megapixels=0.95, resolution=1008, prompt="x",
+             steps=20, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=0,
+             unet="u.gguf", clip="c", vae="v", work_w=1344, work_h=736, save_last=3, prefix="P", mode="paste")
+    g = graphs.build_edit_graph(p)
+    assert g["out_result"]["inputs"]["filename_prefix"] == "P"
+    assert g["out_raw"]["inputs"]["filename_prefix"] == "P_raw"
+    assert g["stepsave_20"]["inputs"]["filename_prefix"] == "P/step_20_20"
+    assert g["stepraw_17"]["inputs"]["filename_prefix"] == "P/raw_step_17_20"
+    assert not any(n["class_type"] == "SaveImage" and "mask" in n["inputs"]["filename_prefix"] for n in g.values())
+
+
+def test_drop_counter_renames_in_output_dir(tmp_path, monkeypatch):
+    import server
+    monkeypatch.setattr(server, "COMFY_OUTPUT", tmp_path)
+    (tmp_path / "InpaintStudio/r1").mkdir(parents=True)
+    (tmp_path / "InpaintStudio/r1/step_17_20_00001_.png").write_bytes(b"x")
+    img = server.drop_counter({"filename": "step_17_20_00001_.png", "subfolder": "InpaintStudio/r1", "type": "output"})
+    assert img["filename"] == "step_17_20.png" and (tmp_path / "InpaintStudio/r1/step_17_20.png").is_file()
+    missing = {"filename": "x_00001_.png", "subfolder": "", "type": "output"}
+    assert server.drop_counter(missing) == missing

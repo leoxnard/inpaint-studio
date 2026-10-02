@@ -8,7 +8,8 @@ per-step previews. Runs only on Leonard's Mac, no deploy.
 
 ## Commands
 - Run: `./run.sh` (http://127.0.0.1:7380), or the Mac app built by `macos/build-app.sh`
-  (`~/Applications/Inpaint Studio.app`; quitting it stops the server)
+  (`~/Applications/Inpaint Studio.app`; also starts ComfyUI headless if 8188 is free; quitting
+  stops the server and that ComfyUI)
 - Tests: `uv run pytest` (the queue integration test uses a tiny CPU-only graph against the
   running ComfyUI and is skipped when ComfyUI is down)
 

@@ -51,9 +51,11 @@ folder is not `~/ComfyUI-Shared/output`.
 
 ## Mac app
 `macos/build-app.sh` builds **Inpaint Studio.app** into `~/Applications` (a stay-open AppleScript
-applet, source in `macos/InpaintStudio.applescript`). Opening it starts the server and the UI;
-quitting it (⌘Q / Dock) stops the server and warns first if jobs are still running.
-Server log: `~/Library/Logs/InpaintStudio.log`.
+applet, source in `macos/InpaintStudio.applescript`). Opening it starts ComfyUI headless (the Comfy
+Desktop install in `~/ComfyUI-Installs/ComfyUI` with its model paths, only if nothing listens on
+8188 yet), the server and the UI. Quitting it (⌘Q / Dock) stops the server and the ComfyUI it
+started (a running Comfy Desktop is left alone) and warns first if jobs are still running.
+Logs: `~/Library/Logs/InpaintStudio.log`, `~/Library/Logs/InpaintStudio-ComfyUI.log`.
 
 ## Run
 ```bash

@@ -109,3 +109,10 @@ def test_drop_counter_renames_in_output_dir(tmp_path, monkeypatch):
     assert img["filename"] == "step_17_20.png" and (tmp_path / "InpaintStudio/r1/step_17_20.png").is_file()
     missing = {"filename": "x_00001_.png", "subfolder": "", "type": "output"}
     assert server.drop_counter(missing) == missing
+
+
+def test_matching_resolution_gives_reference_of_working_size():
+    for w, h in [(1344, 736), (1024, 1024), (832, 1216), (1184, 864)]:
+        r = graphs.matching_resolution(w, h)
+        assert graphs.reference_size(w, h, r) == (w, h), (w, h, r, graphs.reference_size(w, h, r))
+    assert graphs.matching_resolution(1344, 736) == 992

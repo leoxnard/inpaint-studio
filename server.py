@@ -324,6 +324,7 @@ class SizeReq(BaseModel):
 async def size(req: SizeReq):
     report = graphs.size_report(req.width, req.height, req.megapixels, req.resolution)
     report["suggested"] = graphs.safe_settings(req.width, req.height, req.megapixels, req.resolution)
+    report["match_res"] = graphs.matching_resolution(report["work_w"], report["work_h"])
     return report
 
 

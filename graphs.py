@@ -32,6 +32,20 @@ def reference_size(width: int, height: int, resolution: int) -> tuple[int, int]:
     return max(32, w), max(32, h)
 
 
+def matching_resolution(work_w: int, work_h: int) -> int:
+    """Encoder resolution whose reference image has exactly the working size (or comes closest).
+    A reference that differs from the working size makes the free edit come out slightly shifted
+    and scaled (tested: 1008 -> ref 1376x736 for work 1344x736 gave 2.3 px shift / 0.5 % scale,
+    the matching 992 gave 0.4 px / 0 %)."""
+    centre = round(math.sqrt(work_w * work_h) / 16) * 16
+    candidates = range(max(256, centre - 160), centre + 161, 16)
+
+    def miss(r: int) -> int:
+        rw, rh = reference_size(work_w, work_h, r)
+        return abs(rw - work_w) + abs(rh - work_h)
+    return min(candidates, key=lambda r: (miss(r), abs(r - centre)))
+
+
 def tokens(width: int, height: int) -> int:
     return (width // 16) * (height // 16)
 

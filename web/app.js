@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
-  "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
+  "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect",
 ];
@@ -182,6 +182,11 @@ async function refreshSize() {
       saveForm();
       rep = await postJson("/api/size", { ...body, megapixels: rep.suggested.megapixels, resolution: rep.suggested.resolution });
       applied = true;
+    }
+    if ($("matchRef").checked && rep.match_res && rep.match_res !== parseInt($("resolution").value, 10)) {
+      $("resolution").value = rep.match_res;
+      saveForm();
+      rep = await postJson("/api/size", { ...body, megapixels: num("megapixels"), resolution: rep.match_res });
     }
     state.size = rep;
     renderSizeInfo(rep, applied);
@@ -1317,8 +1322,13 @@ function openNextBatchItem() {
 async function sizeFor(it) {
   const body = { width: it.srcW, height: it.srcH, megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10) };
   const rep = await postJson("/api/size", body);
-  if (!rep.safe && $("autofix").checked && rep.suggested) return { ...rep.suggested };
-  return { ...rep, megapixels: body.megapixels, resolution: body.resolution };
+  const out = !rep.safe && $("autofix").checked && rep.suggested
+    ? { ...rep.suggested } : { ...rep, megapixels: body.megapixels, resolution: body.resolution };
+  if ($("matchRef").checked) {  // per image: its own working size decides the matching resolution
+    const fixed = await postJson("/api/size", { ...body, megapixels: out.megapixels });
+    out.resolution = fixed.match_res;
+  }
+  return out;
 }
 
 function maskHasWhite(im) {

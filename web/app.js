@@ -1651,6 +1651,25 @@ function renderModelPicker({ applyDefaults = false } = {}) {
   if (applyDefaults && want) applyPresetDefaults(want);
   updateOverrideLabels();
   syncTaskUi();
+  renderModelSel(list);
+}
+
+// single picker: one entry per installed preset + quant, grouped by model
+function renderModelSel(list) {
+  const sel = $("modelSel");
+  sel.innerHTML = "";
+  const FIT = { tight: " · tight", no: " · too large" };
+  for (const p of list) {
+    const grp = document.createElement("optgroup");
+    grp.label = p.title + (p.experimental ? " (experimental)" : "");
+    for (const q of p.quants.filter((x) => x.installed)) {
+      grp.appendChild(new Option(`${p.title} · ${q.quant}${FIT[q.fit] || ""}`, `${p.id}|${q.quant}`));
+    }
+    sel.appendChild(grp);
+  }
+  sel.value = `${$("preset").value}|${$("quant").value}`;
+  sel.disabled = !list.length;
+  sel.title = sel.selectedOptions[0]?.textContent || "";
 }
 function initModelPicker() {
   renderModelPicker({ applyDefaults: !storedForm().preset });
@@ -1663,6 +1682,13 @@ function initModelPicker() {
     saveForm();
   });
   $("quant").addEventListener("change", () => { updateOverrideLabels(); saveForm(); });
+  $("modelSel").addEventListener("change", () => {
+    const [pid, q] = $("modelSel").value.split("|");
+    if (pid !== $("preset").value) { $("preset").value = pid; $("preset").dispatchEvent(new Event("change")); }
+    $("quant").value = q;
+    $("quant").dispatchEvent(new Event("change"));
+    $("modelSel").title = $("modelSel").selectedOptions[0]?.textContent || "";
+  });
 }
 
 // UI parts that depend on the task and the selected model family

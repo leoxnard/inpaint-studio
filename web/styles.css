@@ -295,8 +295,15 @@ body.fam-zimage .paste-only { display: none !important; }
 .topbar { gap: 12px; }
 .modelbar { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; justify-content: center; }
 .modelbar[hidden] { display: none; }
-.modelbar .mlabel { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.modelbar select { width: auto; max-width: 240px; min-width: 0; padding: 4px 8px; }
+#modelSel {
+  width: auto; max-width: 300px; min-width: 0; padding: 5px 30px 5px 12px; font-size: 13px; font-weight: 500;
+  border-radius: 999px; border: 1px solid var(--border); background-color: var(--panel); color: var(--text);
+  appearance: none; -webkit-appearance: none; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px; background-repeat: no-repeat;
+}
+#modelSel:hover:not(:disabled) { border-color: var(--accent-dim); }
+#modelSel:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button.linkbtn { background: none; border: 0; padding: 2px 4px; color: var(--accent); font-size: 12px; text-decoration: underline; }
 button.linkbtn:hover:not(:disabled) { border: 0; color: #96a2ff; }
 #modelHint { color: var(--warn); }
@@ -304,7 +311,7 @@ button.linkbtn:hover:not(:disabled) { border: 0; color: #96a2ff; }
 @media (max-width: 900px) {
   .topbar { flex-wrap: wrap; }
   .modelbar { order: 3; flex: 1 1 100%; justify-content: flex-start; flex-wrap: wrap; }
-  .modelbar select { flex: 1 1 120px; max-width: none; }
+  #modelSel { flex: 1 1 auto; max-width: none; }
 }
 
 /* dialog */

@@ -10,9 +10,10 @@
   <header class="topbar">
     <h1>Inpaint Studio</h1>
     <div class="modelbar" id="modelBar" hidden>
-      <span class="mlabel">Model</span>
-      <select id="preset" aria-label="Model"></select>
-      <select id="quant" aria-label="Quantisation"></select>
+      <!-- one visible picker for every installed model + quantisation; #preset / #quant hold the state -->
+      <select id="modelSel" aria-label="Model and quantisation"></select>
+      <select id="preset" hidden></select>
+      <select id="quant" hidden></select>
       <button id="moreModels" class="linkbtn" title="Open the download centre">Get more models…</button>
     </div>
     <div class="topright">

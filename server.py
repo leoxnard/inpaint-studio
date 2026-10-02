@@ -56,6 +56,9 @@ async def security_headers(request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
+    if not request.url.path.startswith(("/api/", "/data/")):
+        # UI files: always revalidate, so an app update never runs with stale cached modules
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 

@@ -75,6 +75,16 @@
         <div class="hint">Above ~4096 latent tokens the edit turns gray on Apple Silicon.</div>
       </section>
 
+      <section class="card needs-sam edit-only" id="modeCard">
+        <h2>Mode</h2>
+        <select id="mode" aria-label="Edit mode">
+          <option value="paste" selected>Free edit + paste</option>
+          <option value="inpaint">Inpaint (mask only)</option>
+          <option value="none">No mask (edit whole image)</option>
+        </select>
+        <div class="hint" id="modeHint"></div>
+      </section>
+
       <section class="card needs-mask edit-only">
         <h2>Step 1 &ndash; Mask</h2>
         <label>What to mask
@@ -115,7 +125,6 @@
           <button id="maskFill">Fill all</button>
           <button id="maskUndo">Undo</button>
         </div>
-        <label class="check"><input type="checkbox" id="useMask" checked> Use mask (off = edit whole image)</label>
       </section>
 
       <section class="card">
@@ -142,12 +151,6 @@
           </label>
           <label class="edit-only">Denoise
             <input type="number" id="denoise" min="0" max="1" step="0.01" value="1">
-          </label>
-          <label class="full needs-mask paste-only edit-only">Mode
-            <select id="mode" title="Inpaint: only the masked area is re-generated. Free edit + paste: the whole image is edited, then only the masked area is pasted in (try this when the old content keeps coming back).">
-              <option value="inpaint">Inpaint (mask only)</option>
-              <option value="paste">Free edit + paste</option>
-            </select>
           </label>
           <label class="check needs-mask paste-only edit-only" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Tell the model to keep the rest identical</label>
           <div class="needs-mask edit-only" id="postFixRow" title="Free edit + paste: fix the generated image before pasting, measured from the area outside the mask. The plain paste is kept as <run>.png, the fixed one is <run>_fixed.png.">

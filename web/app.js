@@ -8,7 +8,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
+  "brushSize", "opacity", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -286,7 +286,7 @@ function draw() {
   if (display.width !== w || display.height !== h) { display.width = w; display.height = h; }
   dctx.clearRect(0, 0, w, h);
   dctx.drawImage(state.imgEl, 0, 0, w, h);
-  if (state.mask && state.maskAvailable) {
+  if (state.mask && maskOn()) {
     if (tint.width !== state.mask.width || tint.height !== state.mask.height) {
       tint.width = state.mask.width; tint.height = state.mask.height;
     }
@@ -326,7 +326,7 @@ function strokeTo(p) {
   render();
 }
 display.addEventListener("pointerdown", (e) => {
-  if (!state.maskAvailable || state.mode === "off" || !state.imgEl || e.button !== 0) return;
+  if (!maskOn() || state.mode === "off" || !state.imgEl || e.button !== 0) return;
   if (!ensureMask()) return;
   pushHistory();
   stroking = true; last = null;
@@ -346,7 +346,7 @@ display.addEventListener("pointerenter", moveCursor);
 
 function moveCursor(e) {
   const cur = $("brushCursor");
-  if (!state.maskAvailable || state.mode === "off" || !state.imgEl) { cur.hidden = true; return; }
+  if (!maskOn() || state.mode === "off" || !state.imgEl) { cur.hidden = true; return; }
   const r = display.getBoundingClientRect();
   const d = parseFloat($("brushSize").value) * r.width / display.width;
   cur.hidden = false;
@@ -359,7 +359,7 @@ function moveCursor(e) {
 function setMode(mode) {
   state.mode = mode;
   for (const b of $("brushMode").children) b.classList.toggle("active", b.dataset.mode === mode);
-  display.classList.toggle("brush", mode !== "off" && state.maskAvailable);
+  display.classList.toggle("brush", mode !== "off" && maskOn());
   if (mode === "off") $("brushCursor").hidden = true;
 }
 $("brushMode").addEventListener("click", (e) => { if (e.target.dataset.mode) setMode(e.target.dataset.mode); });
@@ -381,7 +381,7 @@ $("maskFill").onclick = () => {
 $("maskUndo").onclick = undo;
 document.addEventListener("keydown", (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
-  if (state.maskAvailable && (e.metaKey || e.ctrlKey) && e.key === "z" && !typing) {
+  if (maskOn() && (e.metaKey || e.ctrlKey) && e.key === "z" && !typing) {
     e.preventDefault(); undo();
     return;
   }
@@ -533,7 +533,7 @@ const currentFamily = () => presetById($("preset").value)?.family || "";
 
 // edit parameters from the form for one image (seed is drawn per job when "Random" is on)
 function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resolution }) {
-  if (!state.maskAvailable) { useMask = false; maskName = null; }
+  if (!maskOn()) { useMask = false; maskName = null; }
   let seed = parseInt($("seed").value, 10) || 0;
   if ($("randomSeed").checked) { seed = Math.floor(Math.random() * 2 ** 32); $("seed").value = seed; }
   return {
@@ -541,8 +541,8 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     megapixels: megapixels ?? num("megapixels"), resolution: resolution ?? parseInt($("resolution").value, 10),
     prompt: $("prompt").value, negative: $("negative").value,
     steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
-    sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: state.maskAvailable && currentFamily() !== "zimage" ? $("mode").value : "inpaint",
-    keep_identical: state.maskAvailable && currentFamily() !== "zimage" && $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
+    sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: maskOn() && currentFamily() !== "zimage" ? $("mode").value : "inpaint",
+    keep_identical: maskOn() && currentFamily() !== "zimage" && $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
@@ -563,7 +563,7 @@ async function runEdit({ thenNext = false } = {}) {
   const generate = state.task === "generate";
   if (!generate && !state.imageName) { showError("Load an image first."); return; }
   if (!presetById($("preset").value)) { showError("No model installed. Open Downloads to get one."); return; }
-  const useMask = !generate && state.maskAvailable && $("useMask").checked;
+  const useMask = !generate && maskOn();
   setSubmitting(true);
   try {
     const rep = await refreshSize();
@@ -1066,7 +1066,7 @@ function initApp() {
     $(id).addEventListener("input", () => { updateStale(); refreshSizeDebounced(); });
   }
   $("autofix").addEventListener("change", refreshSizeDebounced);
-  $("moreModels").onclick = showSetup;
+  $("moreModels").onclick = () => showSetup({ section: "models" });
   $("taskTabs").addEventListener("click", (e) => { if (e.target.dataset.task) setTask(e.target.dataset.task); });
   $("opacity").addEventListener("input", render);
   $("runEdit").onclick = () => runEdit();
@@ -1080,6 +1080,10 @@ function syncModeUi() {
   const notPaste = $("mode").value !== "paste";
   $("keepIdenticalRow").hidden = notPaste;
   $("postFixRow").hidden = notPaste;
+  const hints = { paste: "The model edits the whole image, then only the masked area is pasted into the original.",
+    inpaint: "Only the masked area is re-generated.", none: "The whole image is edited, no mask." };
+  $("modeHint").textContent = hints[$("mode").value] || "";
+  if (state.maskUiReady) applyMaskTexts();  // not during module init (applyMaskMode runs it later)
 }
 $("mode").addEventListener("change", syncModeUi);
 syncModeUi();
@@ -1328,7 +1332,7 @@ function maskHasWhite(im) {
 }
 
 async function batchSubmitAll(withMask) {
-  if (!state.maskAvailable) withMask = false;
+  if (!maskOn()) withMask = false;
   if (state.batchBusy) return;
   stashCurrentMask();
   // "without mask" also takes images where auto-masking found nothing
@@ -1499,15 +1503,25 @@ const MASK_TEXTS = {
   allTitle: ["Queue every open image without a mask (whole image is edited)", "Queue every open image"],
 };
 
+// masks are used when SAM3 is installed and the mode is not "No mask"
+function maskOn() { return !!state.maskAvailable && $("mode").value !== "none"; }
+
 const syncHeading = () => {
-  $("editHeading").innerHTML = state.task === "generate" ? "Generate" : MASK_TEXTS.heading[state.maskAvailable ? 0 : 1];
+  $("editHeading").innerHTML = state.task === "generate" ? "Generate" : MASK_TEXTS.heading[maskOn() ? 0 : 1];
 };
 
 // Masking needs SAM3. Without it the UI hides everything about masks and never sends one.
 function applyMaskMode(available) {
-  const i = available ? 0 : 1;
   state.maskAvailable = available;
-  document.body.classList.toggle("no-mask", !available);
+  state.maskUiReady = true;
+  document.body.classList.toggle("no-sam", !available);
+  applyMaskTexts();
+}
+
+// hides / renames everything about masks when SAM3 is missing or the mode is "No mask"
+function applyMaskTexts() {
+  const i = maskOn() ? 0 : 1;
+  document.body.classList.toggle("no-mask", !maskOn());
   syncHeading();
   $("maskTab").textContent = MASK_TEXTS.tab[i];
   $("batchKeysHint").textContent = MASK_TEXTS.keys[i];
@@ -1528,10 +1542,10 @@ function showApp() {
   initApp();
   startSession();
 }
-function showSetup() {
+function showSetup(opts = {}) {
   $("appLayout").hidden = true;
   $("modelBar").hidden = true;
-  setup.open().catch((e) => showError(e.message));
+  setup.open(opts instanceof Event ? {} : opts).catch((e) => showError(e.message));
 }
 
 const setup = createSetup({
@@ -1700,7 +1714,9 @@ function syncTaskUi() {
   const fam = currentFamily();
   const zedit = fam === "zimage" && !gen;
   document.body.classList.toggle("fam-zimage", zedit);
-  if (zedit) { $("mode").value = "inpaint"; syncModeUi(); }
+  // Z-Image cannot do free edit + paste (it does not follow instructions)
+  $("mode").querySelector('[value="paste"]').disabled = zedit;
+  if (zedit && $("mode").value === "paste") { $("mode").value = "inpaint"; syncModeUi(); }
   // turbo models: fixed 5-7 steps, no CFG; the server clamps and forces, the form just follows
   const turbo = fam === "qwen21_turbo";
   document.body.classList.toggle("fam-turbo", turbo);

@@ -210,6 +210,7 @@ label.btn { display: inline-flex; align-items: center; cursor: pointer; }
 
 /* no-mask mode: SAM3 is not installed, everything about masks is hidden */
 body.no-mask .needs-mask { display: none !important; }
+body.no-sam .needs-sam { display: none !important; }
 
 .topright { display: flex; align-items: center; gap: 10px; }
 button.small { padding: 3px 12px; font-size: 12px; border-radius: 999px; color: var(--muted); }

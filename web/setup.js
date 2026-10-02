@@ -408,6 +408,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
 
   function buildModels() {
     const sec = section("Models");
+    sec.id = "setupModels";
     sec.appendChild(el("div", "hint", "Q4 = smaller and faster, BF16 = best quality but needs a lot of RAM. A download also fetches the text encoder and VAE if they are missing."));
     const sl = systemLine();
     if (sl) sec.appendChild(sl);
@@ -656,12 +657,16 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
   }
 
   // ---------------------------------------------------------------- public
-  async function open() {
+  // section "models": jump straight to the model list (download centre)
+  async function open({ section: target } = {}) {
     stopPoll();
     waitingComfy = false;
     root.hidden = false;
     await load();
     build();
+    const anchor = target === "models" && root.querySelector("#setupModels");
+    if (anchor) anchor.scrollIntoView({ block: "start" });
+    else root.scrollTop = 0;
     if (running()) { wasRunning = true; readyAtStart = data.ready; schedulePoll(); }
   }
 

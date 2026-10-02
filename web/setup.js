@@ -309,6 +309,12 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
         onDelete: () => confirmDelete(sam.id, "Masking (SAM3)", sam.size, "The masking tools will be hidden afterwards."),
       }));
     }
+    for (const u of data.components.filter((c) => c.kind === "upscaler")) {
+      sec.appendChild(itemRow({
+        id: u.id, title: u.title, desc: u.description, size: u.size, installed: u.installed, deletable: true, optional: true,
+        onDelete: () => confirmDelete(u.id, u.title, u.size, ""),
+      }));
+    }
     return sec;
   }
 

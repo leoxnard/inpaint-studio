@@ -244,6 +244,17 @@ def _sample_and_save(g: dict, p: dict[str, Any], latent: list, pos: list, neg: l
     # the server strips ComfyUI's _00001_ counter afterwards (every run has its own prefix)
     prefix = p.get("prefix", "InpaintStudio/edit")
     g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": result, "filename_prefix": prefix}}
+    factor = int(p.get("upscale") or 0)
+    if factor > 1 and p.get("upscale_model"):
+        # in pixel space with an upscale model (tiled), so no VAE decode at the large size
+        g["up_model"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": p["upscale_model"]}}
+        g["up"] = {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["up_model", 0], "image": result}}
+        up = ["up", 0]
+        native = int(p.get("upscale_native") or factor)
+        if native != factor:
+            g["up_fit"] = {"class_type": "ImageScaleBy", "inputs": {"image": up, "upscale_method": "lanczos", "scale_by": factor / native}}
+            up = ["up_fit", 0]
+        g["out_upscaled"] = {"class_type": "SaveImage", "inputs": {"images": up, "filename_prefix": f"{prefix}_x{factor}"}}
     if not generate:
         g["out_before"] = {"class_type": "SaveImage", "inputs": {"images": ["scale", 0], "filename_prefix": f"{prefix}/before"}}
     if use_mask:  # the raw model output before pasting, to judge how well it lines up

@@ -27,7 +27,8 @@ CASES = [(pid, task, use_mask, mode, every)
 @pytest.mark.parametrize("pid,task,use_mask,mode,every", CASES)
 def test_graph_matches_comfy_nodes(pid, task, use_mask, mode, every):
     files = presets.resolve(pid, None)
-    g = graphs.build_edit_graph(dict(BASE, **files, task=task, use_mask=use_mask, mode=mode, save_every=every))
+    g = graphs.build_edit_graph(dict(BASE, **files, task=task, use_mask=use_mask, mode=mode, save_every=every,
+                                     upscale=2 if every else 0, upscale_model="4x.safetensors", upscale_native=4))
     for nid, node in g.items():
         info = OBJECT_INFO.get(node["class_type"])
         if not info and node["class_type"] in CUSTOM_NODES:  # installed together with its preset
@@ -41,5 +42,7 @@ def test_graph_matches_comfy_nodes(pid, task, use_mask, mode, every):
         for v in node["inputs"].values():
             if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str) and isinstance(v[1], int):
                 assert v[0] in g, f"{nid} links to missing node {v[0]}"
+    if every:
+        assert g["up_fit"]["inputs"]["scale_by"] == 0.5 and "out_upscaled" in g
     if task == "generate":
         assert "load" not in g and "out_before" not in g

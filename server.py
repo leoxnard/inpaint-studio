@@ -44,7 +44,8 @@ RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or installer.APP_SUPPORT) / "r
 RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
-                  "keep_identical", "preset", "quant", "task", "family")
+                  "keep_identical", "preset", "quant", "task", "family",
+                  "upscale", "upscaler")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -165,7 +166,8 @@ async def setup_status():
     have = installer.installed(cfg)
     base = [{"id": s, "title": t, "description": d, "installed": have[s]} for s, t, d in installer.BASE_STEPS]
     comps = [{"id": f"component:{cid}", "key": cid, "title": c["title"], "size": c["size"], "file": c["path"].rsplit("/", 1)[-1],
-             "installed": have[f"component:{cid}"]}
+             "installed": have[f"component:{cid}"], "kind": c.get("kind"), "scale": c.get("scale"),
+              "description": c.get("description", "")}
              for cid, c in presets.COMPONENTS.items()]
     ram = system_ram()
     models = []
@@ -549,11 +551,12 @@ async def run_job(job: dict) -> None:
                     def first(key: str) -> dict | None:
                         img = (outs.get(key, {}).get("images") or [None])[0]
                         return drop_counter(img) if img else None
-                    res, before, raw = first("out_result"), first("out_before"), first("out_raw")
+                    res, before, raw, upscaled = first("out_result"), first("out_before"), first("out_raw"), first("out_upscaled")
                     use_mask = params.get("use_mask") and params.get("mask")
                     await finish_job(job, "done",
                                      result_url=view_url(res) if res else None, before_url=view_url(before) if before else None,
                                      raw_url=view_url(raw) if raw else None,
+                                     upscaled_url=view_url(upscaled) if upscaled else None,
                                      mask_url=input_mask_url(params["mask"]) if use_mask else None,
                                      filename=res["filename"] if res else None)
                     return
@@ -579,6 +582,11 @@ async def create_job(params: dict):
         params.update({k: params.get(k) or v for k, v in resolved.items()})
     if params.get("task") == "generate":
         params.update(use_mask=False, mask=None, image=None, denoise=1.0)
+    up = presets.COMPONENTS.get(params.get("upscaler") or "")
+    if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler":
+        params.update(upscale_model=up["path"].rsplit("/", 1)[-1], upscale_native=up["scale"])
+    else:
+        params["upscale"] = 0
     if params.get("family") == "qwen21_turbo":  # fixed few-step schedule, no CFG
         params.update(steps=graphs.turbo_steps(params["steps"]), cfg=1.0)
     rep = graphs.size_report(params["src_w"], params["src_h"], params["megapixels"], params["resolution"])

@@ -8,7 +8,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "saveLast", "seed",
+  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -544,6 +544,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: state.maskAvailable && currentFamily() !== "zimage" ? $("mode").value : "inpaint",
     keep_identical: state.maskAvailable && currentFamily() !== "zimage" && $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
+    upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
     // explicit file overrides only; empty = taken from the preset by the server
     ...Object.fromEntries(["unet", "clip", "vae"].filter((id) => $(id).value).map((id) => [id, $(id).value])),
@@ -699,6 +700,7 @@ function connectJobs() {
       case "progress": {
         const job = state.jobs.get(m.job_id);
         if (!job) break;
+        if (m.value > job.value) (job.stepTimes ||= []).push([m.value, performance.now()]);
         job.value = m.value; job.max = m.max;
         if (state.run === job) updateProgressText();
         renderQueue();
@@ -758,8 +760,23 @@ function updateProgressText() {
   const el = (performance.now() - (run.t0 || performance.now())) / 1000;
   let txt = run.value ? `step ${run.value} / ${run.max}` : "Waiting for sampler...";
   txt += ` · ${fmtTime(el)} elapsed`;
-  if (run.value > 0 && run.value < run.max) txt += ` · ~${fmtTime(el / run.value * (run.max - run.value))} left`;
+  const eta = stepEta(run);
+  if (eta != null) txt += eta > 0 ? ` · ~${fmtTime(eta)} left` : " · finishing…";
+  else if (run.value > 0 && run.value < run.max) txt += " · estimating…";
   $("progressText").textContent = txt;
+}
+
+// Remaining time from measured step durations (median of the last few steps), counting down
+// within the current step. Model loading and text encoding before step 1 are not part of it.
+function stepEta(run) {
+  const t = run.stepTimes || [];
+  if (t.length < 2 || run.value >= run.max) return null;
+  const per = [];
+  for (let i = Math.max(1, t.length - 5); i < t.length; i++) per.push((t[i][1] - t[i - 1][1]) / (t[i][0] - t[i - 1][0]));
+  per.sort((a, b) => a - b);
+  const step = per[Math.floor(per.length / 2)];
+  const sinceLast = performance.now() - t[t.length - 1][1];
+  return Math.max(0, ((run.max - run.value) * step - sinceLast) / 1000);
 }
 
 function frameAdded(run, frame) {
@@ -852,6 +869,7 @@ function runFromStored(r) {
     id: r.id, serverId: r.id, prompt: r.params?.prompt || "", seed: r.params?.seed, steps: r.params?.steps,
     frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
+    upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
     aligned: r.aligned || null, task: r.params?.task || "edit", preset: r.params?.preset || null,
     value: r.params?.steps, max: r.params?.steps, created: r.created,
   };
@@ -884,6 +902,12 @@ function showRun(run) {
   $("resultActions").hidden = false;
   $("downloadBtn").href = run.resultUrl;
   $("downloadBtn").download = run.filename || "result.png";
+  $("downloadUpscaled").hidden = !run.upscaledUrl;
+  if (run.upscaledUrl) {
+    $("downloadUpscaled").href = run.upscaledUrl;
+    $("downloadUpscaled").textContent = `Download upscaled (${run.upscale}×)`;
+    $("downloadUpscaled").download = (run.filename || "result.png").replace(/\.png$/, `_x${run.upscale}.png`);
+  }
   $("filmstrip").innerHTML = "";
   renderFilmstrip();
   showCompare();
@@ -950,7 +974,9 @@ function setDivider(pct) {
   const cmp = $("compare");
   let drag = false;
   const move = (e) => { const r = cmp.getBoundingClientRect(); setDivider((e.clientX - r.left) / r.width * 100); };
-  cmp.addEventListener("pointerdown", (e) => { drag = true; cmp.setPointerCapture(e.pointerId); move(e); });
+  // preventDefault: no text/image selection highlight while dragging the divider
+  cmp.addEventListener("pointerdown", (e) => { e.preventDefault(); drag = true; cmp.setPointerCapture(e.pointerId); move(e); });
+  cmp.addEventListener("dragstart", (e) => e.preventDefault());
   cmp.addEventListener("pointermove", (e) => { if (drag) move(e); });
   cmp.addEventListener("pointerup", () => { drag = false; });
   cmp.addEventListener("pointercancel", () => { drag = false; });
@@ -1504,24 +1530,37 @@ const setup = createSetup({
     // SAM3 was installed or removed: reload so the whole UI switches mode
     if (appStarted && data.mask_available !== state.maskAvailable) { location.reload(); return; }
     applyMaskMode(data.mask_available);
-    if (appStarted) { loadModels(); renderModelPicker(); }   // ComfyUI was (re)started, model lists may have changed
+    if (appStarted) { loadModels(); renderModelPicker(); renderUpscalers(); }   // ComfyUI was (re)started, model lists may have changed
     showApp();
   },
   // downloads or deletions while the page stays open: refresh the model picker
   onChanged: (data) => {
     state.setup = data;
     if (appStarted && data.mask_available !== state.maskAvailable) { location.reload(); return; }
-    if (appStarted) renderModelPicker();
+    if (appStarted) { renderModelPicker(); renderUpscalers(); }
   },
 });
 $("setupBtn").onclick = showSetup;
+
+// optional upscaler: lists the installed upscale models, links to the downloads page otherwise
+function renderUpscalers() {
+  const sel = $("upscaler");
+  const ups = (state.setup?.components || []).filter((c) => c.kind === "upscaler" && c.installed);
+  const keep = sel.value || storedForm().upscaler;
+  sel.innerHTML = "";
+  for (const u of ups) sel.add(new Option(`${u.title}`, u.key));
+  if (ups.some((u) => u.key === keep)) sel.value = keep;
+  sel.hidden = !ups.length;
+  $("getUpscalers").hidden = !!ups.length;
+}
+$("getUpscalers").onclick = showSetup;
 
 (async () => {
   pollStatus();
   setInterval(pollStatus, 5000);
   let info = null;
   try { info = await api("/api/setup"); } catch { /* old server without setup: just start the app */ }
-  if (info) { state.setup = info; applyMaskMode(info.mask_available); }
+  if (info) { state.setup = info; applyMaskMode(info.mask_available); renderUpscalers(); }
   if (info && !info.ready) showSetup();
   else showApp();
 })();

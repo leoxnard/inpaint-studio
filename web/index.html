@@ -155,6 +155,13 @@
           <label title="Also save each of the last N steps before the result. With 3 and 20 steps: steps 17, 18 and 19 (plus the result). 0 = off.">Save last N steps (0 = off)
             <input type="number" id="saveLast" min="0" max="50" step="1" value="0">
           </label>
+          <label title="Upscale the final result with an upscale model (in pixel space, so large sizes work). Also saved as <run>_x2.png / _x4.png.">Upscale result
+            <select id="upscale"><option value="0">Off</option><option value="2">2×</option><option value="4">4×</option></select>
+          </label>
+          <label id="upscalerRow">Upscaler
+            <select id="upscaler"></select>
+            <button type="button" class="linkbtn" id="getUpscalers" hidden>Get an upscaler…</button>
+          </label>
           <label class="needs-mask edit-only">Feather (px)
             <input type="number" id="feather" min="0" max="100" step="1" value="12">
           </label>
@@ -223,6 +230,7 @@
           </div>
           <div class="row wrap actions" id="resultActions" hidden>
             <a class="btn" id="downloadBtn" download>Download</a>
+            <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
             <button id="downloadSteps">Download all steps</button>
             <button id="useResult">Use result as new input</button>
             <button id="showCompare" hidden>Show comparison</button>

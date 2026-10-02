@@ -4,10 +4,16 @@ The edit model sometimes shifts or slightly rescales the whole picture. We estim
 transform from the area OUTSIDE the mask (where both images should match), then paste only the
 masked area of the transformed raw image into the original. Pixels the transformed image no
 longer covers fall back to the original.
+
+Optional fixes, all estimated from the area outside the mask (where raw and original should be
+identical): a local warp (dense optical flow, smoothed and continued into the mask), a colour /
+exposure correction field (Lab offsets, smoothly continued into the mask) and Poisson blending at
+the mask edge.
 """
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -99,9 +105,52 @@ def estimate(original: Image.Image, raw: Image.Image, mask: Image.Image,
     return {"dx": round(dx, 1), "dy": round(dy, 1), "scale": s, "confidence": round(max(strength, fstrength), 4)}
 
 
+def _fill_smooth(field: np.ndarray, weight: np.ndarray, sigma: float) -> np.ndarray:
+    """Normalized convolution: smooth `field` using only pixels with weight > 0 and continue it into
+    the zero-weight area (the mask). Far from any known pixel it falls back to the weighted mean."""
+    w = weight.astype(np.float32)
+    if field.ndim == 3:
+        w3 = w[..., None]
+    else:
+        w3 = w
+    num = cv2.GaussianBlur(field * w3, (0, 0), sigma)
+    den = cv2.GaussianBlur(w, (0, 0), sigma)
+    den3 = den[..., None] if field.ndim == 3 else den
+    mean = (field * w3).reshape(-1, *field.shape[2:]).sum(0) / max(float(w.sum()), 1e-6)
+    conf = np.clip(den3 / 0.05, 0, 1)  # low support -> blend towards the global mean
+    return np.where(den3 > 1e-6, num / np.maximum(den3, 1e-6), mean) * conf + mean * (1 - conf)
+
+
+def fix_warp(original: np.ndarray, raw: np.ndarray, keep: np.ndarray) -> np.ndarray:
+    """Undo small local distortions of raw: dense optical flow (DIS) original -> raw, measured outside
+    the mask, smoothed and continued into it, then raw is resampled onto the original's grid."""
+    h, w = original.shape[:2]
+    f = min(1.0, 1024 / max(h, w))
+    small = (max(16, round(w * f)), max(16, round(h * f)))
+    g0 = cv2.cvtColor(cv2.resize(original, small, interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2GRAY)
+    g1 = cv2.cvtColor(cv2.resize(raw, small, interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2GRAY)
+    flow = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM).calc(g0, g1, None)
+    k = cv2.resize(keep.astype(np.uint8), small, interpolation=cv2.INTER_NEAREST).astype(np.float32)
+    flow = _fill_smooth(flow, k, sigma=max(small) / 40)
+    flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR) / f
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    return cv2.remap(raw, gx + flow[..., 0], gy + flow[..., 1], cv2.INTER_CUBIC, borderMode=cv2.BORDER_REFLECT)
+
+
+def match_colors(original: np.ndarray, raw: np.ndarray, keep: np.ndarray) -> np.ndarray:
+    """Correct exposure / colour drift: Lab offset original - raw outside the mask, as a smooth field
+    (so a gradient like 'darker on the left' is fixed too), continued into the mask."""
+    lab0 = cv2.cvtColor(original.astype(np.float32) / 255, cv2.COLOR_RGB2LAB)
+    lab1 = cv2.cvtColor(raw.astype(np.float32) / 255, cv2.COLOR_RGB2LAB)
+    diff = _fill_smooth(lab0 - lab1, keep.astype(np.float32), sigma=max(original.shape[:2]) / 12)
+    out = cv2.cvtColor(lab1 + diff.astype(np.float32), cv2.COLOR_LAB2RGB)
+    return np.clip(out * 255, 0, 255)
+
+
 def compose(original: Image.Image, raw: Image.Image, mask: Image.Image,
-            dx: float, dy: float, scale: float) -> tuple[Image.Image, dict]:
-    """Paste the masked area of the transformed raw image into the original."""
+            dx: float, dy: float, scale: float,
+            colors: bool = False, warp: bool = False, poisson: bool = False) -> tuple[Image.Image, dict]:
+    """Paste the masked area of the transformed (and optionally fixed) raw image into the original."""
     original = original.convert("RGB")
     raw = raw.convert("RGB").resize(original.size, Image.BICUBIC)
     mask_l = mask.convert("L").resize(original.size, Image.BILINEAR)
@@ -109,8 +158,33 @@ def compose(original: Image.Image, raw: Image.Image, mask: Image.Image,
     valid = transform(Image.new("L", original.size, 255), dx, dy, scale)
     o = np.asarray(original, dtype=np.float64)
     m = np.asarray(moved, dtype=np.float64)
-    weight = (np.asarray(mask_l, dtype=np.float64) / 255.0) * (np.asarray(valid, dtype=np.float64) / 255.0)
+    mk = np.asarray(mask_l)
+    keep = (mk < 20) & (np.asarray(valid) > 250)
+    if warp and keep.any():
+        m = fix_warp(o.astype(np.uint8), np.clip(m, 0, 255).astype(np.uint8), keep).astype(np.float64)
+    if colors and keep.any():
+        m = match_colors(o, m, keep).astype(np.float64)
+    weight = (mk / 255.0) * (np.asarray(valid, dtype=np.float64) / 255.0)
     out = o * (1 - weight[..., None]) + m * weight[..., None]
-    outside = (np.asarray(mask_l) < 20) & (np.asarray(valid) > 250)
-    diff = float(np.abs(o - m).mean(axis=-1)[outside].mean()) if outside.any() else 0.0
+    if poisson:
+        out = _poisson(o, m, weight, out)
+    diff = float(np.abs(o - m).mean(axis=-1)[keep].mean()) if keep.any() else 0.0
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), {"outside_diff": round(diff, 2)}
+
+
+def _poisson(o: np.ndarray, m: np.ndarray, weight: np.ndarray, fallback: np.ndarray) -> np.ndarray:
+    """Gradient-domain paste (OpenCV seamlessClone) so the edge adopts the original's colours."""
+    hard = (weight > 0.5).astype(np.uint8) * 255
+    hard[:2, :], hard[-2:, :], hard[:, :2], hard[:, -2:] = 0, 0, 0, 0  # seamlessClone needs a border
+    ys, xs = np.nonzero(hard)
+    if not len(xs):
+        return fallback
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    center = (int((x0 + x1 + 1) // 2), int((y0 + y1 + 1) // 2))
+    try:
+        cloned = cv2.seamlessClone(np.clip(m, 0, 255).astype(np.uint8), np.clip(o, 0, 255).astype(np.uint8),
+                                   hard, center, cv2.NORMAL_CLONE).astype(np.float64)
+    except cv2.error:
+        return fallback
+    # inside the hard core the Poisson result, outside it the normal feathered blend
+    return np.where((hard > 0)[..., None], cloned, fallback)

@@ -54,6 +54,13 @@ picker sits in the topbar; UNet/CLIP/VAE can still be overridden in Advanced. Th
 an **Edit | Generate** switch (generate = text to image, no input image) and prompt presets
 (built-in + own, saved in the browser).
 
+## Paste fixes & upscaling
+Free edit + paste runs can be fixed automatically after pasting (Edit card) or later via
+**Adjust…**: match colours & exposure (smooth Lab offset field measured outside the mask), fix
+local warp (DIS optical flow, OpenCV) and seamless Poisson edges, on top of shift/scale alignment.
+The fixed result is saved as `<run>_fixed.png`. An optional upscaler (UltraSharp / RealESRGAN,
+from the Downloads page) upscales the result in pixel space and saves `<run>_x2.png` / `_x4.png`.
+
 ## Requirements & setup
 Only macOS on Apple Silicon (32 GB RAM recommended). On first start the UI shows a **setup page**
 that finds an existing Comfy Desktop install or installs what is missing (pick steps, folders and

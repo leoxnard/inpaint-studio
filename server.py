@@ -45,7 +45,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscaler")
+                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -413,19 +413,20 @@ class AlignReq(BaseModel):
     dx: float = 0
     dy: float = 0
     scale: float = 1.0
+    colors: bool = False
+    warp: bool = False
+    poisson: bool = False
     save: bool = False
 
 
-@app.post("/api/runs/{run_id}/align")
-async def align_run(run_id: str, req: AlignReq):
-    f = RUNS / run_id / "run.json"
-    if not f.is_file():
-        raise HTTPException(404, "run not found")
-    run = json.loads(f.read_text())
+async def adjust_run(run: dict, req: AlignReq) -> dict:
+    """Align and fix the free edit (shift/scale, local warp, colours, Poisson edge), paste it into the
+    original and write a preview (or, with save, the adjusted result: run dir + ComfyUI output)."""
+    run_id = run["id"]
     if not (run.get("before_url") and run.get("raw_url") and run.get("mask_url")):
-        raise HTTPException(400, "alignment needs a free edit + paste run (raw image and mask)")
+        raise HTTPException(400, "adjusting needs a free edit + paste run (raw image and mask)")
     if run_id not in _align_cache:
-        _align_cache.clear()  # keep only the run being aligned in memory
+        _align_cache.clear()  # keep only the run being adjusted in memory
         _align_cache[run_id] = tuple([await _fetch_view(run[k]) for k in ("before_url", "raw_url", "mask_url")])
     original, raw, mask = _align_cache[run_id]
     feather = int(run.get("params", {}).get("feather") or 0)
@@ -439,17 +440,32 @@ async def align_run(run_id: str, req: AlignReq):
         result["confidence"] = est["confidence"]
     if not 0.8 <= scale <= 1.25 or abs(dx) > 500 or abs(dy) > 500:
         raise HTTPException(400, "alignment values out of range")
-    composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale)
+    opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson}
+    composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts)
     _, base = await asyncio.to_thread(align.compose, original, raw, mask, 0, 0, 1.0)
     name = "aligned.png" if req.save else "aligned_preview.jpg"
     composed.save(RUNS / run_id / name, quality=92)
     url = f"/data/runs/{run_id}/{name}?t={int(time.time() * 1000)}"
-    result.update({"dx": dx, "dy": dy, "scale": scale, "outside_diff": stats["outside_diff"],
+    result.update({"dx": dx, "dy": dy, "scale": scale, **opts, "outside_diff": stats["outside_diff"],
                    "unaligned_diff": base["outside_diff"], "url": url, "saved": req.save})
     if req.save:
-        run["aligned"] = {"dx": dx, "dy": dy, "scale": scale, "outside_diff": stats["outside_diff"], "url": url}
+        run["aligned"] = {"dx": dx, "dy": dy, "scale": scale, **opts, "outside_diff": stats["outside_diff"], "url": url}
         save_run(run)
+        out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
+        try:  # next to <run>.png, so the files on disk match what the app shows
+            (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
+            composed.save(out_dir / "InpaintStudio" / f"{run_id}_fixed.png")
+        except OSError:
+            pass
     return result
+
+
+@app.post("/api/runs/{run_id}/align")
+async def align_run(run_id: str, req: AlignReq):
+    f = RUNS / run_id / "run.json"
+    if not f.is_file():
+        raise HTTPException(404, "run not found")
+    return await adjust_run(json.loads(f.read_text()), req)
 
 
 # ---------------------------------------------------------------- job queue
@@ -553,6 +569,14 @@ async def run_job(job: dict) -> None:
                         return drop_counter(img) if img else None
                     res, before, raw, upscaled = first("out_result"), first("out_before"), first("out_raw"), first("out_upscaled")
                     use_mask = params.get("use_mask") and params.get("mask")
+                    run.update(before_url=view_url(before) if before else None, raw_url=view_url(raw) if raw else None,
+                               mask_url=input_mask_url(params["mask"]) if use_mask else None)
+                    post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")}
+                    if params.get("mode") == "paste" and use_mask and raw and any(post.values()):
+                        try:  # automatic fixes; the plain paste stays available as <run>.png
+                            await adjust_run(run, AlignReq(save=True, **post))
+                        except Exception as e:  # never fail the run because of the post-processing
+                            print(f"post-processing failed for {run_id}: {e!r}")
                     await finish_job(job, "done",
                                      result_url=view_url(res) if res else None, before_url=view_url(before) if before else None,
                                      raw_url=view_url(raw) if raw else None,

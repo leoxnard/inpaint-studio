@@ -149,6 +149,12 @@
             </select>
           </label>
           <label class="check needs-mask paste-only edit-only" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Tell the model to keep the rest identical</label>
+          <div class="needs-mask edit-only" id="postFixRow" title="Free edit + paste: fix the generated image before pasting, measured from the area outside the mask. The plain paste is kept as <run>.png, the fixed one is <run>_fixed.png.">
+            <div class="hint">After pasting, fix automatically:</div>
+            <label class="check"><input type="checkbox" id="postColors" checked> Match colors &amp; exposure</label>
+            <label class="check"><input type="checkbox" id="postWarp"> Fix local warp</label>
+            <label class="check"><input type="checkbox" id="postPoisson"> Seamless edges (Poisson)</label>
+          </div>
           <label title="Decode the real intermediate image with the VAE and save it every N steps (like the Steps workflow). 0 = off. Live previews are always recorded and can be shown in the viewer.">Save step every N (0 = off)
             <input type="number" id="saveEvery" min="0" max="50" step="1" value="2">
           </label>
@@ -234,7 +240,7 @@
             <button id="downloadSteps">Download all steps</button>
             <button id="useResult">Use result as new input</button>
             <button id="showCompare" hidden>Show comparison</button>
-            <button id="alignBtn" hidden title="Advanced: shift/scale the free edit so it lines up with the original before pasting">Align…</button>
+            <button id="alignBtn" hidden title="Free edit + paste: align the generated image and fix colours, local warp and edges before pasting">Adjust…</button>
             <span class="hint" id="matchInfo"></span>
           </div>
           <div class="align-panel" id="alignPanel" hidden>
@@ -251,11 +257,16 @@
               <label>scale % <input type="number" id="alignScale" step="0.1" value="100"></label>
             </div>
             <div class="row wrap">
-              <span class="hint" id="alignInfo">Shifts and scales the full generated image, then pastes only the masked area into the original. Uncovered edges keep the original.</span>
+              <label class="check"><input type="checkbox" id="fixColors"> Match colors &amp; exposure</label>
+              <label class="check"><input type="checkbox" id="fixWarp"> Fix local warp</label>
+              <label class="check"><input type="checkbox" id="fixPoisson"> Seamless edges (Poisson)</label>
+            </div>
+            <div class="row wrap">
+              <span class="hint" id="alignInfo">Shifts, scales and fixes the full generated image, then pastes only the masked area into the original. Uncovered edges keep the original.</span>
             </div>
             <div class="row wrap">
               <button id="alignReset">Reset</button>
-              <button id="alignSave">Save aligned result</button>
+              <button id="alignSave">Save adjusted result</button>
               <button id="alignClose">Close</button>
             </div>
           </div>

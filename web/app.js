@@ -8,7 +8,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
+  "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -544,6 +544,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: state.maskAvailable && currentFamily() !== "zimage" ? $("mode").value : "inpaint",
     keep_identical: state.maskAvailable && currentFamily() !== "zimage" && $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
+    post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
     // explicit file overrides only; empty = taken from the preset by the server
@@ -1075,7 +1076,11 @@ function initApp() {
   loadModels();
 }
 
-function syncModeUi() { $("keepIdenticalRow").hidden = $("mode").value !== "paste"; }
+function syncModeUi() {
+  const notPaste = $("mode").value !== "paste";
+  $("keepIdenticalRow").hidden = notPaste;
+  $("postFixRow").hidden = notPaste;
+}
 $("mode").addEventListener("change", syncModeUi);
 syncModeUi();
 
@@ -1145,12 +1150,16 @@ async function startSession() {
 // ------------------------------------------------------------------ advanced: post-hoc alignment
 let alignTimer = 0;
 function alignValues() {
-  return { dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100 };
+  return { dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100,
+           colors: $("fixColors").checked, warp: $("fixWarp").checked, poisson: $("fixPoisson").checked };
 }
 function setAlignValues(v) {
   $("alignDx").value = Math.round(v.dx * 10) / 10;
   $("alignDy").value = Math.round(v.dy * 10) / 10;
   $("alignScale").value = Math.round(v.scale * 10000) / 100;
+  for (const [id, k] of [["fixColors", "colors"], ["fixWarp", "warp"], ["fixPoisson", "poisson"]]) {
+    if (k in v) $(id).checked = !!v[k];
+  }
 }
 async function alignRequest(body) {
   const run = state.run;
@@ -1165,7 +1174,8 @@ async function alignRequest(body) {
     $("alignInfo").textContent = `Outside-mask difference: ${res.unaligned_diff} → ${res.outside_diff} / 255`
       + (res.confidence ? ` · match confidence ${res.confidence}` : "") + (res.saved ? " · saved" : "");
     if (res.saved) {
-      run.aligned = { dx: res.dx, dy: res.dy, scale: res.scale, outside_diff: res.outside_diff, url: res.url };
+      run.aligned = { dx: res.dx, dy: res.dy, scale: res.scale, colors: res.colors, warp: res.warp,
+                      poisson: res.poisson, outside_diff: res.outside_diff, url: res.url };
       $("downloadBtn").href = res.url;
     }
   } catch (e) { $("alignInfo").textContent = ""; showError(e.message); }
@@ -1177,14 +1187,16 @@ function schedulePreview() {
 $("alignBtn").onclick = () => {
   const run = state.run;
   $("alignPanel").hidden = false;
-  setAlignValues(run.aligned || { dx: 0, dy: 0, scale: 1 });
-  $("alignInfo").textContent = "Try Auto-align, then fine-tune with the arrows (Shift = 5 px).";
+  setAlignValues(run.aligned || { dx: 0, dy: 0, scale: 1, colors: true, warp: false, poisson: false });
+  $("alignInfo").textContent = "Try Auto-align and the fixes, then fine-tune with the arrows (Shift = 5 px).";
+  schedulePreview();
 };
 $("alignClose").onclick = () => { $("alignPanel").hidden = true; showCompare(); };
 $("alignAuto").onclick = () => alignRequest({ auto: true, save: false });
-$("alignReset").onclick = () => { setAlignValues({ dx: 0, dy: 0, scale: 1 }); schedulePreview(); };
+$("alignReset").onclick = () => { setAlignValues({ dx: 0, dy: 0, scale: 1, colors: false, warp: false, poisson: false }); schedulePreview(); };
 $("alignSave").onclick = () => alignRequest({ ...alignValues(), save: true });
 for (const id of ["alignDx", "alignDy", "alignScale"]) $(id).addEventListener("input", schedulePreview);
+for (const id of ["fixColors", "fixWarp", "fixPoisson"]) $(id).addEventListener("change", schedulePreview);
 for (const b of document.querySelectorAll("#alignPanel [data-nudge]")) {
   b.onclick = (e) => {
     const [x, y] = b.dataset.nudge.split(",").map(Number);

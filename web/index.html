@@ -9,10 +9,15 @@
 <body>
   <header class="topbar">
     <h1>Inpaint Studio</h1>
-    <span class="pill" id="statusPill" title="ComfyUI status"><i class="dot"></i><span id="statusText">Checking...</span></span>
+    <div class="topright">
+        <span class="pill" id="statusPill" title="ComfyUI status"><i class="dot"></i><span id="statusText">Checking...</span></span>
+      <button id="setupBtn" class="small" title="Install or repair components, change folders">Setup</button>
+    </div>
   </header>
 
-  <div class="layout">
+  <div id="setupView" class="setup" hidden></div>
+
+  <div class="layout" id="appLayout" hidden>
     <aside class="sidebar" id="sidebar">
 
       <section class="card">
@@ -28,14 +33,14 @@
         <div class="hint" id="imageInfo">No image loaded.</div>
         <div id="batchWrap" hidden>
           <div class="hint" id="batchInfo"></div>
-          <div class="hint">← → in the Mask view switch images.</div>
+          <div class="hint" id="batchKeysHint">← → in the Mask view switch images.</div>
           <div class="batch-grid" id="batchGrid"></div>
           <div class="row wrap">
             <button id="batchSubmitNext" class="primary" title="Queue the current image with its mask and open the next open one">Submit &amp; next</button>
             <button id="batchSkip" title="Skip this image: it is left out of the batch (also of the submit-all buttons) and the next open image opens. Submitting it later still works.">Skip</button>
-            <button id="batchMaskAll" title="Compute masks for all open images one after another (nothing is queued). Then review them with ← → and submit.">Mask all</button>
-            <button id="batchSubmitMasked" title="Queue every image that has a mask (computed or painted)">Submit all masked</button>
-            <button id="batchAutoAll" title="Compute a mask with the current mask settings for every open image and queue them; images where nothing is found are skipped">Auto-mask &amp; submit all</button>
+            <button id="batchMaskAll" class="needs-mask" title="Compute masks for all open images one after another (nothing is queued). Then review them with ← → and submit.">Mask all</button>
+            <button id="batchSubmitMasked" class="needs-mask" title="Queue every image that has a mask (computed or painted)">Submit all masked</button>
+            <button id="batchAutoAll" class="needs-mask" title="Compute a mask with the current mask settings for every open image and queue them; images where nothing is found are skipped">Auto-mask &amp; submit all</button>
             <button id="batchNoMaskAll" title="Queue every open image without a mask (whole image is edited)">Submit all without mask</button>
             <button id="batchClear">Clear batch</button>
           </div>
@@ -57,7 +62,7 @@
         <div class="hint">Above ~4096 latent tokens the edit turns gray on Apple Silicon.</div>
       </section>
 
-      <section class="card">
+      <section class="card needs-mask">
         <h2>Step 1 &ndash; Mask</h2>
         <label>What to mask
           <input type="text" id="maskText" value="person">
@@ -101,7 +106,7 @@
       </section>
 
       <section class="card">
-        <h2>Step 2 &ndash; Edit</h2>
+        <h2 id="editHeading">Step 2 &ndash; Edit</h2>
         <label>Prompt
           <textarea id="prompt" rows="4">Replace the person with a walking dog. Keep everything else unchanged.</textarea>
         </label>
@@ -112,20 +117,20 @@
           <label>Denoise
             <input type="number" id="denoise" min="0" max="1" step="0.01" value="1">
           </label>
-          <label class="full">Mode
+          <label class="full needs-mask">Mode
             <select id="mode" title="Inpaint: only the masked area is re-generated. Free edit + paste: the whole image is edited, then only the masked area is pasted in (try this when the old content keeps coming back).">
               <option value="inpaint">Inpaint (mask only)</option>
               <option value="paste">Free edit + paste</option>
             </select>
           </label>
-          <label class="check" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Tell the model to keep the rest identical</label>
+          <label class="check needs-mask" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Tell the model to keep the rest identical</label>
           <label title="Decode the real intermediate image with the VAE and save it every N steps (like the Steps workflow). 0 = off. Live previews are always recorded and can be shown in the viewer.">Save step every N (0 = off)
             <input type="number" id="saveEvery" min="0" max="50" step="1" value="2">
           </label>
           <label title="Also save each of the last N steps before the result. With 3 and 20 steps: steps 17, 18 and 19 (plus the result). 0 = off.">Save last N steps (0 = off)
             <input type="number" id="saveLast" min="0" max="50" step="1" value="0">
           </label>
-          <label>Feather (px)
+          <label class="needs-mask">Feather (px)
             <input type="number" id="feather" min="0" max="100" step="1" value="12">
           </label>
           <label>CFG
@@ -161,10 +166,10 @@
     <main class="main">
       <div class="tabs">
         <div class="seg" id="viewTabs">
-          <button data-view="mask" class="active">Mask</button>
+          <button data-view="mask" class="active" id="maskTab">Mask</button>
           <button data-view="result">Result</button>
         </div>
-        <span class="hint" id="maskBadge"></span>
+        <span class="hint needs-mask" id="maskBadge"></span>
       </div>
 
       <div class="view" id="maskView">

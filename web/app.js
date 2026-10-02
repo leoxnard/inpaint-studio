@@ -1,5 +1,7 @@
 // Inpaint Studio frontend: two-step mask + edit UI. Vanilla ES module, no build step.
 
+import { createSetup } from "/setup.js";
+
 const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------------ persisted form fields
@@ -43,6 +45,7 @@ const state = {
   view: "mask",
   run: null,                  // current/last run object
   runs: [],
+  maskAvailable: true,        // false when SAM3 is not installed: the UI hides everything about masks
 };
 
 const display = $("display");
@@ -252,7 +255,7 @@ function draw() {
   if (display.width !== w || display.height !== h) { display.width = w; display.height = h; }
   dctx.clearRect(0, 0, w, h);
   dctx.drawImage(state.imgEl, 0, 0, w, h);
-  if (state.mask) {
+  if (state.mask && state.maskAvailable) {
     if (tint.width !== state.mask.width || tint.height !== state.mask.height) {
       tint.width = state.mask.width; tint.height = state.mask.height;
     }
@@ -292,7 +295,7 @@ function strokeTo(p) {
   render();
 }
 display.addEventListener("pointerdown", (e) => {
-  if (state.mode === "off" || !state.imgEl || e.button !== 0) return;
+  if (!state.maskAvailable || state.mode === "off" || !state.imgEl || e.button !== 0) return;
   if (!ensureMask()) return;
   pushHistory();
   stroking = true; last = null;
@@ -312,7 +315,7 @@ display.addEventListener("pointerenter", moveCursor);
 
 function moveCursor(e) {
   const cur = $("brushCursor");
-  if (state.mode === "off" || !state.imgEl) { cur.hidden = true; return; }
+  if (!state.maskAvailable || state.mode === "off" || !state.imgEl) { cur.hidden = true; return; }
   const r = display.getBoundingClientRect();
   const d = parseFloat($("brushSize").value) * r.width / display.width;
   cur.hidden = false;
@@ -325,7 +328,7 @@ function moveCursor(e) {
 function setMode(mode) {
   state.mode = mode;
   for (const b of $("brushMode").children) b.classList.toggle("active", b.dataset.mode === mode);
-  display.classList.toggle("brush", mode !== "off");
+  display.classList.toggle("brush", mode !== "off" && state.maskAvailable);
   if (mode === "off") $("brushCursor").hidden = true;
 }
 $("brushMode").addEventListener("click", (e) => { if (e.target.dataset.mode) setMode(e.target.dataset.mode); });
@@ -347,7 +350,7 @@ $("maskFill").onclick = () => {
 $("maskUndo").onclick = undo;
 document.addEventListener("keydown", (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
-  if ((e.metaKey || e.ctrlKey) && e.key === "z" && !typing) {
+  if (state.maskAvailable && (e.metaKey || e.ctrlKey) && e.key === "z" && !typing) {
     e.preventDefault(); undo();
     return;
   }
@@ -415,6 +418,7 @@ window.addEventListener("drop", (e) => {
 
 // ------------------------------------------------------------------ step 1: compute mask
 async function computeMask() {
+  if (!state.maskAvailable) return;
   if (!state.imageName) { showError("Load an image first."); return; }
   const text = $("maskText").value.trim();
   if (!text) { showError("Enter what to mask."); return; }
@@ -494,6 +498,7 @@ function setSubmitting(on) {
 
 // edit parameters from the form for one image (seed is drawn per job when "Random" is on)
 function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resolution }) {
+  if (!state.maskAvailable) { useMask = false; maskName = null; }
   let seed = parseInt($("seed").value, 10) || 0;
   if ($("randomSeed").checked) { seed = Math.floor(Math.random() * 2 ** 32); $("seed").value = seed; }
   return {
@@ -501,8 +506,8 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     megapixels: megapixels ?? num("megapixels"), resolution: resolution ?? parseInt($("resolution").value, 10),
     prompt: $("prompt").value, negative: $("negative").value,
     steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
-    sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: $("mode").value,
-    keep_identical: $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
+    sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: state.maskAvailable ? $("mode").value : "inpaint",
+    keep_identical: state.maskAvailable && $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
   };
@@ -517,7 +522,7 @@ async function uploadMaskBlob(blob) {
 async function runEdit({ thenNext = false } = {}) {
   if (state.submitting) return;
   if (!state.imageName) { showError("Load an image first."); return; }
-  const useMask = $("useMask").checked;
+  const useMask = state.maskAvailable && $("useMask").checked;
   setSubmitting(true);
   try {
     const rep = await refreshSize();
@@ -961,7 +966,7 @@ function bindOutput(id, outId, fmt = (v) => v) {
   upd();
 }
 
-function init() {
+function initApp() {
   loadForm();
   bindOutput("threshold", "thresholdOut");
   bindOutput("brushSize", "brushSizeOut", (v) => `${v}px`);
@@ -977,10 +982,7 @@ function init() {
   setMode("paint");
   renderHistory();
   loadModels();
-  pollStatus();
-  setInterval(pollStatus, 5000);
 }
-init();
 
 function syncModeUi() { $("keepIdenticalRow").hidden = $("mode").value !== "paste"; }
 $("mode").addEventListener("change", syncModeUi);
@@ -998,7 +1000,7 @@ let maskSaveTimer = 0;
 function scheduleMaskSave() {
   clearTimeout(maskSaveTimer);
   maskSaveTimer = setTimeout(async () => {
-    if (!state.mask || !state.hasMask || !state.imageName) return;
+    if (!state.maskAvailable || !state.mask || !state.hasMask || !state.imageName) return;
     try {
       const { blob } = await exportMaskBlob();
       const fd = new FormData();
@@ -1028,7 +1030,7 @@ async function restoreSession() {
     resetMask();
     state.size = null;
     await refreshSize();
-    if (sess.maskName) {
+    if (sess.maskName && state.maskAvailable) {
       try {
         applyMaskImage(await loadImage(inputViewUrl(sess.maskName)), sess.maskMeta?.mp);
         if (sess.maskMeta) state.maskMeta = sess.maskMeta;
@@ -1042,12 +1044,12 @@ async function restoreSession() {
   }
 }
 
-(async () => {
+async function startSession() {
   const [restored] = await Promise.all([restoreSession(), loadStoredRuns()]);
   connectJobs();
   // nothing to work on yet -> show the latest result instead of an empty page
   if (!restored && state.runs.length) { setView("result"); showRun(state.runs[0]); $("progressWrap").hidden = true; }
-})();
+}
 
 // ------------------------------------------------------------------ advanced: post-hoc alignment
 let alignTimer = 0;
@@ -1147,7 +1149,7 @@ function renderBatch() {
 
 function stashCurrentMask() {
   const it = currentBatchItem();
-  if (!it || !state.hasMask || !state.mask) return;
+  if (!state.maskAvailable || !it || !state.hasMask || !state.mask) return;
   const c = document.createElement("canvas");
   c.width = state.mask.width; c.height = state.mask.height;
   c.getContext("2d").drawImage(state.mask, 0, 0);
@@ -1222,6 +1224,7 @@ function maskHasWhite(im) {
 }
 
 async function batchSubmitAll(withMask) {
+  if (!state.maskAvailable) withMask = false;
   if (state.batchBusy) return;
   stashCurrentMask();
   // "without mask" also takes images where auto-masking found nothing
@@ -1293,6 +1296,7 @@ function setBatchBusy(on) {
 
 // step 1 for the whole batch: masks only, nothing is queued
 async function batchMaskAll() {
+  if (!state.maskAvailable) return;
   if (state.batchBusy) return;
   if (!$("maskText").value.trim()) { showError("Enter what to mask first."); return; }
   stashCurrentMask();
@@ -1329,6 +1333,7 @@ async function batchMaskAll() {
 
 // step 2 for the whole batch: queue everything that has a mask
 async function batchSubmitMasked() {
+  if (!state.maskAvailable) return;
   if (state.batchBusy) return;
   stashCurrentMask();
   const todo = state.batch.filter((it) => it.status === "masked" && it.mask);
@@ -1379,3 +1384,65 @@ $("batchClear").onclick = () => {
   state.batch = []; state.batchIdx = -1;
   renderBatch();
 };
+
+// ------------------------------------------------------------------ setup page & no-mask mode
+const MASK_TEXTS = {
+  heading: ["Step 2 &ndash; Edit", "Edit"],
+  tab: ["Mask", "Image"],
+  keys: ["← → in the Mask view switch images.", "← → in the Image view switch images."],
+  next: ["Queue the current image with its mask and open the next open one", "Queue the current image and open the next open one"],
+  all: ["Submit all without mask", "Submit all"],
+  allTitle: ["Queue every open image without a mask (whole image is edited)", "Queue every open image"],
+};
+
+// Masking needs SAM3. Without it the UI hides everything about masks and never sends one.
+function applyMaskMode(available) {
+  const i = available ? 0 : 1;
+  state.maskAvailable = available;
+  document.body.classList.toggle("no-mask", !available);
+  $("editHeading").innerHTML = MASK_TEXTS.heading[i];
+  $("maskTab").textContent = MASK_TEXTS.tab[i];
+  $("batchKeysHint").textContent = MASK_TEXTS.keys[i];
+  $("batchSubmitNext").title = MASK_TEXTS.next[i];
+  $("batchNoMaskAll").textContent = MASK_TEXTS.all[i];
+  $("batchNoMaskAll").title = MASK_TEXTS.allTitle[i];
+  setMode(state.mode);
+  render();
+}
+
+let appStarted = false;
+function showApp() {
+  setup.close();
+  $("appLayout").hidden = false;
+  if (appStarted) return;
+  appStarted = true;
+  initApp();
+  startSession();
+}
+function showSetup() {
+  $("appLayout").hidden = true;
+  setup.open().catch((e) => showError(e.message));
+}
+
+const setup = createSetup({
+  api, postJson, root: $("setupView"),
+  onBack: showApp,
+  onReady: (data) => {
+    // SAM3 was installed or removed: reload so the whole UI switches mode
+    if (appStarted && data.mask_available !== state.maskAvailable) { location.reload(); return; }
+    applyMaskMode(data.mask_available);
+    if (appStarted) loadModels();   // ComfyUI was (re)started, model lists may have changed
+    showApp();
+  },
+});
+$("setupBtn").onclick = showSetup;
+
+(async () => {
+  pollStatus();
+  setInterval(pollStatus, 5000);
+  let info = null;
+  try { info = await api("/api/setup"); } catch { /* old server without setup: just start the app */ }
+  if (info) applyMaskMode(info.mask_available);
+  if (info && !info.ready) showSetup();
+  else showApp();
+})();

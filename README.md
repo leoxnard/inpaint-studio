@@ -41,20 +41,27 @@ Per run in the ComfyUI output folder (`InpaintStudio/`):
 - `<run>/before.png`, `<run>/step_17_20.png`, `<run>/raw_step_17_20.png` (free edit + paste)
 
 Steps are saved every N steps and/or for the last N steps, always including the final step.
-ComfyUI's `_00001_` counter is removed by the server; set `COMFY_OUTPUT_DIR` if the output
-folder is not `~/ComfyUI-Shared/output`.
+ComfyUI's `_00001_` counter is removed by the server (output folder from the setup config, or
+`COMFY_OUTPUT_DIR`).
 
-## Requirements
-- ComfyUI with ComfyUI-GGUF, the SAM3 checkpoint `sam3.1_multiplex_fp16.safetensors`,
-  a Qwen-Image 2.1 model, `qwen3vl_8b_*` text encoder and the Qwen-Image 2.1 VAE.
-- [uv](https://docs.astral.sh/uv/)
+## Requirements & setup
+Only macOS on Apple Silicon (32 GB RAM recommended). On first start the UI shows a **setup page**
+that finds an existing Comfy Desktop install or installs what is missing (pick steps, folders and
+quantisation): ComfyUI (pinned zip from GitHub + its own uv venv), ComfyUI-GGUF (patched for
+`qwen_image21`), and the models from Hugging Face (Qwen-Image 2.1 UC GGUF, `qwen3vl_8b_int8_convrot`,
+Qwen-Image 2.1 VAE). Masking needs SAM3 (`sam3.1_multiplex_fp16`) and is optional: without it the
+UI hides all mask tools and only edits whole images. Config: `~/Library/Application Support/Inpaint
+Studio/config.json` (run history lives there too, in `runs/`).
+
+The server starts ComfyUI headless on 8188 when nothing answers there yet and stops it on shutdown.
 
 ## Mac app
-`macos/build-app.sh` builds **Inpaint Studio.app** into `~/Applications` (a stay-open AppleScript
-applet, source in `macos/InpaintStudio.applescript`). Opening it starts ComfyUI headless (the Comfy
-Desktop install in `~/ComfyUI-Installs/ComfyUI` with its model paths, only if nothing listens on
-8188 yet), the server and the UI. Quitting it (⌘Q / Dock) stops the server and the ComfyUI it
-started (a running Comfy Desktop is left alone) and warns first if jobs are still running.
+`macos/build-app.sh [path]` builds **Inpaint Studio.app** (default `~/Applications`), a stay-open
+AppleScript applet with the app code bundled in `Contents/Resources/app`, so the .app alone can be
+sent to someone. First start installs `uv` and the app's Python deps (venv in Application Support),
+then starts the server and opens the UI. Quitting stops the server (and the ComfyUI it started) and
+warns first if jobs are still running. The applet is only ad-hoc signed: on another Mac open it via
+right-click → Open the first time.
 Logs: `~/Library/Logs/InpaintStudio.log`, `~/Library/Logs/InpaintStudio-ComfyUI.log`.
 
 ## Run

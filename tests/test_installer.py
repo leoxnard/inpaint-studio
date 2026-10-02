@@ -1,0 +1,37 @@
+import zipfile
+
+import installer
+
+
+def test_patch_gguf_loader(tmp_path):
+    f = tmp_path / "loader.py"
+    f.write_text('IMG_ARCH_LIST = {"flux", "qwen_image"}\nx = 1\n')
+    installer.patch_gguf_loader(f)
+    installer.patch_gguf_loader(f)  # idempotent
+    assert f.read_text().count("qwen_image21") == 1 and 'IMG_ARCH_LIST = {"flux", "qwen_image", "qwen_image21"}' in f.read_text()
+
+
+def test_extract_strips_top_folder(tmp_path):
+    z = tmp_path / "a.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("ComfyUI-0.38.0/main.py", "print(1)")
+        zf.writestr("ComfyUI-0.38.0/comfy/x.py", "")
+    installer._extract_stripped(z, tmp_path / "out")
+    assert (tmp_path / "out/main.py").is_file() and (tmp_path / "out/comfy/x.py").is_file()
+
+
+def test_installed_detects_models_and_desktop_yaml(tmp_path, monkeypatch):
+    desk = tmp_path / "desktop"
+    (desk / "instance-model-paths").mkdir(parents=True)
+    models = tmp_path / "shared/models"
+    (desk / "instance-model-paths/i.yaml").write_text(
+        f"# comment\n#   base_path: '...'\ncomfy.desktop_0:\n  base_path: '{models}'\n  is_default: true\n")
+    (tmp_path / "shared/output").mkdir(parents=True)
+    monkeypatch.setattr(installer, "COMFY_DESKTOP", desk)
+    monkeypatch.setattr(installer, "CONFIG_FILE", tmp_path / "none.json")
+    cfg = installer.load_config()
+    assert cfg["models_dir"] == str(models) and cfg["output_dir"] == str(tmp_path / "shared/output")
+    (models / "unet").mkdir(parents=True)
+    (models / "unet/qwen-image-2.1-UC-Q4_K_M.gguf").write_bytes(b"")
+    have = installer.installed(cfg)
+    assert have["unet"] and not have["sam3"] and not have["vae"]

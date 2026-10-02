@@ -27,15 +27,18 @@ from pydantic import BaseModel
 
 import align
 import graphs
+import installer
 
 ROOT = Path(__file__).parent
 WEB = ROOT / "web"
 COMFY = os.environ.get("COMFY_URL") or "http://127.0.0.1:8188"
 COMFY_WS = COMFY.replace("http", "ws", 1) + "/ws"
 SUBFOLDER = "inpaint-studio"
-# ComfyUI's output folder, used to drop the _00001_ counter from saved file names
-COMFY_OUTPUT = Path(os.environ.get("COMFY_OUTPUT_DIR") or Path.home() / "ComfyUI-Shared/output").expanduser()
-RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or ROOT / "data") / "runs"
+# ComfyUI's output folder, used to drop the _00001_ counter from saved file names (default: setup config)
+COMFY_OUTPUT = Path(os.environ["COMFY_OUTPUT_DIR"]).expanduser() if os.environ.get("COMFY_OUTPUT_DIR") else None
+INSTALLER = installer.Installer()
+COMFY_PROC = installer.ComfyProcess()
+RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or installer.APP_SUPPORT) / "runs"
 RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
@@ -92,7 +95,7 @@ def drop_counter(img: dict) -> dict:
     """Rename ComfyUI's 'name_00001_.png' to 'name.png'. Every run has its own prefix, so the
     counter never matters; if the output folder is not reachable the name is kept."""
     new = re.sub(r"_\d{5}_(\.\w+)$", r"\1", img["filename"])
-    src = COMFY_OUTPUT / img.get("subfolder", "") / img["filename"]
+    src = (COMFY_OUTPUT or Path(installer.load_config()["output_dir"])) / img.get("subfolder", "") / img["filename"]
     dst = src.with_name(new)
     if new == img["filename"] or img.get("type", "output") != "output" or not src.is_file() or dst.exists():
         return img
@@ -127,6 +130,76 @@ async def status():
     except HTTPException as e:
         return {"comfy": False, "error": e.detail}
     return {"comfy": True, "running": len(q["queue_running"]), "pending": len(q["queue_pending"])}
+
+
+# ---------------------------------------------------------------- setup (first run, optional masking)
+
+def setup_ready(have: dict[str, bool]) -> bool:
+    return all(have[s] for s, _, _, optional in installer.STEP_INFO if not optional)
+
+
+async def comfy_up() -> bool:
+    try:
+        await comfy_json("GET", "/system_stats")
+        return True
+    except HTTPException:
+        return False
+
+
+async def ensure_comfy() -> None:
+    """Start ComfyUI headless when nothing answers on the default local port yet."""
+    cfg = installer.load_config()
+    if COMFY.rstrip("/") == "http://127.0.0.1:8188" and setup_ready(installer.installed(cfg)) and not await comfy_up():
+        COMFY_PROC.start(cfg)
+
+
+@app.get("/api/setup")
+async def setup_status():
+    cfg = installer.load_config()
+    have = installer.installed(cfg)
+    steps = [{"id": s, "title": t, "description": d, "optional": o, "installed": have[s], "size": installer.step_size(s, cfg)}
+             for s, t, d, o in installer.STEP_INFO]
+    return {"ready": setup_ready(have), "mask_available": have["sam3"], "config": cfg, "steps": steps,
+            "quants": {k: v[1] for k, v in installer.UNET_FILES.items()},
+            "comfy": {"up": await comfy_up(), "managed": COMFY_PROC.managed}, "install": INSTALLER.state()}
+
+
+@app.post("/api/setup/config")
+async def setup_config(values: dict):
+    if INSTALLER.running:
+        raise HTTPException(409, "setup is running")
+    try:
+        installer.save_config(values)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return await setup_status()
+
+
+class InstallReq(BaseModel):
+    steps: list[str]
+
+
+@app.post("/api/setup/install")
+async def setup_install(req: InstallReq):
+    if INSTALLER.running:
+        raise HTTPException(409, "setup is already running")
+    known = {s for s, *_ in installer.STEP_INFO}
+    if not req.steps or not set(req.steps) <= known:
+        raise HTTPException(400, "unknown or no steps")
+
+    async def done() -> None:
+        if COMFY_PROC.managed and {"comfyui", "gguf_node"} & set(req.steps):
+            COMFY_PROC.stop()  # restart so new code / nodes are loaded
+        await ensure_comfy()
+
+    INSTALLER.start(req.steps, done)
+    return await setup_status()
+
+
+@app.post("/api/setup/cancel")
+async def setup_cancel():
+    INSTALLER.cancel()
+    return {"ok": True}
 
 
 @app.get("/api/models")
@@ -492,6 +565,20 @@ async def ws_jobs(ws: WebSocket):
         pass
     finally:
         SUBSCRIBERS.discard(ws)
+
+
+@app.on_event("startup")
+async def start_comfy():
+    try:
+        await ensure_comfy()
+    except Exception as e:  # never block the UI (it shows the setup page instead)
+        print(f"could not start ComfyUI: {e!r}")
+
+
+@app.on_event("shutdown")
+async def stop_comfy():
+    INSTALLER.cancel()
+    COMFY_PROC.stop()
 
 
 @app.on_event("startup")

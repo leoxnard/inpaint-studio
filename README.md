@@ -44,6 +44,16 @@ Steps are saved every N steps and/or for the last N steps, always including the 
 ComfyUI's `_00001_` counter is removed by the server (output folder from the setup config, or
 `COMFY_OUTPUT_DIR`).
 
+## Models & downloads
+Model presets (`presets.py`) bundle a GGUF diffusion model (all quantisations that run on Apple
+Silicon) with its text encoder and VAE: Qwen-Image 2.1 UC / official / Viggle Turbo (edit +
+generate), Qwen-Image-Edit 2511 (edit, experimental), Qwen-Image 2512 (generate, experimental),
+Z-Image Turbo (generate, edit = img2img). The **Downloads** page installs or deletes them,
+shows a RAM-fit estimate per quant (like LM Studio) and recommends a quant for this Mac. The model
+picker sits in the topbar; UNet/CLIP/VAE can still be overridden in Advanced. The Edit card has
+an **Edit | Generate** switch (generate = text to image, no input image) and prompt presets
+(built-in + own, saved in the browser).
+
 ## Requirements & setup
 Only macOS on Apple Silicon (32 GB RAM recommended). On first start the UI shows a **setup page**
 that finds an existing Comfy Desktop install or installs what is missing (pick steps, folders and

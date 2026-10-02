@@ -34,4 +34,8 @@ def test_installed_detects_models_and_desktop_yaml(tmp_path, monkeypatch):
     (models / "unet").mkdir(parents=True)
     (models / "unet/qwen-image-2.1-UC-Q4_K_M.gguf").write_bytes(b"")
     have = installer.installed(cfg)
-    assert have["unet"] and not have["sam3"] and not have["vae"]
+    assert have["model:qwen21_uc:Q4_K_M"] and not have["model:qwen21_uc:Q8_0"] and not have["component:sam3"]
+    st = installer.preset_status(have, "qwen21_uc")
+    assert st["installed_quants"] == ["Q4_K_M"] and not st["complete"] and st["missing_components"] == ["qwen3vl_8b", "vae_qwen21"]
+    order = installer.expand(["model:qwen21_uc:Q8_0"], have)
+    assert order == ["component:qwen3vl_8b", "component:vae_qwen21", "model:qwen21_uc:Q8_0"]

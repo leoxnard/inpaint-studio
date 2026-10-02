@@ -9,9 +9,15 @@
 <body>
   <header class="topbar">
     <h1>Inpaint Studio</h1>
+    <div class="modelbar" id="modelBar" hidden>
+      <span class="mlabel">Model</span>
+      <select id="preset" aria-label="Model"></select>
+      <select id="quant" aria-label="Quantisation"></select>
+      <button id="moreModels" class="linkbtn" title="Open the download centre">Get more models…</button>
+    </div>
     <div class="topright">
         <span class="pill" id="statusPill" title="ComfyUI status"><i class="dot"></i><span id="statusText">Checking...</span></span>
-      <button id="setupBtn" class="small" title="Install or repair components, change folders">Setup</button>
+      <button id="setupBtn" class="small" title="Models, components and folders">Downloads</button>
     </div>
   </header>
 
@@ -20,7 +26,7 @@
   <div class="layout" id="appLayout" hidden>
     <aside class="sidebar" id="sidebar">
 
-      <section class="card">
+      <section class="card edit-only">
         <h2>Image</h2>
         <label class="dropzone" id="dropzone">
           <input type="file" id="fileInput" accept="image/*" multiple hidden>
@@ -53,16 +59,22 @@
           <label>Megapixels
             <input type="number" id="megapixels" value="0.95" min="0.3" max="2" step="0.01">
           </label>
-          <label>Resolution (ref.)
+          <label class="edit-only">Resolution (ref.)
             <input type="number" id="resolution" value="1008" min="256" max="2048" step="16">
           </label>
         </div>
-        <label class="check"><input type="checkbox" id="autofix" checked> Auto-fix size</label>
+        <label class="gen-only">Aspect ratio
+          <select id="aspect">
+            <option value="1:1">1:1</option><option value="4:3">4:3</option><option value="3:4">3:4</option>
+            <option value="3:2">3:2</option><option value="2:3">2:3</option><option value="16:9">16:9</option><option value="9:16">9:16</option>
+          </select>
+        </label>
+        <label class="check edit-only"><input type="checkbox" id="autofix" checked> Auto-fix size</label>
         <div class="sizeinfo" id="sizeInfo">Load an image to see the working size.</div>
         <div class="hint">Above ~4096 latent tokens the edit turns gray on Apple Silicon.</div>
       </section>
 
-      <section class="card needs-mask">
+      <section class="card needs-mask edit-only">
         <h2>Step 1 &ndash; Mask</h2>
         <label>What to mask
           <input type="text" id="maskText" value="person">
@@ -107,6 +119,19 @@
 
       <section class="card">
         <h2 id="editHeading">Step 2 &ndash; Edit</h2>
+        <input type="hidden" id="task" value="edit">
+        <div class="seg" id="taskTabs">
+          <button data-task="edit" class="active">Edit</button>
+          <button data-task="generate">Generate</button>
+        </div>
+        <div class="hint" id="modelHint" hidden></div>
+        <label>Prompt preset
+          <select id="promptPreset"></select>
+        </label>
+        <div class="row wrap">
+          <button id="promptSave" class="small" title="Save the current prompt as a preset">Save as preset…</button>
+          <button id="promptDelete" class="small" title="Delete the selected custom preset" disabled>Delete preset</button>
+        </div>
         <label>Prompt
           <textarea id="prompt" rows="4">Replace the person with a walking dog. Keep everything else unchanged.</textarea>
         </label>
@@ -114,26 +139,26 @@
           <label>Steps
             <input type="number" id="steps" min="1" max="100" step="1" value="20">
           </label>
-          <label>Denoise
+          <label class="edit-only">Denoise
             <input type="number" id="denoise" min="0" max="1" step="0.01" value="1">
           </label>
-          <label class="full needs-mask">Mode
+          <label class="full needs-mask paste-only edit-only">Mode
             <select id="mode" title="Inpaint: only the masked area is re-generated. Free edit + paste: the whole image is edited, then only the masked area is pasted in (try this when the old content keeps coming back).">
               <option value="inpaint">Inpaint (mask only)</option>
               <option value="paste">Free edit + paste</option>
             </select>
           </label>
-          <label class="check needs-mask" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Tell the model to keep the rest identical</label>
+          <label class="check needs-mask paste-only edit-only" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Tell the model to keep the rest identical</label>
           <label title="Decode the real intermediate image with the VAE and save it every N steps (like the Steps workflow). 0 = off. Live previews are always recorded and can be shown in the viewer.">Save step every N (0 = off)
             <input type="number" id="saveEvery" min="0" max="50" step="1" value="2">
           </label>
           <label title="Also save each of the last N steps before the result. With 3 and 20 steps: steps 17, 18 and 19 (plus the result). 0 = off.">Save last N steps (0 = off)
             <input type="number" id="saveLast" min="0" max="50" step="1" value="0">
           </label>
-          <label class="needs-mask">Feather (px)
+          <label class="needs-mask edit-only">Feather (px)
             <input type="number" id="feather" min="0" max="100" step="1" value="12">
           </label>
-          <label>CFG
+          <label class="turbo-hide">CFG
             <input type="number" id="cfg" min="0" max="20" step="0.1" value="1">
           </label>
         </div>
@@ -144,11 +169,11 @@
           <label class="check seedrandom"><input type="checkbox" id="randomSeed" checked> Random</label>
         </div>
         <details>
-          <summary>Advanced</summary>
+          <summary>Advanced <span class="hint" id="overrideHint" hidden>Custom model files active</span></summary>
           <label>Negative prompt
             <textarea id="negative" rows="2"></textarea>
           </label>
-          <div class="grid2">
+          <div class="grid2 turbo-hide">
             <label>Sampler <select id="sampler"></select></label>
             <label>Scheduler <select id="scheduler"></select></label>
           </div>
@@ -165,11 +190,11 @@
 
     <main class="main">
       <div class="tabs">
-        <div class="seg" id="viewTabs">
+        <div class="seg edit-only" id="viewTabs">
           <button data-view="mask" class="active" id="maskTab">Mask</button>
           <button data-view="result">Result</button>
         </div>
-        <span class="hint needs-mask" id="maskBadge"></span>
+        <span class="hint needs-mask edit-only" id="maskBadge"></span>
       </div>
 
       <div class="view" id="maskView">
@@ -241,6 +266,20 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h3 id="modalTitle">Save your current prompt as a preset?</h3>
+      <label>Name
+        <input type="text" id="modalName" maxlength="80">
+      </label>
+      <div class="modal-actions">
+        <button id="modalSave" class="primary">Save &amp; switch</button>
+        <button id="modalSkip">Switch without saving</button>
+        <button id="modalCancel">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastClose" aria-label="Dismiss">&times;</button></div>

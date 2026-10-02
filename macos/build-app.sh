@@ -9,7 +9,7 @@ rm -rf "$OUT"
 osacompile -s -o "$OUT" macos/InpaintStudio.applescript
 APP="$OUT/Contents/Resources/app"
 mkdir -p "$APP"
-cp server.py graphs.py align.py installer.py pyproject.toml uv.lock "$APP/"
+cp *.py pyproject.toml uv.lock "$APP/"
 cp -R web "$APP/web"
 codesign --force --deep -s - "$OUT" 2>/dev/null  # ad-hoc signature again after adding files
 echo "Built: $OUT"

@@ -1,6 +1,7 @@
 // Inpaint Studio frontend: two-step mask + edit UI. Vanilla ES module, no build step.
 
 import { createSetup } from "/setup.js";
+import { initPromptPresets } from "/promptpresets.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -8,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 const PERSIST = [
   "megapixels", "resolution", "autofix", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "useMask", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "saveEvery", "saveLast", "seed",
-  "randomSeed", "cfg", "sampler", "scheduler", "unet", "clip", "vae",
+  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -45,6 +46,9 @@ const state = {
   view: "mask",
   run: null,                  // current/last run object
   runs: [],
+  task: "edit",               // "edit" | "generate"
+  setup: null,                // last /api/setup report (presets, components)
+  models: null,               // last /api/models report
   maskAvailable: true,        // false when SAM3 is not installed: the UI hides everything about masks
 };
 
@@ -112,6 +116,7 @@ async function pollStatus() {
 async function loadModels() {
   try {
     const m = await api("/api/models");
+    state.models = m;
     const fill = (id, list, pref) => {
       const sel = $(id);
       const saved = sel.value;
@@ -123,12 +128,19 @@ async function loadModels() {
         : (pref && list.find((v) => v.includes(pref))) || list[0];
       if (want) sel.value = want;
     };
-    fill("unet", m.unets, "Q4_K_M");
-    fill("clip", m.clips, "qwen3vl_8b");
-    fill("vae", m.vaes, "qwen_image_2.1");
     fill("sampler", m.samplers, "euler");
     fill("scheduler", m.schedulers, "simple");
     if (!$("sampler").value && m.samplers.includes("euler")) $("sampler").value = "euler";
+    // file overrides: the first option ("From preset") is the default and sends nothing
+    for (const [id, list] of [["unet", m.unets], ["clip", m.clips], ["vae", m.vaes]]) {
+      const sel = $(id);
+      const keep = sel.value;
+      sel.innerHTML = "";
+      sel.add(new Option("From preset", ""));
+      for (const v of list) sel.add(new Option(v, v));
+      sel.value = list.includes(keep) ? keep : "";
+    }
+    updateOverrideLabels();
     saveForm();
   } catch (e) {
     showError(`Could not load models: ${e.message}`);
@@ -138,7 +150,26 @@ async function loadModels() {
 // ------------------------------------------------------------------ size & safety
 const num = (id) => parseFloat($(id).value);
 
+// working size for a generate run: the aspect ratio stands in for the image size
+const aspectDims = () => { const [w, h] = $("aspect").value.split(":").map(Number); return { w: w * 100, h: h * 100 }; };
+
 async function refreshSize() {
+  if (state.task === "generate") {
+    const { w, h } = aspectDims();
+    const body = { width: w, height: h, megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10) || 1024 };
+    if (!(body.megapixels > 0)) return null;
+    try {
+      const rep = await postJson("/api/size", body);
+      // no reference image: only the target size counts
+      $("sizeInfo").innerHTML = `Working size: <b>${rep.work_w}×${rep.work_h}</b><br>Target tokens: <b>${rep.target_tokens}</b><br>`
+        + (rep.target_tokens <= 4096 ? '<span class="badge ok">OK</span>'
+          : '<span class="badge bad">Gray-noise risk (limit 4096 tokens)</span><br><span class="hint">Lower the megapixels.</span>');
+      return rep;
+    } catch (e) {
+      showError(e.message);
+      return null;
+    }
+  }
   if (!state.imageName) return null;
   const body = { width: state.srcW, height: state.srcH, megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10) };
   if (!(body.megapixels > 0) || !(body.resolution > 0)) return null;
@@ -381,6 +412,7 @@ document.addEventListener("keydown", (e) => {
 // ------------------------------------------------------------------ image upload
 async function setImageFile(file) {
   if (!file || !file.type.startsWith("image/")) { showError("Please choose an image file."); return; }
+  if (!ensureEditTask()) return;
   $("imageInfo").textContent = "Uploading...";
   try {
     const fd = new FormData();
@@ -493,8 +525,11 @@ function exportMaskBlob(src = state.mask) {
 function setSubmitting(on) {
   state.submitting = on;
   $("runEdit").disabled = on;
-  $("runEdit").textContent = on ? "Adding to queue..." : "Run edit (add to queue)";
+  $("runEdit").textContent = on ? "Adding to queue..." : runLabel();
 }
+
+const runLabel = () => (state.task === "generate" ? "Generate (add to queue)" : "Run edit (add to queue)");
+const currentFamily = () => presetById($("preset").value)?.family || "";
 
 // edit parameters from the form for one image (seed is drawn per job when "Random" is on)
 function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resolution }) {
@@ -506,10 +541,12 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     megapixels: megapixels ?? num("megapixels"), resolution: resolution ?? parseInt($("resolution").value, 10),
     prompt: $("prompt").value, negative: $("negative").value,
     steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
-    sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: state.maskAvailable ? $("mode").value : "inpaint",
-    keep_identical: state.maskAvailable && $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
+    sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: state.maskAvailable && currentFamily() !== "zimage" ? $("mode").value : "inpaint",
+    keep_identical: state.maskAvailable && currentFamily() !== "zimage" && $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
-    unet: $("unet").value, clip: $("clip").value, vae: $("vae").value, preview_method: "auto",
+    preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
+    // explicit file overrides only; empty = taken from the preset by the server
+    ...Object.fromEntries(["unet", "clip", "vae"].filter((id) => $(id).value).map((id) => [id, $(id).value])),
   };
 }
 
@@ -521,12 +558,20 @@ async function uploadMaskBlob(blob) {
 
 async function runEdit({ thenNext = false } = {}) {
   if (state.submitting) return;
-  if (!state.imageName) { showError("Load an image first."); return; }
-  const useMask = state.maskAvailable && $("useMask").checked;
+  const generate = state.task === "generate";
+  if (!generate && !state.imageName) { showError("Load an image first."); return; }
+  if (!presetById($("preset").value)) { showError("No model installed. Open Downloads to get one."); return; }
+  const useMask = !generate && state.maskAvailable && $("useMask").checked;
   setSubmitting(true);
   try {
     const rep = await refreshSize();
     if (!rep) return;
+    if (generate) {
+      saveForm();
+      const { w, h } = aspectDims();
+      await submitJob(editParams({ image: null, srcW: w, srcH: h, maskName: null, useMask: false }));
+      return;
+    }
     let maskName = null;
     if (useMask) {
       if (!state.hasMask) throw new Error("No mask yet. Compute or paint a mask, or turn off \"Use mask\".");
@@ -762,6 +807,7 @@ function showFrame(i) {
   $("compare").hidden = true;
   $("resultEmpty").hidden = true;
   $("showCompare").hidden = !run.resultUrl;
+  $("showCompare").textContent = run.beforeUrl ? "Show comparison" : "Show result";
   run.shown = i;
   for (const [j, img] of [...$("filmstrip").children].entries()) img.classList.toggle("active", j === i);
 }
@@ -806,7 +852,7 @@ function runFromStored(r) {
     id: r.id, serverId: r.id, prompt: r.params?.prompt || "", seed: r.params?.seed, steps: r.params?.steps,
     frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
-    aligned: r.aligned || null,
+    aligned: r.aligned || null, task: r.params?.task || "edit", preset: r.params?.preset || null,
     value: r.params?.steps, max: r.params?.steps, created: r.created,
   };
 }
@@ -877,7 +923,15 @@ async function measureMatch(run) {
 function showCompare() {
   const run = state.run;
   if (!run || !run.resultUrl) return;
-  $("cmpBefore").src = run.beforeUrl || run.resultUrl;
+  if (!run.beforeUrl) {   // generate runs have nothing to compare with: show the result itself
+    $("liveImg").src = run.resultUrl;
+    $("liveImg").hidden = false;
+    $("compare").hidden = true;
+    $("showCompare").hidden = true;
+    for (const img of $("filmstrip").children) img.classList.remove("active");
+    return;
+  }
+  $("cmpBefore").src = run.beforeUrl;
   $("cmpAfter").src = $("viewRaw").checked && run.rawUrl ? run.rawUrl : (run.aligned?.url || run.resultUrl);
   $("liveImg").hidden = true;
   $("compare").hidden = false;
@@ -945,12 +999,14 @@ $("useResult").onclick = async () => {
   if (!run || !run.resultUrl) return;
   try {
     const blob = await (await fetch(run.resultUrl)).blob();
+    if (!ensureEditTask()) return;
     await setImageFile(new File([blob], run.filename || "result.png", { type: blob.type || "image/png" }));
   } catch (e) { showError(e.message); }
 };
 
 // ------------------------------------------------------------------ view switching
 function setView(v) {
+  if (state.task === "generate" && v === "mask") v = "result";   // there is no image view in generate mode
   state.view = v;
   for (const b of $("viewTabs").children) b.classList.toggle("active", b.dataset.view === v);
   $("maskView").hidden = v !== "mask";
@@ -968,14 +1024,23 @@ function bindOutput(id, outId, fmt = (v) => v) {
 
 function initApp() {
   loadForm();
+  state.task = $("task").value === "generate" ? "generate" : "edit";
+  initModelPicker();
+  promptPresets = initPromptPresets({ getTask: () => state.task });
+  syncTaskUi();
+  if (state.task === "generate") { setView("result"); refreshSize(); }
   bindOutput("threshold", "thresholdOut");
   bindOutput("brushSize", "brushSizeOut", (v) => `${v}px`);
   bindOutput("opacity", "opacityOut", (v) => (+v).toFixed(2));
   for (const id of PERSIST) $(id).addEventListener("change", saveForm);
+  $("aspect").addEventListener("change", refreshSizeDebounced);
+  for (const id of ["unet", "clip", "vae"]) $(id).addEventListener("change", updateOverrideHint);
   for (const id of ["megapixels", "resolution"]) {
     $(id).addEventListener("input", () => { updateStale(); refreshSizeDebounced(); });
   }
   $("autofix").addEventListener("change", refreshSizeDebounced);
+  $("moreModels").onclick = showSetup;
+  $("taskTabs").addEventListener("click", (e) => { if (e.target.dataset.task) setTask(e.target.dataset.task); });
   $("opacity").addEventListener("input", render);
   $("runEdit").onclick = () => runEdit();
   $("maskText").addEventListener("keydown", (e) => { if (e.key === "Enter") computeMask(); });
@@ -1111,6 +1176,7 @@ state.batchIdx = -1;
 function openFiles(files) {
   const imgs = files.filter((f) => f.type.startsWith("image/")).sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
   if (!imgs.length) { showError("No images found."); return; }
+  if (!ensureEditTask()) return;
   if (imgs.length === 1 && !state.batch.length) { setImageFile(imgs[0]); return; }
   for (const it of state.batch) URL.revokeObjectURL(it.thumbUrl);
   state.batch = imgs.map((file, i) => ({ id: i, file, label: file.name, thumbUrl: URL.createObjectURL(file),
@@ -1395,12 +1461,16 @@ const MASK_TEXTS = {
   allTitle: ["Queue every open image without a mask (whole image is edited)", "Queue every open image"],
 };
 
+const syncHeading = () => {
+  $("editHeading").innerHTML = state.task === "generate" ? "Generate" : MASK_TEXTS.heading[state.maskAvailable ? 0 : 1];
+};
+
 // Masking needs SAM3. Without it the UI hides everything about masks and never sends one.
 function applyMaskMode(available) {
   const i = available ? 0 : 1;
   state.maskAvailable = available;
   document.body.classList.toggle("no-mask", !available);
-  $("editHeading").innerHTML = MASK_TEXTS.heading[i];
+  syncHeading();
   $("maskTab").textContent = MASK_TEXTS.tab[i];
   $("batchKeysHint").textContent = MASK_TEXTS.keys[i];
   $("batchSubmitNext").title = MASK_TEXTS.next[i];
@@ -1414,6 +1484,7 @@ let appStarted = false;
 function showApp() {
   setup.close();
   $("appLayout").hidden = false;
+  $("modelBar").hidden = false;
   if (appStarted) return;
   appStarted = true;
   initApp();
@@ -1421,6 +1492,7 @@ function showApp() {
 }
 function showSetup() {
   $("appLayout").hidden = true;
+  $("modelBar").hidden = true;
   setup.open().catch((e) => showError(e.message));
 }
 
@@ -1428,11 +1500,18 @@ const setup = createSetup({
   api, postJson, root: $("setupView"),
   onBack: showApp,
   onReady: (data) => {
+    state.setup = data;
     // SAM3 was installed or removed: reload so the whole UI switches mode
     if (appStarted && data.mask_available !== state.maskAvailable) { location.reload(); return; }
     applyMaskMode(data.mask_available);
-    if (appStarted) loadModels();   // ComfyUI was (re)started, model lists may have changed
+    if (appStarted) { loadModels(); renderModelPicker(); }   // ComfyUI was (re)started, model lists may have changed
     showApp();
+  },
+  // downloads or deletions while the page stays open: refresh the model picker
+  onChanged: (data) => {
+    state.setup = data;
+    if (appStarted && data.mask_available !== state.maskAvailable) { location.reload(); return; }
+    if (appStarted) renderModelPicker();
   },
 });
 $("setupBtn").onclick = showSetup;
@@ -1442,7 +1521,148 @@ $("setupBtn").onclick = showSetup;
   setInterval(pollStatus, 5000);
   let info = null;
   try { info = await api("/api/setup"); } catch { /* old server without setup: just start the app */ }
-  if (info) applyMaskMode(info.mask_available);
+  if (info) { state.setup = info; applyMaskMode(info.mask_available); }
   if (info && !info.ready) showSetup();
   else showApp();
 })();
+
+// ------------------------------------------------------------------ model picker, edit | generate
+let promptPresets = null;
+const presetById = (id) => state.setup?.presets.find((p) => p.id === id);
+const completePresets = () => (state.setup?.presets || []).filter((p) => p.complete);
+const storedForm = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch { return {}; } };
+
+function setSelectValue(id, v) {
+  const sel = $(id);
+  if (![...sel.options].some((o) => o.value === String(v))) sel.add(new Option(v, v));
+  sel.value = v;
+}
+
+// the file names a preset + quant resolves to, shown in the "From preset" override options
+function updateOverrideLabels() {
+  const p = presetById($("preset").value);
+  const q = p?.quants.find((x) => x.quant === $("quant").value);
+  const file = (key) => state.setup?.components.find((c) => c.key === key)?.file;
+  for (const [id, f] of [["unet", q?.file], ["clip", file(p?.text_encoder)], ["vae", file(p?.vae)]]) {
+    const o = $(id).options[0];
+    if (o && o.value === "") o.textContent = f ? `From preset (${f})` : "From preset";
+  }
+  updateOverrideHint();
+}
+function updateOverrideHint() {
+  $("overrideHint").hidden = !["unet", "clip", "vae"].some((id) => $(id).value);
+}
+function resetOverrides() {
+  for (const id of ["unet", "clip", "vae"]) $(id).value = "";
+  updateOverrideLabels();
+}
+
+function applyPresetDefaults(p) {
+  const d = p.defaults || {};
+  if (d.steps != null) $("steps").value = d.steps;
+  if (d.cfg != null) $("cfg").value = d.cfg;
+  if (d.sampler) setSelectValue("sampler", d.sampler);
+  if (d.scheduler) setSelectValue("scheduler", d.scheduler);
+  saveForm();
+}
+
+function fillQuant(p, keep, stored) {
+  const sel = $("quant");
+  const prev = sel.value || stored;
+  sel.innerHTML = "";
+  if (!p) return;
+  const inst = p.quants.filter((q) => q.installed);
+  const FIT = { tight: " · tight", no: " · too large" };
+  for (const q of inst) sel.add(new Option(q.quant + (FIT[q.fit] || ""), q.quant));
+  const rec = p.recommended_quant || p.default_quant;
+  const want = (keep && inst.some((q) => q.quant === prev) && prev)
+    || (inst.some((q) => q.quant === rec) && rec) || (inst.some((q) => q.quant === p.default_quant) && p.default_quant) || inst[0]?.quant;
+  if (want) sel.value = want;
+}
+
+// Rebuilds task toggle, model and quant selects from state.setup. applyDefaults: take the preset's defaults.
+function renderModelPicker({ applyDefaults = false } = {}) {
+  const done = completePresets();
+  const avail = ["edit", "generate"].filter((t) => done.some((p) => p.modes.includes(t)));
+  if (avail.length && !avail.includes(state.task)) state.task = avail[0];
+  for (const b of $("taskTabs").children) b.hidden = !avail.includes(b.dataset.task);
+  $("taskTabs").hidden = avail.length < 2;
+  const list = done.filter((p) => p.modes.includes(state.task)).sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0));
+  const sel = $("preset");
+  const prev = sel.value || storedForm().preset;
+  sel.innerHTML = "";
+  for (const p of list) sel.add(new Option(p.title + (p.experimental ? " (experimental)" : ""), p.id));
+  const want = list.find((p) => p.id === prev) || list.find((p) => p.id === state.setup.default_preset) || list[0];
+  if (want) sel.value = want.id;
+  sel.disabled = !want;
+  $("quant").disabled = !want;
+  fillQuant(want, true, storedForm().quant);
+  if (applyDefaults && want) applyPresetDefaults(want);
+  updateOverrideLabels();
+  syncTaskUi();
+}
+function initModelPicker() {
+  renderModelPicker({ applyDefaults: !storedForm().preset });
+  $("preset").addEventListener("change", () => {
+    const p = presetById($("preset").value);
+    fillQuant(p, false);
+    if (p) applyPresetDefaults(p);
+    resetOverrides();
+    syncTaskUi();
+    saveForm();
+  });
+  $("quant").addEventListener("change", () => { updateOverrideLabels(); saveForm(); });
+}
+
+// UI parts that depend on the task and the selected model family
+function syncTaskUi() {
+  const gen = state.task === "generate";
+  $("task").value = state.task;
+  document.body.classList.toggle("task-generate", gen);
+  for (const b of $("taskTabs").children) b.classList.toggle("active", b.dataset.task === state.task);
+  const fam = currentFamily();
+  const zedit = fam === "zimage" && !gen;
+  document.body.classList.toggle("fam-zimage", zedit);
+  if (zedit) { $("mode").value = "inpaint"; syncModeUi(); }
+  // turbo models: fixed 5-7 steps, no CFG; the server clamps and forces, the form just follows
+  const turbo = fam === "qwen21_turbo";
+  document.body.classList.toggle("fam-turbo", turbo);
+  $("steps").min = turbo ? 5 : 1;
+  $("steps").max = turbo ? 7 : 100;
+  if (turbo) {
+    $("steps").value = Math.min(7, Math.max(5, parseInt($("steps").value, 10) || 6));
+    $("cfg").value = 1;
+  }
+  const hint = $("modelHint");
+  const text = turbo ? "Turbo: 6 steps, no CFG" : zedit ? "Z-Image edits = img2img: lower Denoise (e.g. 0.6) keeps more of the original. It does not follow instructions."
+    : fam === "qwen_edit" ? "Experimental: 20B model, slow on 32 GB." : "";
+  hint.textContent = text;
+  hint.hidden = !text;
+  syncHeading();
+  if (!state.submitting) $("runEdit").textContent = runLabel();
+  promptPresets?.refresh();
+}
+
+// A new image always belongs to Edit: switch there (false if no installed model can edit)
+function ensureEditTask() {
+  if (state.task === "edit") return true;
+  if (!completePresets().some((p) => p.modes.includes("edit"))) { showError("None of the installed models can edit images."); return false; }
+  setTask("edit");
+  return true;
+}
+
+function setTask(task) {
+  if (state.task === task) return;
+  state.task = task;
+  renderModelPicker();
+  if (task === "generate") {
+    setView("result");
+    refreshSize();
+  } else {
+    setView(state.imgEl ? "mask" : state.view);
+    if (state.imageName) refreshSize();
+    else $("sizeInfo").textContent = "Load an image to see the working size.";
+    render();
+  }
+  saveForm();
+}

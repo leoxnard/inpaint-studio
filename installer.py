@@ -21,6 +21,8 @@ from typing import Any
 
 import httpx
 
+import presets
+
 APP_SUPPORT = Path(os.environ.get("INPAINT_STUDIO_HOME") or Path.home() / "Library/Application Support/Inpaint Studio")
 CONFIG_FILE = APP_SUPPORT / "config.json"
 COMFY_DESKTOP = Path.home() / "Library/Application Support/Comfy Desktop"
@@ -29,24 +31,9 @@ COMFY_ZIP = "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags/v0.38.0
 GGUF_ZIP = "https://github.com/city96/ComfyUI-GGUF/archive/refs/heads/main.zip"
 HF = "https://huggingface.co/{repo}/resolve/main/{path}"
 
-UNET_REPO = "abenzerps/Qwen-Image-2.1-Uncensored-GGUF"
-UNET_FILES = {  # quantisation -> (file, bytes)
-    "Q4_K_M": ("qwen-image-2.1-UC-Q4_K_M.gguf", 4_604_558_112),
-    "Q8_0": ("qwen-image-2.1-UC-Q8_0.gguf", 7_591_557_920),
-    "BF16": ("qwen-image-2.1-UC-BF16.gguf", 14_230_272_800),
-}
-MODELS = {  # step id -> (repo, path in repo, folder in models dir, bytes)
-    "text_encoder": ("Comfy-Org/Qwen-Image-2.1", "text_encoders/qwen3vl_8b_int8_convrot.safetensors", "text_encoders", 9_350_798_360),
-    "vae": ("Comfy-Org/Qwen-Image-2.1", "vae/qwen_image_2.1_vae_bf16.safetensors", "vae", 675_509_688),
-    "sam3": ("Comfy-Org/sam3.1", "checkpoints/sam3.1_multiplex_fp16.safetensors", "checkpoints", 1_745_546_848),
-}
-STEP_INFO = [  # id, title, description, optional
-    ("comfyui", "ComfyUI", "Image generation engine with its own Python environment (PyTorch etc., ~1.5 GB)", False),
-    ("gguf_node", "GGUF loader", "ComfyUI-GGUF custom node, patched for Qwen-Image 2.1", False),
-    ("unet", "Image model", "Qwen-Image 2.1 UC (GGUF) from Hugging Face", False),
-    ("text_encoder", "Text encoder", "Qwen3-VL 8B int8, reads the prompt and the input image", False),
-    ("vae", "VAE", "Turns latents into pixels and back", False),
-    ("sam3", "Masking (SAM3)", "Optional: automatic masks and the mask tools. Without it, the app only edits whole images", True),
+BASE_STEPS = [  # id, title, description
+    ("comfyui", "ComfyUI", "Image generation engine with its own Python environment (PyTorch etc., ~1.5 GB)"),
+    ("gguf_node", "GGUF loader", "ComfyUI-GGUF custom node, patched for Qwen-Image 2.1"),
 ]
 MODEL_FOLDERS = ["checkpoints", "clip", "clip_vision", "diffusion_models", "unet", "text_encoders", "vae",
                  "vae_approx", "loras", "upscale_models", "embeddings", "controlnet"]
@@ -74,7 +61,7 @@ def _desktop_paths() -> dict[str, str]:
 
 def defaults() -> dict[str, str]:
     d = {"comfy_dir": str(APP_SUPPORT / "ComfyUI"), "models_dir": str(APP_SUPPORT / "models"),
-         "input_dir": str(APP_SUPPORT / "input"), "output_dir": str(APP_SUPPORT / "output"), "quant": "Q8_0"}
+         "input_dir": str(APP_SUPPORT / "input"), "output_dir": str(APP_SUPPORT / "output")}
     d.update(_desktop_paths())
     return d
 
@@ -92,9 +79,7 @@ def save_config(values: dict[str, Any]) -> dict[str, str]:
     cfg = load_config()
     for k in cfg:
         if values.get(k):
-            cfg[k] = str(values[k]) if k == "quant" else str(Path(str(values[k])).expanduser())
-    if cfg["quant"] not in UNET_FILES:
-        raise ValueError(f"unknown quantisation {cfg['quant']}")
+            cfg[k] = str(Path(str(values[k])).expanduser())
     APP_SUPPORT.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, indent=1))
     return cfg
@@ -114,29 +99,95 @@ def _model_file(cfg: dict, folders: list[str], name: str) -> Path | None:
     return None
 
 
-def _has_unet(cfg: dict) -> bool:
-    for f in ("diffusion_models", "unet"):
-        d = Path(cfg["models_dir"]) / f
-        if d.is_dir() and any(p.exists() for p in d.glob("qwen-image-2.1*.gguf")):
-            return True
-    return False
+def item_path(cfg: dict, item: str) -> Path | None:
+    """Existing file of a downloadable item ("component:<id>" or "model:<preset>:<quant>")."""
+    kind, _, rest = item.partition(":")
+    if kind == "component":
+        c = presets.COMPONENTS[rest]
+        if c["folder"] == "custom_node":  # a single-file ComfyUI custom node
+            f = Path(cfg["comfy_dir"]) / "custom_nodes" / Path(c["path"]).name
+            return f if f.is_file() else None
+        folders = [c["folder"], "clip"] if c["folder"] == "text_encoders" else [c["folder"]]
+        return _model_file(cfg, folders, Path(c["path"]).name)
+    pid, _, q = rest.partition(":")
+    return _model_file(cfg, ["diffusion_models", "unet"], presets.PRESETS[pid]["quants"][q]["file"])
+
+
+def item_target(cfg: dict, item: str) -> tuple[str, Path, int]:
+    """Download URL, destination and size of an item."""
+    kind, _, rest = item.partition(":")
+    if kind == "component":
+        c = presets.COMPONENTS[rest]
+        base = Path(cfg["comfy_dir"]) / "custom_nodes" if c["folder"] == "custom_node" else Path(cfg["models_dir"]) / c["folder"]
+        return HF.format(repo=c["repo"], path=c["path"]), base / Path(c["path"]).name, c["size"]
+    pid, _, q = rest.partition(":")
+    pr = presets.PRESETS[pid]
+    f = pr["quants"][q]
+    return HF.format(repo=pr["repo"], path=f["file"]), Path(cfg["models_dir"]) / "diffusion_models" / f["file"], f["size"]
+
+
+def item_title(item: str) -> str:
+    kind, _, rest = item.partition(":")
+    if kind == "component":
+        return presets.COMPONENTS[rest]["title"]
+    if kind == "model":
+        pid, _, q = rest.partition(":")
+        return f"{presets.PRESETS[pid]['title']} · {q}"
+    return dict((s, t) for s, t, _ in BASE_STEPS)[item]
+
+
+def valid_item(item: str) -> bool:
+    kind, _, rest = item.partition(":")
+    if kind == "component":
+        return rest in presets.COMPONENTS
+    if kind == "model":
+        pid, _, q = rest.partition(":")
+        return pid in presets.PRESETS and q in presets.PRESETS[pid]["quants"]
+    return item in dict((s, t) for s, t, _ in BASE_STEPS)
 
 
 def installed(cfg: dict) -> dict[str, bool]:
+    """Base steps plus every component and every preset quantisation."""
     loader = Path(cfg["comfy_dir"]) / "custom_nodes/ComfyUI-GGUF/loader.py"
-    return {
+    have = {
         "comfyui": (Path(cfg["comfy_dir"]) / "main.py").is_file() and venv_python(cfg).exists(),
         "gguf_node": loader.is_file() and "qwen_image21" in loader.read_text(errors="ignore"),
-        "unet": _has_unet(cfg),
-        **{k: _model_file(cfg, [folder, "clip"] if k == "text_encoder" else [folder], Path(path).name) is not None
-           for k, (_, path, folder, _) in MODELS.items()},
     }
+    for cid in presets.COMPONENTS:
+        have[f"component:{cid}"] = item_path(cfg, f"component:{cid}") is not None
+    for pid, pr in presets.PRESETS.items():
+        for q in pr["quants"]:
+            have[f"model:{pid}:{q}"] = item_path(cfg, f"model:{pid}:{q}") is not None
+    return have
 
 
-def step_size(step: str, cfg: dict) -> int | None:
-    if step == "unet":
-        return UNET_FILES[cfg["quant"]][1]
-    return MODELS[step][3] if step in MODELS else None
+def preset_status(have: dict[str, bool], pid: str) -> dict[str, Any]:
+    pr = presets.PRESETS[pid]
+    quants = [q for q in pr["quants"] if have[f"model:{pid}:{q}"]]
+    comps = needed_components(pid)
+    return {"installed_quants": quants, "missing_components": [c for c in comps if not have[f"component:{c}"]],
+            "complete": bool(quants) and all(have[f"component:{c}"] for c in comps)}
+
+
+def needed_components(pid: str) -> list[str]:
+    pr = presets.PRESETS[pid]
+    return [pr["text_encoder"], pr["vae"], *pr.get("nodes", [])]
+
+
+def ready(have: dict[str, bool]) -> bool:
+    return have["comfyui"] and have["gguf_node"] and any(preset_status(have, pid)["complete"] for pid in presets.PRESETS)
+
+
+def expand(items: list[str], have: dict[str, bool]) -> list[str]:
+    """Install order: base steps, then components (incl. the ones a chosen model needs), then models."""
+    want = set(items)
+    for it in items:
+        if it.startswith("model:"):
+            want.update(f"component:{c}" for c in needed_components(it.split(":")[1]) if not have[f"component:{c}"])
+    base = [s for s, _, _ in BASE_STEPS if s in want]
+    comps = [f"component:{c}" for c in presets.COMPONENTS if f"component:{c}" in want]
+    models = sorted(i for i in want if i.startswith("model:"))
+    return base + comps + models
 
 
 # ---------------------------------------------------------------- install
@@ -146,18 +197,20 @@ class Installer:
         self.task: asyncio.Task | None = None
         self.steps: dict[str, dict] = {}
         self.error: str | None = None
+        self.restart_hint = False
 
     @property
     def running(self) -> bool:
         return self.task is not None and not self.task.done()
 
     def state(self) -> dict:
-        return {"running": self.running, "steps": self.steps, "error": self.error}
+        return {"running": self.running, "steps": self.steps, "error": self.error, "restart_comfy": self.restart_hint}
 
-    def start(self, steps: list[str], on_done) -> None:
-        order = [s for s, *_ in STEP_INFO if s in steps]
-        self.steps = {s: {"state": "pending", "message": "", "done": 0, "total": None, "rate": 0} for s in order}
+    def start(self, order: list[str], on_done) -> None:
+        self.steps = {s: {"state": "pending", "title": item_title(s), "message": "", "done": 0, "total": None, "rate": 0}
+                      for s in order}
         self.error = None
+        self.restart_hint = False
         self.task = asyncio.create_task(self._run(order, on_done))
 
     def cancel(self) -> None:
@@ -170,7 +223,11 @@ class Installer:
             for s in order:
                 st = self.steps[s]
                 st["state"] = "running"
-                await getattr(self, f"_install_{'model' if s in MODELS else s}")(cfg, s, st)
+                if ":" in s:
+                    url, dest, size = item_target(cfg, s)
+                    await self._download(url, dest, size, st)
+                else:
+                    await getattr(self, f"_install_{s}")(cfg, s, st)
                 st.update(state="done", message="Done")
         except asyncio.CancelledError:
             for st in self.steps.values():
@@ -212,14 +269,6 @@ class Installer:
         patch_gguf_loader(target / "loader.py")
         st["message"] = "Installing gguf package"
         await self._exec([find_uv(), "pip", "install", "--python", str(venv_python(cfg)), "-r", str(target / "requirements.txt")], st)
-
-    async def _install_unet(self, cfg: dict, s: str, st: dict) -> None:
-        name, size = UNET_FILES[cfg["quant"]]
-        await self._download(HF.format(repo=UNET_REPO, path=name), Path(cfg["models_dir"]) / "diffusion_models" / name, size, st)
-
-    async def _install_model(self, cfg: dict, s: str, st: dict) -> None:
-        repo, path, folder, size = MODELS[s]
-        await self._download(HF.format(repo=repo, path=path), Path(cfg["models_dir"]) / folder / Path(path).name, size, st)
 
     # -- helpers
 

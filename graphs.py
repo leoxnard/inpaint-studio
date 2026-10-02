@@ -99,33 +99,90 @@ def edit_prompt(p: dict[str, Any]) -> str:
     return p["prompt"]
 
 
+CLIP_TYPES = {"qwen21": "qwen_image", "qwen21_turbo": "qwen_image", "qwen_edit": "qwen_image", "qwen": "qwen_image",
+              "zimage": "lumina2"}
+CPU_TEXT_ENCODER = {"qwen_edit", "qwen"}  # fp8 text encoders cannot run on MPS
+# Viggle Turbo raw sigma nodes per step count (5-7); change steps only at the high-noise end
+VIGGLE_NODES = {5: "1.0, 0.875, 0.75, 0.5, 0.25", 6: "1.0, 0.9375, 0.875, 0.75, 0.5, 0.25",
+                7: "1.0, 0.9583, 0.9167, 0.875, 0.75, 0.5, 0.25"}
+
+
+def turbo_steps(steps: int) -> int:
+    return min(7, max(5, int(steps)))
+
+
 def build_edit_graph(p: dict[str, Any]) -> dict:
-    """Step 2: Qwen-Image 2.1 edit, optionally restricted to an uploaded mask.
+    """Step 2: edit an input image (task "edit") or generate from text (task "generate").
 
     Expected keys: image, mask (input filename or None), use_mask, megapixels, resolution,
     prompt, negative, steps, denoise, seed, cfg, sampler, scheduler, feather,
-    unet, clip, vae, prefix, mode.
+    unet, clip, vae, prefix, mode, family, task.
+
+    family (see presets.py): "qwen21" (Qwen-Image 2.1, edit + generate), "qwen21_turbo" (same with
+    the Viggle 6-step sigmas, no CFG), "qwen_edit" (Qwen-Image-Edit 2511), "qwen" (Qwen-Image 2512,
+    generate only) or "zimage" (Z-Image Turbo: generate, edit = img2img/inpaint).
 
     mode "inpaint" (default): only the masked latent area is re-generated (noise mask).
     mode "paste": the model edits the whole image freely, then only the masked area is
     pasted into the original. Better when the model keeps copying the old content.
     """
+    family = p.get("family", "qwen21")
+    generate = p.get("task") == "generate"
     g: dict[str, Any] = {
-        "load": {"class_type": "LoadImage", "inputs": {"image": p["image"]}},
-        "scale": {"class_type": "ImageScaleToTotalPixels", "inputs": {
-            "image": ["load", 0], "upscale_method": "lanczos", "megapixels": p["megapixels"], "resolution_steps": SCALE_STEPS}},
         "vae": {"class_type": "VAELoader", "inputs": {"vae_name": p["vae"]}},
-        "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": p["clip"], "type": "qwen_image", "device": "default"}},
-        "encode": {"class_type": "TextEncodeQwenImage21", "inputs": {
-            "clip": ["clip", 0], "vae": ["vae", 0], "images.image_1": ["scale", 0],
-            "prompt": edit_prompt(p), "negative_prompt": p.get("negative", ""), "resolution": p["resolution"]}},
+        "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": p["clip"], "type": CLIP_TYPES[family],
+                                                         "device": "cpu" if family in CPU_TEXT_ENCODER else "default"}},
     }
+    if not generate:
+        g["load"] = {"class_type": "LoadImage", "inputs": {"image": p["image"]}}
+        g["scale"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+            "image": ["load", 0], "upscale_method": "lanczos", "megapixels": p["megapixels"], "resolution_steps": SCALE_STEPS}}
     unet = p["unet"]
     if unet.endswith(".gguf"):
         g["unet"] = {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet}}
     else:
         g["unet"] = {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}}
-    g["model"] = {"class_type": "QwenImage21Cache", "inputs": {"model": ["unet", 0], "device": "auto", "dtype": "default"}}
+
+    prompt, negative = edit_prompt(p), p.get("negative", "")
+    ref_latent = None
+    if family in ("qwen21", "qwen21_turbo"):
+        g["model"] = {"class_type": "QwenImage21Cache", "inputs": {"model": ["unet", 0], "device": "auto", "dtype": "default"}}
+        g["encode"] = {"class_type": "TextEncodeQwenImage21", "inputs": {
+            "clip": ["clip", 0], "vae": ["vae", 0], "prompt": prompt, "negative_prompt": negative, "resolution": p["resolution"]}}
+        if not generate:
+            g["encode"]["inputs"]["images.image_1"] = ["scale", 0]
+            ref_latent = ["encode", 2]
+        pos, neg = ["encode", 0], ["encode", 1]
+    elif family == "qwen_edit":
+        g["model_shift"] = {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["unet", 0], "shift": 3.1}}
+        g["model"] = {"class_type": "CFGNorm", "inputs": {"model": ["model_shift", 0], "strength": 1.0}}
+        for key, text in (("encode", prompt), ("encode_neg", negative)):
+            g[f"{key}_raw"] = {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {
+                "clip": ["clip", 0], "prompt": text, "vae": ["vae", 0], "image1": ["scale", 0]}}
+            g[key] = {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {
+                "conditioning": [f"{key}_raw", 0], "reference_latents_method": "index_timestep_zero"}}
+        pos, neg = ["encode", 0], ["encode_neg", 0]
+    elif family == "qwen":
+        g["model"] = {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["unet", 0], "shift": 3.1}}
+        g["encode"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": prompt}}
+        g["encode_neg"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": negative}}
+        pos, neg = ["encode", 0], ["encode_neg", 0]
+    elif family == "zimage":
+        g["model"] = {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["unet", 0], "shift": 3.0}}
+        g["encode"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": prompt}}
+        if negative.strip():
+            g["encode_neg"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": negative}}
+        else:
+            g["encode_neg"] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["encode", 0]}}
+        pos, neg = ["encode", 0], ["encode_neg", 0]
+    else:
+        raise ValueError(f"unknown model family {family}")
+
+    if generate:
+        empty = "EmptyLatentImage" if family in ("qwen21", "qwen21_turbo") else "EmptySD3LatentImage"
+        g["latent_src"] = {"class_type": empty, "inputs": {"width": p["work_w"], "height": p["work_h"], "batch_size": 1}}
+        latent = ["latent_src", 0]
+        return _sample_and_save(g, p, latent, pos, neg, use_mask=False, generate=True)
 
     use_mask = bool(p.get("use_mask")) and bool(p.get("mask"))
     if use_mask:
@@ -148,7 +205,7 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
             "image": ["mask_grid_down", 0], "upscale_method": "nearest-exact", "width": p["work_w"], "height": p["work_h"], "crop": "disabled"}}
         g["mask_hard_src"] = {"class_type": "ImageToMask", "inputs": {"image": ["mask_grid_up", 0], "channel": "red"}}
         g["mask_hard"] = {"class_type": "ThresholdMask", "inputs": {"mask": ["mask_hard_src", 0], "value": 0.5}}
-        if p.get("mode", "inpaint") == "paste":
+        if p.get("mode", "inpaint") == "paste" and family != "zimage":
             # start from the original latent (exact working size, no noise mask): the edit stays
             # pixel-aligned with the original, and denoise < 1 keeps it even closer
             g["latent_src"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["scale", 0], "vae": ["vae", 0]}}
@@ -157,15 +214,21 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
             g["latent_src"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["scale", 0], "vae": ["vae", 0]}}
             g["latent"] = {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["latent_src", 0], "mask": ["mask_hard", 0]}}
             latent = ["latent", 0]
+    elif ref_latent:
+        latent = ref_latent
     else:
-        latent = ["encode", 2]
+        g["latent_src"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["scale", 0], "vae": ["vae", 0]}}
+        latent = ["latent_src", 0]
+    return _sample_and_save(g, p, latent, pos, neg, use_mask=use_mask, generate=False)
 
+
+def _sample_and_save(g: dict, p: dict[str, Any], latent: list, pos: list, neg: list, use_mask: bool, generate: bool) -> dict:
     every, last = int(p.get("save_every") or 0), int(p.get("save_last") or 0)
-    if every > 0 or last > 0:
-        final_latent = _chunked_sampler(g, p, latent, every, last)
+    if every > 0 or last > 0 or p.get("family") == "qwen21_turbo":  # turbo needs its own sigmas
+        final_latent = _chunked_sampler(g, p, latent, every, last, pos, neg)
     else:
         g["sampler"] = {"class_type": "KSampler", "inputs": {
-            "model": ["model", 0], "positive": ["encode", 0], "negative": ["encode", 1], "latent_image": latent,
+            "model": ["model", 0], "positive": pos, "negative": neg, "latent_image": latent,
             "seed": int(p["seed"]), "steps": int(p["steps"]), "cfg": float(p["cfg"]),
             "sampler_name": p["sampler"], "scheduler": p["scheduler"], "denoise": float(p["denoise"])}}
         final_latent = ["sampler", 0]
@@ -181,10 +244,27 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
     # the server strips ComfyUI's _00001_ counter afterwards (every run has its own prefix)
     prefix = p.get("prefix", "InpaintStudio/edit")
     g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": result, "filename_prefix": prefix}}
-    g["out_before"] = {"class_type": "SaveImage", "inputs": {"images": ["scale", 0], "filename_prefix": f"{prefix}/before"}}
+    if not generate:
+        g["out_before"] = {"class_type": "SaveImage", "inputs": {"images": ["scale", 0], "filename_prefix": f"{prefix}/before"}}
     if use_mask:  # the raw model output before pasting, to judge how well it lines up
         g["out_raw"] = {"class_type": "SaveImage", "inputs": {"images": ["decode", 0], "filename_prefix": f"{prefix}_raw"}}
     return g
+
+
+def _save_chunk(g: dict, i: int, a: int, b: int, steps: int, prefix: str, paste_mask: list | None, noise_masked: bool) -> None:
+    """Decode the chunk's denoised prediction and save it as step_B_STEPS (pasted into the original
+    when there is a mask, plus the raw full image in paste mode)."""
+    g[f"chunk_dec_{i}"] = {"class_type": "VAEDecode", "inputs": {"samples": [f"chunk_{i}", 1], "vae": ["vae", 0]}}
+    step_img = [f"chunk_dec_{i}", 0]
+    if paste_mask and not noise_masked:
+        g[f"stepraw_{b}"] = {"class_type": "SaveImage", "inputs": {
+            "images": step_img, "filename_prefix": f"{prefix}/raw_step_{step_name(b, steps)}"}}
+    if paste_mask:
+        g[f"chunk_paste_{i}"] = {"class_type": "ImageCompositeMasked", "inputs": {
+            "destination": ["scale", 0], "source": step_img, "x": 0, "y": 0, "resize_source": True, "mask": paste_mask}}
+        step_img = [f"chunk_paste_{i}", 0]
+    g[f"stepsave_{b}"] = {"class_type": "SaveImage", "inputs": {
+        "images": step_img, "filename_prefix": f"{prefix}/step_{step_name(b, steps)}"}}
 
 
 def step_chunks(steps: int, every: int, last: int = 0) -> list[tuple[int, int]]:
@@ -202,18 +282,25 @@ def step_name(step: int, steps: int) -> str:
     return f"{step:0{len(str(steps))}d}_{steps}"
 
 
-def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int, last: int = 0) -> list:
+def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int, last: int, pos: list, neg: list) -> list:
     """Same scheme as the 'Qwen2.1 GGUF Steps' workflow, unrolled instead of a loop node:
     each chunk samples sigmas[start..end] with SamplerCustomAdvanced (noise only in the first
     chunk), and the chunk's denoised prediction is decoded and saved as step_END_STEPS."""
-    steps = int(p["steps"])
+    turbo = p.get("family") == "qwen21_turbo"
+    steps = turbo_steps(p["steps"]) if turbo else int(p["steps"])
+    save_steps = every > 0 or last > 0
     g["noise"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": int(p["seed"])}}
     g["no_noise"] = {"class_type": "DisableNoise", "inputs": {}}
-    g["guider"] = {"class_type": "CFGGuider", "inputs": {
-        "model": ["model", 0], "positive": ["encode", 0], "negative": ["encode", 1], "cfg": float(p["cfg"])}}
-    g["ksel"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": p["sampler"]}}
-    g["sched"] = {"class_type": "BasicScheduler", "inputs": {
-        "model": ["model", 0], "scheduler": p["scheduler"], "steps": steps, "denoise": float(p["denoise"])}}
+    if turbo:  # distilled: no CFG, euler on the Viggle sigma schedule (sized from the latent)
+        g["guider"] = {"class_type": "BasicGuider", "inputs": {"model": ["model", 0], "conditioning": pos}}
+        g["ksel"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}}
+        g["sched"] = {"class_type": "ViggleTurboSigmas", "inputs": {"latent": latent, "nodes": VIGGLE_NODES[steps]}}
+    else:
+        g["guider"] = {"class_type": "CFGGuider", "inputs": {
+            "model": ["model", 0], "positive": pos, "negative": neg, "cfg": float(p["cfg"])}}
+        g["ksel"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": p["sampler"]}}
+        g["sched"] = {"class_type": "BasicScheduler", "inputs": {
+            "model": ["model", 0], "scheduler": p["scheduler"], "steps": steps, "denoise": float(p["denoise"])}}
     prefix = p.get("prefix", "InpaintStudio/edit")
     paste_mask = ["mask", 0] if "mask" in g else None
     noise_masked = "latent" in g
@@ -228,17 +315,8 @@ def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int, last:
         g[f"chunk_{i}"] = {"class_type": "SamplerCustomAdvanced", "inputs": {
             "noise": ["noise", 0] if i == 0 else ["no_noise", 0], "guider": ["guider", 0], "sampler": ["ksel", 0],
             "sigmas": [f"from_{i}", 1], "latent_image": latent}}
-        g[f"chunk_dec_{i}"] = {"class_type": "VAEDecode", "inputs": {"samples": [f"chunk_{i}", 1], "vae": ["vae", 0]}}
-        step_img = [f"chunk_dec_{i}", 0]
-        if paste_mask and not noise_masked:  # paste mode: also keep the full generated image
-            g[f"stepraw_{b}"] = {"class_type": "SaveImage", "inputs": {
-                "images": step_img, "filename_prefix": f"{prefix}/raw_step_{step_name(b, steps)}"}}
-        if paste_mask:  # show each step the way the final result will look: pasted into the original
-            g[f"chunk_paste_{i}"] = {"class_type": "ImageCompositeMasked", "inputs": {
-                "destination": ["scale", 0], "source": step_img, "x": 0, "y": 0, "resize_source": True, "mask": paste_mask}}
-            step_img = [f"chunk_paste_{i}", 0]
-        g[f"stepsave_{b}"] = {"class_type": "SaveImage", "inputs": {
-            "images": step_img, "filename_prefix": f"{prefix}/step_{step_name(b, steps)}"}}
+        if save_steps:
+            _save_chunk(g, i, a, b, steps, prefix, paste_mask, noise_masked)
         if noise_masked:
             g[f"chunk_fix_{i}"] = {"class_type": "LatentCompositeMasked", "inputs": {
                 "destination": [f"chunk_{i}", 0], "source": latent, "x": 0, "y": 0, "resize_source": False, "mask": ["outside", 0]}}

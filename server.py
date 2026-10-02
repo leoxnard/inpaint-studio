@@ -12,6 +12,7 @@ import json
 import os
 import re
 import struct
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -28,6 +29,7 @@ from pydantic import BaseModel
 import align
 import graphs
 import installer
+import presets
 
 ROOT = Path(__file__).parent
 WEB = ROOT / "web"
@@ -42,7 +44,7 @@ RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or installer.APP_SUPPORT) / "r
 RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
-                  "keep_identical")
+                  "keep_identical", "preset", "quant", "task", "family")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -134,8 +136,11 @@ async def status():
 
 # ---------------------------------------------------------------- setup (first run, optional masking)
 
-def setup_ready(have: dict[str, bool]) -> bool:
-    return all(have[s] for s, _, _, optional in installer.STEP_INFO if not optional)
+def system_ram() -> int:
+    try:
+        return int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=2).stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 16 * 1024**3
 
 
 async def comfy_up() -> bool:
@@ -149,18 +154,35 @@ async def comfy_up() -> bool:
 async def ensure_comfy() -> None:
     """Start ComfyUI headless when nothing answers on the default local port yet."""
     cfg = installer.load_config()
-    if COMFY.rstrip("/") == "http://127.0.0.1:8188" and setup_ready(installer.installed(cfg)) and not await comfy_up():
+    if COMFY.rstrip("/") == "http://127.0.0.1:8188" and installer.ready(installer.installed(cfg)) and not await comfy_up():
         COMFY_PROC.start(cfg)
 
 
 @app.get("/api/setup")
 async def setup_status():
+    """Everything the setup page / download centre and the model picker need."""
     cfg = installer.load_config()
     have = installer.installed(cfg)
-    steps = [{"id": s, "title": t, "description": d, "optional": o, "installed": have[s], "size": installer.step_size(s, cfg)}
-             for s, t, d, o in installer.STEP_INFO]
-    return {"ready": setup_ready(have), "mask_available": have["sam3"], "config": cfg, "steps": steps,
-            "quants": {k: v[1] for k, v in installer.UNET_FILES.items()},
+    base = [{"id": s, "title": t, "description": d, "installed": have[s]} for s, t, d in installer.BASE_STEPS]
+    comps = [{"id": f"component:{cid}", "key": cid, "title": c["title"], "size": c["size"], "file": c["path"].rsplit("/", 1)[-1],
+             "installed": have[f"component:{cid}"]}
+             for cid, c in presets.COMPONENTS.items()]
+    ram = system_ram()
+    models = []
+    for pid, pr in presets.PRESETS.items():
+        st = installer.preset_status(have, pid)
+        models.append({
+            "id": pid, "title": pr["title"], "family": pr["family"], "modes": pr["modes"], "note": pr["note"],
+            "experimental": bool(pr.get("experimental")), "default_quant": pr["default_quant"], "defaults": pr["defaults"],
+            "good_for": pr.get("good_for", ""), "recommended": bool(pr.get("recommended")),
+            "recommended_quant": presets.recommended_quant(pid, ram),
+            "text_encoder": pr["text_encoder"], "vae": pr["vae"], "nodes": pr.get("nodes", []), **st,
+            "quants": [{"id": f"model:{pid}:{q}", "quant": q, "size": f["size"], "file": f["file"], "installed": have[f"model:{pid}:{q}"],
+                        "memory": presets.memory_need(pid, q), "fit": presets.memory_fit(presets.memory_need(pid, q), ram)}
+                       for q, f in pr["quants"].items()]})
+    return {"ready": installer.ready(have), "mask_available": have["component:sam3"], "config": cfg,
+            "system": {"ram": ram, "gpu_budget": int(ram * presets.GPU_SHARE)},
+            "base": base, "components": comps, "presets": models, "default_preset": presets.DEFAULT_PRESET,
             "comfy": {"up": await comfy_up(), "managed": COMFY_PROC.managed}, "install": INSTALLER.state()}
 
 
@@ -176,23 +198,51 @@ async def setup_config(values: dict):
 
 
 class InstallReq(BaseModel):
-    steps: list[str]
+    items: list[str]
 
 
 @app.post("/api/setup/install")
 async def setup_install(req: InstallReq):
+    """Install base steps, components ("component:<id>") and models ("model:<preset>:<quant>");
+    a model's missing text encoder / VAE are added automatically."""
     if INSTALLER.running:
         raise HTTPException(409, "setup is already running")
-    known = {s for s, *_ in installer.STEP_INFO}
-    if not req.steps or not set(req.steps) <= known:
-        raise HTTPException(400, "unknown or no steps")
+    if not req.items or not all(installer.valid_item(i) for i in req.items):
+        raise HTTPException(400, "unknown or no items")
+    cfg = installer.load_config()
+    have = installer.installed(cfg)
+    order = [i for i in installer.expand(req.items, have) if not have.get(i)]
+    if not order:
+        return await setup_status()
 
     async def done() -> None:
-        if COMFY_PROC.managed and {"comfyui", "gguf_node"} & set(req.steps):
+        new_code = any(i in ("comfyui", "gguf_node") or i.startswith("component:viggle_node") for i in order)
+        if new_code and COMFY_PROC.managed:
             COMFY_PROC.stop()  # restart so new code / nodes are loaded
+        elif new_code and await comfy_up():
+            INSTALLER.restart_hint = True  # someone else's ComfyUI (Comfy Desktop) must be restarted by hand
         await ensure_comfy()
 
-    INSTALLER.start(req.steps, done)
+    INSTALLER.start(order, done)
+    return await setup_status()
+
+
+class DeleteReq(BaseModel):
+    item: str
+
+
+@app.post("/api/setup/delete")
+async def setup_delete(req: DeleteReq):
+    """Delete a downloaded model or component file (a symlink is removed, its target is kept)."""
+    if INSTALLER.running:
+        raise HTTPException(409, "setup is running")
+    if ":" not in req.item or not installer.valid_item(req.item):
+        raise HTTPException(400, "only models and components can be deleted")
+    cfg = installer.load_config()
+    path = installer.item_path(cfg, req.item)  # always <models_dir>/<folder>/<known file name>
+    if path is None:
+        raise HTTPException(404, "not installed")
+    path.unlink()
     return await setup_status()
 
 
@@ -517,6 +567,20 @@ async def run_job(job: dict) -> None:
 
 @app.post("/api/jobs")
 async def create_job(params: dict):
+    if params.get("preset"):
+        pr = presets.PRESETS.get(params["preset"])
+        if not pr:
+            raise HTTPException(400, f"unknown model preset {params['preset']}")
+        params["task"] = params.get("task") or "edit"
+        if params["task"] not in pr["modes"]:
+            raise HTTPException(400, f"{pr['title']} cannot {params['task']}")
+        # Advanced overrides: an explicitly chosen unet / clip / vae wins over the preset's file
+        resolved = presets.resolve(params["preset"], params.get("quant"))
+        params.update({k: params.get(k) or v for k, v in resolved.items()})
+    if params.get("task") == "generate":
+        params.update(use_mask=False, mask=None, image=None, denoise=1.0)
+    if params.get("family") == "qwen21_turbo":  # fixed few-step schedule, no CFG
+        params.update(steps=graphs.turbo_steps(params["steps"]), cfg=1.0)
     rep = graphs.size_report(params["src_w"], params["src_h"], params["megapixels"], params["resolution"])
     params["work_w"], params["work_h"] = rep["work_w"], rep["work_h"]
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"

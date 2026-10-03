@@ -7,8 +7,8 @@ longer covers fall back to the original.
 
 Optional fixes, all estimated from the area outside the mask (where raw and original should be
 identical): a local warp (dense optical flow, smoothed and continued into the mask), a colour /
-exposure correction field (Lab offsets, smoothly continued into the mask) and Poisson blending at
-the mask edge.
+exposure correction field (Lab offsets, smoothly continued into the mask) and a seamless edge: the
+cut between original and edit is moved, within a band around the mask edge, to where both agree.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from PIL import Image
 
 ANALYSIS_WIDTH = 512
 FINE_WIDTH = 1536
+SEAM_OUT, SEAM_IN, SEAM_FEATHER = 40, 8, 2.0  # seam band (px) and feather (sigma)
 
 
 def _gray(img: Image.Image, size: tuple[int, int]) -> np.ndarray:
@@ -164,27 +165,35 @@ def compose(original: Image.Image, raw: Image.Image, mask: Image.Image,
         m = fix_warp(o.astype(np.uint8), np.clip(m, 0, 255).astype(np.uint8), keep).astype(np.float64)
     if colors and keep.any():
         m = match_colors(o, m, keep).astype(np.float64)
-    weight = (mk / 255.0) * (np.asarray(valid, dtype=np.float64) / 255.0)
-    out = o * (1 - weight[..., None]) + m * weight[..., None]
+    weight = mk / 255.0
     if poisson:
-        out = _poisson(o, m, weight, out)
+        weight = _seam_weight(o, m, mk > 127)
+    weight = weight * (np.asarray(valid, dtype=np.float64) / 255.0)
+    out = o * (1 - weight[..., None]) + m * weight[..., None]
     diff = float(np.abs(o - m).mean(axis=-1)[keep].mean()) if keep.any() else 0.0
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), {"outside_diff": round(diff, 2)}
 
 
-def _poisson(o: np.ndarray, m: np.ndarray, weight: np.ndarray, fallback: np.ndarray) -> np.ndarray:
-    """Gradient-domain paste (OpenCV seamlessClone) so the edge adopts the original's colours."""
-    hard = (weight > 0.5).astype(np.uint8) * 255
-    hard[:2, :], hard[-2:, :], hard[:, :2], hard[:, -2:] = 0, 0, 0, 0  # seamlessClone needs a border
-    ys, xs = np.nonzero(hard)
-    if not len(xs):
-        return fallback
-    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
-    center = (int((x0 + x1 + 1) // 2), int((y0 + y1 + 1) // 2))
+def _seam_weight(o: np.ndarray, m: np.ndarray, hard: np.ndarray) -> np.ndarray:
+    """Blend weight for the edit with an optimal seam: within a band around the mask edge (SEAM_OUT px
+    outside, SEAM_IN px inside) a graph cut puts the boundary where original and edit look alike, so a
+    limb the model drew a bit wider or shifted continues cleanly instead of being cut off at the mask
+    edge. The seam is then feathered by a few pixels."""
+    if not hard.any():
+        return hard.astype(np.float64)
+    disk = lambda r: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    outer = cv2.dilate(hard.astype(np.uint8), disk(SEAM_OUT))
+    core = cv2.erode(hard.astype(np.uint8), disk(SEAM_IN))
+    ys, xs = np.nonzero(outer)  # graph cut only over the bounding box of the band
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    crop = lambda a: np.ascontiguousarray(a[y0:y1, x0:x1])
+    masks = [crop((1 - core) * 255).astype(np.uint8), crop(outer * 255).astype(np.uint8)]
     try:
-        cloned = cv2.seamlessClone(np.clip(m, 0, 255).astype(np.uint8), np.clip(o, 0, 255).astype(np.uint8),
-                                   hard, center, cv2.NORMAL_CLONE).astype(np.float64)
+        finder = cv2.detail_GraphCutSeamFinder("COST_COLOR")  # not COLOR_GRAD: that one cuts along the original's edges, leaving a double contour
+        res = finder.find([crop(o).astype(np.float32), crop(m).astype(np.float32)], [(0, 0), (0, 0)], masks)
+        sel = np.zeros(hard.shape, np.float32)
+        sel[y0:y1, x0:x1] = (res[1].get() if hasattr(res[1], "get") else res[1]) > 0
     except cv2.error:
-        return fallback
-    # inside the hard core the Poisson result, outside it the normal feathered blend
-    return np.where((hard > 0)[..., None], cloned, fallback)
+        sel = hard.astype(np.float32)
+    w = cv2.GaussianBlur(sel, (0, 0), SEAM_FEATHER)
+    return np.where(core > 0, 1.0, np.where(outer > 0, w, 0.0)).astype(np.float64)

@@ -97,7 +97,7 @@ an **Edit | Generate** switch (generate = text to image, no input image) and pro
 ## Paste fixes & upscaling
 Free edit + paste runs can be fixed automatically after pasting (Edit card) or later via
 **Adjust…**: match colours & exposure (smooth Lab offset field measured outside the mask), fix
-local warp (DIS optical flow, OpenCV) and seamless Poisson edges, on top of shift/scale alignment.
+local warp (DIS optical flow, OpenCV) and seamless edges (graph-cut seam, OpenCV), on top of shift/scale alignment.
 The fixed result is saved as `<run>_fixed.png`. An optional upscaler (UltraSharp / RealESRGAN,
 from the Downloads page) upscales the result in pixel space and saves `<run>_x2.png` / `_x4.png`.
 

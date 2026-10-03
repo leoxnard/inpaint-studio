@@ -24,7 +24,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   Jobs live in memory: a server restart marks unfinished runs as errors.
 - `align.py` – post-processing of a paste-mode free edit: shift/scale alignment (phase
   correlation), local warp fix (DIS optical flow), colour/exposure match (Lab offset field) and
-  Poisson edges, all measured outside the mask. `POST /api/runs/{id}/align`; also run
+  seamless edges (graph-cut seam in a band around the mask edge), all measured outside the mask. `POST /api/runs/{id}/align`; also run
   automatically after paste jobs (saved as `<run>_fixed.png`).
 - `presets.py` – model presets (files, quants, sizes, defaults), components (encoders, VAEs,
   SAM3, upscalers, Viggle node) and the RAM-fit estimate. `installer.py` – setup/downloads and

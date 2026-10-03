@@ -449,7 +449,7 @@ class AlignReq(BaseModel):
 
 
 async def adjust_run(run: dict, req: AlignReq) -> dict:
-    """Align and fix the free edit (shift/scale, local warp, colours, Poisson edge), paste it into the
+    """Align and fix the free edit (shift/scale, local warp, colours, seamless edge), paste it into the
     original and write a preview (or, with save, the adjusted result: run dir + ComfyUI output)."""
     run_id = run["id"]
     if not (run.get("before_url") and run.get("raw_url") and run.get("mask_url")):

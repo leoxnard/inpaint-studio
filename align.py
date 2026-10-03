@@ -159,14 +159,26 @@ def fix_warp(original: np.ndarray, raw: np.ndarray, keep: np.ndarray) -> np.ndar
     return cv2.remap(raw, gx + flow[..., 0], gy + flow[..., 1], cv2.INTER_CUBIC, borderMode=cv2.BORDER_REFLECT)
 
 
-def match_colors(original: np.ndarray, raw: np.ndarray, keep: np.ndarray) -> np.ndarray:
+def match_colors(original: np.ndarray, raw: np.ndarray, keep: np.ndarray, gain: bool = False) -> np.ndarray:
     """Correct exposure / colour drift: Lab offset original - raw outside the mask, as a smooth field
-    (so a gradient like 'darker on the left' is fixed too), continued into the mask."""
+    (so a gradient like 'darker on the left' is fixed too), continued into the mask.
+    gain (outpainting, where the mask is a large new area): a per-channel RGB gain field instead of a Lab
+    offset, capped. Bright areas (meadow, sky) get the full correction, dark ones (a jacket the model drew
+    next to the border) barely change, where an additive Lab shift tinted them."""
+    if gain:
+        eps = 8.0
+        num = _fill_smooth(original.astype(np.float32) + eps, keep.astype(np.float32), sigma=max(original.shape[:2]) / 12)
+        den = _fill_smooth(raw.astype(np.float32) + eps, keep.astype(np.float32), sigma=max(original.shape[:2]) / 12)
+        g = np.clip(num / np.maximum(den, 1e-3), 0.8, 1.25)
+        return np.clip(raw.astype(np.float32) * g, 0, 255)
     lab0 = cv2.cvtColor(original.astype(np.float32) / 255, cv2.COLOR_RGB2LAB)
     lab1 = cv2.cvtColor(raw.astype(np.float32) / 255, cv2.COLOR_RGB2LAB)
     diff = _fill_smooth(lab0 - lab1, keep.astype(np.float32), sigma=max(original.shape[:2]) / 12)
     out = cv2.cvtColor(lab1 + diff.astype(np.float32), cv2.COLOR_LAB2RGB)
     return np.clip(out * 255, 0, 255)
+
+
+MAX_SHIFT = np.array([6.0, 4.0, 4.0], np.float32)   # Lab: at most this much colour shift at the border
 
 
 def _smoothstep(t: np.ndarray) -> np.ndarray:
@@ -207,8 +219,13 @@ def outpaint_blend(original: Image.Image, raw: Image.Image, box: tuple[int, int,
             if not extended or old.size == 0 or new.size == 0:
                 continue
             diff = np.median(old, axis=axis) - np.median(new, axis=axis)   # one Lab offset per line
-            diff = np.stack([cv2.medianBlur(np.ascontiguousarray(diff[:, c:c + 1]), 5)[:, 0] for c in range(3)], -1)
-            diff = cv2.GaussianBlur(diff[:, None, :], (1, 0), sigmaX=0.1, sigmaY=strip)[:, 0, :]
+            # robust: a long running median (a person or a tree the model put right at the edge is no colour
+            # error, only what holds along a quarter of the edge counts), then a cap on how far it may shift
+            k = max(5, (len(diff) // 4) | 1)
+            padded = np.pad(diff, ((k // 2, k // 2), (0, 0)), mode="edge")
+            diff = np.median(np.lib.stride_tricks.sliding_window_view(padded, k, axis=0), axis=-1)
+            diff = cv2.GaussianBlur(diff[:, None, :].astype(np.float32), (1, 0), sigmaX=0.1, sigmaY=strip)[:, 0, :]
+            diff = np.clip(diff, -MAX_SHIFT, MAX_SHIFT)
             fade = _smoothstep(1 - np.maximum(dist, 0) / falloff) * (dist >= start)
             lab1 = lab1 + (diff[:, None, :] if axis == 1 else diff[None, :, :]) * fade[..., None]
         r = np.clip(cv2.cvtColor(lab1.astype(np.float32), cv2.COLOR_LAB2RGB) * 255, 0, 255)
@@ -221,9 +238,20 @@ def outpaint_blend(original: Image.Image, raw: Image.Image, box: tuple[int, int,
     return Image.fromarray(np.rint(o * (1 - wgt) + r * wgt).astype(np.uint8))
 
 
+def outpaint_paste_mask(mask: Image.Image, width: float) -> Image.Image:
+    """Outpainting (paste method): the new area (mask >= 50 %) stays fully generated and the transition
+    runs `width` px into the old image only, never out into the blurred fill. With the model's whole-canvas
+    redraw matching the old image closely, this wide fade hides a small colour step that a seam cut can't."""
+    m = np.asarray(mask.convert("L"), np.float32)
+    d = cv2.distanceTransform((m < 128).astype(np.uint8), cv2.DIST_L2, 5)
+    w = np.maximum(1 - _smoothstep(d / max(1.0, width)), m >= 128)
+    return Image.fromarray((w * 255).astype(np.uint8))
+
+
 def compose(original: Image.Image, raw: Image.Image, mask: Image.Image,
             dx: float, dy: float, scale: float,
-            colors: bool = False, warp: bool = False, poisson: bool = False) -> tuple[Image.Image, dict]:
+            colors: bool = False, warp: bool = False, poisson: bool = False,
+            color_gain: bool = False) -> tuple[Image.Image, dict]:
     """Paste the masked area of the transformed (and optionally fixed) raw image into the original."""
     original = original.convert("RGB")
     raw = raw.convert("RGB").resize(original.size, Image.BICUBIC)
@@ -237,7 +265,7 @@ def compose(original: Image.Image, raw: Image.Image, mask: Image.Image,
     if warp and keep.any():
         m = fix_warp(o.astype(np.uint8), np.clip(m, 0, 255).astype(np.uint8), keep).astype(np.float64)
     if colors and keep.any():
-        m = match_colors(o, m, keep).astype(np.float64)
+        m = match_colors(o, m, keep, color_gain).astype(np.float64)
     weight = mk / 255.0
     if poisson:
         weight = _seam_weight(o, m, mk > 127)

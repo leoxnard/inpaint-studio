@@ -159,10 +159,12 @@ Chosen under **Area to change** in Create.
 - **Extend canvas** – outpainting: pick the new shape with the aspect tiles under Size and drag the image
   to where it should sit. Drag a corner handle to make the image smaller (down to ¼, the opposite corner
   stays), so there is new area on more sides; double-click resets. The new area is filled with stretched, blurred edge colours and inpainted
-  (with a small overlap into the old image so the border blends). The model draws a slightly lighter or
-  darker halo where its new area starts, so the blend starts after it; **Match colours at the border**
-  (on by default) also shifts the new area, line by line along the border, to the colours of the old
-  image next to it. The blended result is saved as `<run>_fixed.png`.
+  (with a small overlap into the old image so the border blends). By default the model redraws the whole
+  canvas and the new area is pasted around the old image (like free edit + paste), with a seamless edge
+  and, with **Match colours at the border** (on by default), the colours matched on the old image. This gave
+  clean borders where generating only the new area (`outpaint.method: "inpaint"`) left a blurred band.
+  The fixed result is saved as `<run>_fixed.png`. **Erase** (under the stage) removes parts of the image so
+  they are generated new as well; a hidden prompt line tells the model to replace the blurred fill.
 
 **Edit around the mask only** (under the area cards, for masked modes) is crop & stitch: only a crop around
 the mask goes to the model, scaled to the full working size, and the result is pasted back into the

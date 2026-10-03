@@ -553,7 +553,10 @@ async def adjust_run(run: dict, req: AlignReq) -> dict:
         _align_cache[run_id] = tuple([await _fetch_view(run[k]) for k in ("before_url", "raw_url", "mask_url")])
     original, raw, mask = _align_cache[run_id]
     feather = int(run.get("params", {}).get("feather") or 0)
-    if feather > 0 and "type=input" in run["mask_url"]:  # newer runs keep only the uploaded hard mask
+    outpaint = bool(run.get("params", {}).get("outpaint"))
+    if outpaint:   # extend canvas: wide fade into the old image, colour gain instead of a seam cut
+        mask = align.outpaint_paste_mask(mask.resize(raw.size), 0.09 * max(raw.size))
+    elif feather > 0 and "type=input" in run["mask_url"]:  # newer runs keep only the uploaded hard mask
         mask = mask.convert("L").filter(ImageFilter.GaussianBlur(max(1.0, feather / 3)))
     result: dict[str, Any] = {}
     dx, dy, scale = req.dx, req.dy, req.scale
@@ -563,8 +566,9 @@ async def adjust_run(run: dict, req: AlignReq) -> dict:
         result["confidence"] = est["confidence"]
     if not 0.8 <= scale <= 1.25 or abs(dx) > 500 or abs(dy) > 500:
         raise HTTPException(400, "alignment values out of range")
-    opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson}
-    composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts)
+    opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson and not outpaint}
+    composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts,
+                                              color_gain=outpaint)
     _, base = await asyncio.to_thread(align.compose, original, raw, mask, 0, 0, 1.0)
     name = "aligned.png" if req.save else "aligned_preview.jpg"
     composed.save(RUNS / run_id / name, quality=92)
@@ -781,7 +785,7 @@ async def complete_run(job: dict, pid: str) -> None:
     run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,
                mask_url=input_mask_url(params["mask"]) if use_mask else None)
     post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")}
-    if params.get("outpaint") and before and raw:
+    if params.get("outpaint") and params.get("mode") != "paste" and before and raw:
         try:  # the plain paste stays available as <run>.png
             await outpaint_fix(run, params, view_url(before), view_url(raw))
         except Exception as e:
@@ -929,8 +933,14 @@ async def outpaint_input(params: dict, run_id: str) -> None:
         files.append(await upload_to_comfy(buf.getvalue(), name, SUBFOLDER))
     if holes is not None:
         params["outpaint_holes"] = files[2]
+    # "inpaint": only the new area is generated (noise mask). "paste": the model redraws the whole canvas and the
+    # new area is pasted around the old image, with the usual paste fixes (alignment, colours, seam)
+    # paste is the default: compared on 2026-10-03 (UC Q8, 20 steps), inpaint left a blurred band along the old edge
+    method = "inpaint" if o.get("method") == "inpaint" else "paste"
     params.update(orig_image=params["image"], orig_size=list(orig.size), image=files[0], mask=files[1], use_mask=True,
-                  mode="inpaint", src_w=cw, src_h=ch, crop_stitch=False)
+                  mode=method, src_w=cw, src_h=ch, crop_stitch=False, denoise=1.0)
+    if method == "paste":   # the paste fixes, measured on the old image: colours (the checkbox) and a seamless edge
+        params.update(post_colors=bool(params.get("outpaint_colors", True)), post_poisson=True, post_warp=False)
     fit_size(params)
 
 

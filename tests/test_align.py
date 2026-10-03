@@ -68,3 +68,15 @@ def test_fixes_undo_warp_and_colour_drift():
     assert err(colors=True) < plain * 0.75
     assert err(colors=True, warp=True) < plain * 0.3
     assert err(colors=True, warp=True, poisson=True) < plain
+
+
+def test_outpaint_paste_mask_fades_only_into_the_old_image():
+    import numpy as np
+    from PIL import Image
+
+    import align
+    m = np.zeros((100, 300), np.uint8)
+    m[:, :100] = 255                       # new area on the left, old image from x = 100
+    out = np.asarray(align.outpaint_paste_mask(Image.fromarray(m), 40))
+    assert (out[:, :100] == 255).all()     # the new area stays fully generated
+    assert out[50, 110] > 128 > out[50, 130] and (out[:, 145:] == 0).all()

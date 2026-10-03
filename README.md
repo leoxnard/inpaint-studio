@@ -1,4 +1,7 @@
-<img src="design/app-icon.svg" alt="" width="96" height="96">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design/app-icon-dark.svg">
+  <img src="design/app-icon.svg" alt="" width="96" height="96">
+</picture>
 
 # Inpaint Studio
 
@@ -134,7 +137,8 @@ window (no browser tab). Downloads go to ~/Downloads, View → Open in Browser o
 browser. Closing the window keeps the server running (click the Dock icon to get it back); quitting
 stops the server (and the ComfyUI it started) and warns first if jobs are still running. Rebuilding
 quits a running copy and opens the new one. The app is only ad-hoc signed: on another Mac open it via
-right-click → Open the first time.
+right-click → Open the first time. The icon (light + dark, switches with the system appearance) comes
+from `design/app-icon*.svg`; after changing them run `macos/make-icons.sh` (needs Xcode) and commit its outputs.
 Logs: `~/Library/Logs/InpaintStudio.log`, `~/Library/Logs/InpaintStudio-ComfyUI.log`.
 
 ## Run

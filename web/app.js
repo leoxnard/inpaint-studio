@@ -624,6 +624,12 @@ const LORA_KEY = "inpaint-studio-loras-v1", MAX_LORAS = 3;
 state.loras = (() => { try { return JSON.parse(localStorage.getItem(LORA_KEY) || "[]"); } catch { return []; } })();
 const saveLoras = () => { try { localStorage.setItem(LORA_KEY, JSON.stringify(state.loras)); } catch { /* private mode */ } };
 
+// LoRAs from Downloads are known: their title, model family and suggested strength
+const loraInfo = (file) => (state.setup?.components || []).find((c) => c.kind === "lora" && c.file === file);
+const loraFits = (file) => { const i = loraInfo(file); return !i || i.families.includes(currentFamily()); };
+const loraGroup = (file) => Object.entries(state.setup?.lora_groups || {})
+  .find(([, fams]) => loraInfo(file)?.families.some((f) => fams.includes(f)))?.[0] || "another model";
+
 function renderLoras() {
   const avail = state.models?.loras || [];
   const box = $("loraRows");
@@ -631,9 +637,19 @@ function renderLoras() {
   state.loras.forEach((l, i) => {
     const row = document.createElement("div"); row.className = "lora-row";
     const sel = document.createElement("select"); sel.setAttribute("aria-label", "LoRA file");
-    for (const v of new Set([...avail, l.name].filter(Boolean))) sel.add(new Option(v + (avail.includes(v) ? "" : " (missing)"), v));
+    for (const v of new Set([...avail, l.name].filter(Boolean))) {
+      const label = loraInfo(v) ? `${loraGroup(v)}: ${loraInfo(v).title}` : v;
+      sel.add(new Option(label + (avail.includes(v) ? "" : " (missing)"), v));
+    }
     sel.value = l.name || "";
-    sel.onchange = () => { l.name = sel.value; saveLoras(); };
+    sel.title = sel.selectedOptions[0]?.textContent || "";
+    sel.onchange = () => {
+      l.name = sel.value;
+      const info = loraInfo(l.name);
+      if (info) l.strength = info.strength;
+      saveLoras();
+      renderLoras();
+    };
     const str = document.createElement("input"); str.type = "number"; str.min = "-2"; str.max = "2"; str.step = "0.05";
     str.value = l.strength ?? 1; str.setAttribute("aria-label", "LoRA strength");
     str.oninput = () => { l.strength = parseFloat(str.value) || 0; saveLoras(); };
@@ -643,10 +659,16 @@ function renderLoras() {
     box.append(row);
   });
   $("loraAdd").disabled = !avail.length || state.loras.length >= MAX_LORAS;
-  $("loraHint").textContent = avail.length ? "Applied to the diffusion model, in this order." : "No LoRAs found. Put .safetensors files into models/loras and reload.";
+  const wrong = state.loras.filter((l) => l.name && !loraFits(l.name));
+  $("loraHint").textContent = !avail.length ? "No LoRAs yet. Download some in Downloads → LoRAs, or put .safetensors files into models/loras."
+    : wrong.length ? `${wrong.map((l) => loraInfo(l.name).title).join(", ")}: made for ${loraGroup(wrong[0].name)}, not for this model.`
+    : "Applied to the diffusion model, in this order.";
+  $("loraHint").classList.toggle("warn-text", wrong.length > 0);
 }
 $("loraAdd").onclick = () => {
-  state.loras.push({ name: state.models?.loras?.[0] || "", strength: 1 });
+  const avail = state.models?.loras || [];
+  const name = avail.find((f) => loraInfo(f) && loraFits(f)) || avail[0] || "";
+  state.loras.push({ name, strength: loraInfo(name)?.strength ?? 1 });
   saveLoras();
   renderLoras();
 };
@@ -3129,9 +3151,11 @@ const setup = createSetup({
   },
   // downloads or deletions while the page stays open: refresh the model picker
   onChanged: (data) => {
+    const loraIds = (d) => (d?.components || []).filter((c) => c.kind === "lora" && c.installed).map((c) => c.id).join();
+    const lorasChanged = loraIds(data) !== loraIds(state.setup);
     state.setup = data;
     if (appStarted && data.mask_available !== state.maskAvailable) { location.reload(); return; }
-    if (appStarted) { renderModelPicker(); renderUpscalers(); }
+    if (appStarted) { renderModelPicker(); renderUpscalers(); if (lorasChanged) loadModels(); }
   },
 });
 $("setupBtn").onclick = showSetup;
@@ -3161,7 +3185,7 @@ $("upscale").addEventListener("change", syncUpscaler);
   setInterval(pollStatus, 5000);
   let info = null;
   try { info = await api("/api/setup"); } catch { /* old server without setup: just start the app */ }
-  if (info) { state.setup = info; applyMaskMode(info.mask_available); renderUpscalers(); }
+  if (info) { state.setup = info; applyMaskMode(info.mask_available); renderUpscalers(); renderLoras(); }
   if (info && !info.ready) showSetup();
   else showApp();
 })();
@@ -3285,6 +3309,7 @@ function initModelPicker() {
     if (p) applyPresetDefaults(p);
     resetOverrides();
     syncTaskUi();
+    renderLoras();
     saveForm();
   });
   $("quant").addEventListener("change", () => { updateOverrideLabels(); saveForm(); });
@@ -3313,6 +3338,27 @@ function updateUpscaleSizes() {
   };
   const factors = [...new Set([2, 4, f])].sort((a, b) => a - b);
   $("upscaleSizes").innerHTML = `${state.srcW ? "Now" : "Example"}: ${w} × ${h} px<br>${factors.map(line).join("<br>")}`;
+  updateUpscaleWarn(w, h, f);
+}
+
+// SeedVR2 samples the whole image in one go (only the VAE is tiled), so memory grows with the output size.
+// Calibrated on a 32 GB Mac: ×4 to 15.8 MP took ~40 GB and swapped for 25+ min, ×2 to 3.9 MP ran in ~1 min.
+const SEEDVR2_BYTES_PER_MP = 2e9;
+function updateUpscaleWarn(w, h, f) {
+  const warn = $("upscaleWarn");
+  const comps = state.setup?.components || [];
+  const up = comps.find((c) => c.key === $("upscaleModel").value);
+  const budget = state.setup?.system?.gpu_budget;
+  warn.hidden = true;
+  if (up?.engine !== "seedvr2" || !budget) return;
+  const weights = up.size + (up.needs || []).reduce((s, k) => s + (comps.find((c) => c.key === k)?.size || 0), 0);
+  const need = weights + SEEDVR2_BYTES_PER_MP * (w * f) * (h * f) / 1e6;
+  if (need <= budget) return;
+  const maxF = Math.floor(2 * Math.sqrt(Math.max(0, budget - weights) / SEEDVR2_BYTES_PER_MP * 1e6 / (w * h))) / 2;
+  const gb = (b) => Math.round(b / 2 ** 30);
+  warn.textContent = `Needs about ${gb(need)} GB, but only ~${gb(budget)} GB of ${gb(state.setup.system.ram)} GB RAM fit on the GPU. `
+    + `It will swap and can take very long.` + (maxF >= 1 ? ` Up to ×${maxF} fits.` : "");
+  warn.hidden = false;
 }
 $("upscaleFactor").addEventListener("input", updateUpscaleSizes);
 

@@ -200,7 +200,8 @@ async function refreshSize() {
     }
   }
   if (!state.imageName) return null;
-  const body = { width: state.srcW, height: state.srcH, megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10) };
+  const dims = outpaintOn() ? outpaintCanvas() : { w: state.srcW, h: state.srcH };   // extend canvas: the new canvas counts
+  const body = { width: dims.w, height: dims.h, megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10) };
   if (!(body.megapixels > 0) || !(body.resolution > 0)) return null;
   let applied = false;
   try {
@@ -341,6 +342,7 @@ function draw() {
   empty.hidden = !!state.imgEl;
   display.hidden = !state.imgEl;
   if (!state.imgEl || !w) return;
+  if (outpaintOn()) { drawOutpaint(); return; }
   if (display.width !== w || display.height !== h) { display.width = w; display.height = h; }
   dctx.clearRect(0, 0, w, h);
   dctx.drawImage(state.imgEl, 0, 0, w, h);
@@ -373,6 +375,71 @@ function draw() {
     dctx.restore();
   }
 }
+
+// ------------------------------------------------------------------ extend canvas (outpaint)
+// The image sits on a larger canvas with the aspect from the Size tiles; it is dragged into place and the
+// new area is generated (the server pads the image and masks the new area).
+function outpaintOn() { return state.task !== "generate" && $("mode").value === "outpaint" && !upscaling(); }
+state.outpaintPos = { fx: 0.5, fy: 0.5 };   // where the image sits in the free space (0 = left/top, 1 = right/bottom)
+
+function outpaintCanvas() {
+  const [aw, ah] = $("aspect").value.split(":").map(Number);
+  const sw = state.srcW, sh = state.srcH, a = aw / ah;
+  const w = a > sw / sh ? Math.round(sh * a) : sw, h = a > sw / sh ? sh : Math.round(sw / a);
+  return { w, h, x: Math.round(state.outpaintPos.fx * (w - sw)), y: Math.round(state.outpaintPos.fy * (h - sh)) };
+}
+
+function drawOutpaint() {
+  const c = outpaintCanvas();
+  const s = (state.size?.work_w || c.w) / c.w;   // the size report is for the canvas in this mode
+  const w = Math.round(c.w * s), h = Math.round(c.h * s);
+  if (display.width !== w || display.height !== h) { display.width = w; display.height = h; }
+  dctx.fillStyle = "#3a3a3a";
+  dctx.fillRect(0, 0, w, h);
+  dctx.fillStyle = "#4a4a4a";   // checkerboard: this area is new
+  const q = Math.max(8, Math.round(w / 40));
+  for (let y = 0; y < h; y += q) for (let x = (y / q) % 2 ? q : 0; x < w; x += 2 * q) dctx.fillRect(x, y, q, q);
+  dctx.drawImage(state.imgEl, c.x * s, c.y * s, state.srcW * s, state.srcH * s);
+  const lw = Math.max(1.5, w / display.getBoundingClientRect().width * 1.5);
+  dctx.save();
+  dctx.lineWidth = lw;
+  dctx.setLineDash([lw * 5, lw * 4]);
+  dctx.strokeStyle = "#fff";
+  dctx.strokeRect(c.x * s, c.y * s, state.srcW * s, state.srcH * s);
+  dctx.restore();
+}
+
+let opDrag = null;
+display.addEventListener("pointerdown", (e) => {
+  if (!outpaintOn() || !state.imgEl || e.button !== 0) return;
+  e.stopImmediatePropagation();
+  const c = outpaintCanvas();
+  opDrag = { x: e.clientX, y: e.clientY, fx: state.outpaintPos.fx, fy: state.outpaintPos.fy, c };
+  display.setPointerCapture(e.pointerId);
+  display.classList.add("dragging");
+}, true);
+display.addEventListener("pointermove", (e) => {
+  if (!opDrag) return;
+  e.stopImmediatePropagation();
+  const r = display.getBoundingClientRect(), c = opDrag.c;
+  const perPx = c.w / r.width;   // source pixels per screen pixel
+  const freeW = c.w - state.srcW, freeH = c.h - state.srcH;
+  const clamp = (v) => Math.min(1, Math.max(0, v));
+  state.outpaintPos = {
+    fx: freeW ? clamp(opDrag.fx + (e.clientX - opDrag.x) * perPx / freeW) : 0.5,
+    fy: freeH ? clamp(opDrag.fy + (e.clientY - opDrag.y) * perPx / freeH) : 0.5,
+  };
+  render();
+}, true);
+for (const ev of ["pointerup", "pointercancel"]) {
+  display.addEventListener(ev, (e) => {
+    if (!opDrag) return;
+    e.stopImmediatePropagation();
+    opDrag = null;
+    display.classList.remove("dragging");
+  }, true);
+}
+$("aspect").addEventListener("change", () => { if (outpaintOn()) { refreshSizeDebounced(); render(); } });
 
 // ------------------------------------------------------------------ crop & stitch
 // Optional: only a crop around the mask is edited (more detail) and pasted back into the full-size original.
@@ -878,6 +945,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     clean_overlays: $("cleanOverlays").checked,
+    outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas()) : undefined,
     crop_stitch: cropOn() || undefined, crop_context: cropOn() ? num("cropContext") / 100 : undefined, match_ref: $("matchRef").checked,
     post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
@@ -2024,6 +2092,8 @@ function initApp() {
 }
 
 function syncModeUi() {
+  document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
+  refreshSizeDebounced();
   const notPaste = $("mode").value !== "paste";
   $("keepNoteRow").hidden = notPaste;
   $("postFixRow").hidden = notPaste;
@@ -2705,7 +2775,7 @@ const MASK_TEXTS = {
 };
 
 // masks are used when SAM3 is installed and the mode is not "No mask"
-function maskOn() { return !!state.maskAvailable && $("mode").value !== "none" && !upscaling(); }
+function maskOn() { return !!state.maskAvailable && !["none", "outpaint"].includes($("mode").value) && !upscaling(); }
 
 
 // Masking needs SAM3. Without it the UI hides everything about masks and never sends one.
@@ -2720,6 +2790,7 @@ function applyMaskMode(available) {
 function applyMaskTexts() {
   const i = maskOn() ? 0 : 1;
   document.body.classList.toggle("no-mask", !maskOn());
+  document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
   $("batchSubmitNext").title = MASK_TEXTS.next[i];
   $("batchNoMaskAll").textContent = MASK_TEXTS.all[i];
   $("batchNoMaskAll").title = MASK_TEXTS.allTitle[i];

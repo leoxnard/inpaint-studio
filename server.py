@@ -49,7 +49,7 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
                   "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of", "color_correction", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -875,13 +875,42 @@ async def crop_input(params: dict, run_id: str) -> None:
         files.append(await upload_to_comfy(buf.getvalue(), name, SUBFOLDER))
     params.update(orig_image=params["image"], orig_mask=params["mask"], crop_box=box, orig_size=list(orig.size),
                   image=files[0], mask=files[1], src_w=box["w"], src_h=box["h"], upscale=0)
-    # the crop has another shape than the whole image: keep it below the token limit and match the encoder size
-    if not graphs.size_report(box["w"], box["h"], params["megapixels"], params["resolution"])["safe"]:
-        params.update({k: v for k, v in graphs.safe_settings(box["w"], box["h"], params["megapixels"], params["resolution"]).items()
+    fit_size(params)
+
+
+def fit_size(params: dict) -> None:
+    """The input got another shape (crop, outpaint canvas): keep it below the token limit and match the encoder size."""
+    w, h = params["src_w"], params["src_h"]
+    if not graphs.size_report(w, h, params["megapixels"], params["resolution"])["safe"]:
+        params.update({k: v for k, v in graphs.safe_settings(w, h, params["megapixels"], params["resolution"]).items()
                        if k in ("megapixels", "resolution")})
     if params.get("match_ref", True):
-        work = graphs.size_report(box["w"], box["h"], params["megapixels"], params["resolution"])
+        work = graphs.size_report(w, h, params["megapixels"], params["resolution"])
         params["resolution"] = graphs.matching_resolution(work["work_w"], work["work_h"])
+
+
+async def outpaint_input(params: dict, run_id: str) -> None:
+    """Extend canvas: the image is placed on a larger canvas and the new area is inpainted."""
+    o = params["outpaint"]
+    try:
+        cw, ch, x, y = (int(o[k]) for k in ("canvas_w", "canvas_h", "x", "y"))
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(400, "outpaint needs canvas_w, canvas_h, x and y") from e
+    orig = await load_input(params["image"])
+    if cw * ch > 80_000_000:
+        raise HTTPException(400, "the new canvas is too large")
+    try:
+        canvas, mask = await asyncio.to_thread(prepare.pad, orig, x, y, cw, ch)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    files = []
+    for img, name in ((canvas, f"{run_id}_canvas.png"), (mask, f"{run_id}_canvasmask.png")):
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        files.append(await upload_to_comfy(buf.getvalue(), name, SUBFOLDER))
+    params.update(orig_image=params["image"], orig_size=list(orig.size), image=files[0], mask=files[1], use_mask=True,
+                  mode="inpaint", src_w=cw, src_h=ch, crop_stitch=False)
+    fit_size(params)
 
 
 async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:
@@ -930,6 +959,8 @@ async def create_job(params: dict):
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     if params.get("crop_stitch") and params.get("use_mask") and params.get("mask") and params.get("task", "edit") == "edit":
         await crop_input(params, run_id)
+    elif params.get("outpaint") and params.get("task", "edit") == "edit" and params.get("image"):
+        await outpaint_input(params, run_id)
     rep = graphs.size_report(params["src_w"], params["src_h"], params["megapixels"], params["resolution"])
     params["work_w"], params["work_h"] = rep["work_w"], rep["work_h"]
     params["prefix"] = f"InpaintStudio/{run_id}"

@@ -663,3 +663,8 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 .crop-opts { display: grid; gap: 8px; margin-top: 12px; }
 .crop-opts .crop-ctx { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; }
 .crop-opts .crop-ctx input { grid-column: 1 / -1; width: 100%; }
+
+/* extend canvas: the aspect tiles pick the new shape, the image is dragged on the stage */
+body.mode-outpaint:not(.task-generate) #aspectTiles.gen-only { display: grid !important; }
+body.mode-outpaint:not(.task-generate) #display { cursor: grab; }
+body.mode-outpaint:not(.task-generate) #display.dragging { cursor: grabbing; }

@@ -107,11 +107,13 @@
           <button role="radio" data-mode="none"><b>Whole image</b><span>No mask. The prompt can change everything.</span></button>
           <button role="radio" data-mode="inpaint"><b>Masked area, inpaint</b><span>Only the masked pixels are regenerated.</span></button>
           <button role="radio" data-mode="paste"><b>Masked area, free edit + paste</b><span>Edits freely, then pastes the masked area back.</span></button>
+          <button role="radio" data-mode="outpaint"><b>Extend canvas</b><span>Pick a new shape under Size and drag the image into place; the new area is filled in.</span></button>
         </div>
         <select id="mode" aria-label="Area to change" hidden>
           <option value="paste" selected>Free edit + paste</option>
           <option value="inpaint">Inpaint (mask only)</option>
           <option value="none">No mask (edit whole image)</option>
+          <option value="outpaint">Extend canvas</option>
         </select>
         <div class="needs-mask crop-opts">
           <label class="check" title="Only a crop around the mask goes to the model, at the full working size, and the result is pasted back into the original at its full resolution. Best for small changes in large photos.">

@@ -272,6 +272,8 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
     """
     family = p.get("family", "qwen21")
     generate = p.get("task") == "generate"
+    # empty when the page loaded before ComfyUI listed its options
+    p = {**p, "sampler": p.get("sampler") or "euler", "scheduler": p.get("scheduler") or "simple"}
     g: dict[str, Any] = {
         "vae": {"class_type": "VAELoader", "inputs": {"vae_name": p["vae"]}},
         "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": p["clip"], "type": CLIP_TYPES[family],

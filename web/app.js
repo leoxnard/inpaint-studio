@@ -128,6 +128,8 @@ async function pollStatus() {
     if (s.comfy) {
       pill.className = "pill online";
       $("statusText").textContent = "ComfyUI running";
+      // the page loaded before ComfyUI was up: the sampler/scheduler lists are still empty
+      if (appStarted && !$("sampler").options.length) loadModels();
     } else {
       pill.className = "pill offline";
       $("statusText").textContent = "ComfyUI offline";

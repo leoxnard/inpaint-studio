@@ -33,6 +33,14 @@ def test_edit_graph_with_mask_has_composite():
     assert "composite" in g and "feather" in g
 
 
+def test_empty_sampler_and_scheduler_fall_back():
+    p = dict(image="a.png", mask="m.png", use_mask=True, megapixels=0.95, resolution=1008, prompt="x",
+             steps=4, denoise=1.0, seed=1, cfg=1.0, sampler="", scheduler="", feather=12,
+             unet="qwen-image-2.1-UC-Q4_K_M.gguf", clip="c", vae="v", work_w=1312, work_h=736)
+    inputs = graphs.build_edit_graph(p)["sampler"]["inputs"]
+    assert (inputs["sampler_name"], inputs["scheduler"]) == ("euler", "simple")
+
+
 def test_edit_graph_without_mask_uses_encoder_latent():
     p = dict(image="a.png", mask=None, use_mask=True, megapixels=0.95, resolution=1008, prompt="x",
              steps=4, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple",

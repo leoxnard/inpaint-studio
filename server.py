@@ -49,7 +49,7 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
                   "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of", "color_correction", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -780,6 +780,11 @@ async def complete_run(job: dict, pid: str) -> None:
     run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,
                mask_url=input_mask_url(params["mask"]) if use_mask else None)
     post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")}
+    if params.get("outpaint") and before and raw:
+        try:  # the plain paste stays available as <run>.png
+            await outpaint_fix(run, params, view_url(before), view_url(raw))
+        except Exception as e:
+            print(f"outpaint blend failed for {run_id}: {e!r}")
     if params.get("mode") == "paste" and use_mask and raw and any(post.values()):
         try:  # automatic fixes; the plain paste stays available as <run>.png
             await adjust_run(run, AlignReq(save=True, **post))
@@ -917,6 +922,26 @@ async def outpaint_input(params: dict, run_id: str) -> None:
     fit_size(params)
 
 
+async def outpaint_fix(run: dict, params: dict, before_url: str, raw_url: str) -> None:
+    """Extend canvas: blend the generated border past the model's halo, optionally colour-matched (align.outpaint_blend);
+    saved like an alignment (aligned.png in the run dir, <run>_fixed.png next to the result)."""
+    run_id, o = run["id"], params["outpaint"]
+    before, raw = await _fetch_view(before_url), await _fetch_view(raw_url)
+    s = raw.size[0] / int(o["canvas_w"])   # canvas px -> working px
+    ow, oh = params["orig_size"]
+    box = (round(int(o["x"]) * s), round(int(o["y"]) * s), round((int(o["x"]) + ow) * s), round((int(o["y"]) + oh) * s))
+    fixed = await asyncio.to_thread(align.outpaint_blend, before, raw, box, round(prepare.OUTPAINT_OVERLAP * s),
+                                    bool(params.get("outpaint_colors", True)))
+    fixed.save(RUNS / run_id / "aligned.png")
+    run["aligned"] = {"outpaint": True, "colors": bool(params.get("outpaint_colors", True)),
+                      "url": f"/data/runs/{run_id}/aligned.png?t={int(time.time() * 1000)}"}
+    out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
+    try:
+        fixed.save(out_dir / "InpaintStudio" / f"{run_id}_fixed.png")
+    except OSError:
+        pass
+
+
 async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:
     """Pastes the finished crop (the automatically fixed one if there is one) back into the original."""
     run_id, box = run["id"], params["crop_box"]
@@ -925,7 +950,7 @@ async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:
     orig = await load_input(params["orig_image"])
     mask = (await _fetch_view(input_mask_url(params["orig_mask"]))).convert("L")
     feather = float(params.get("feather") or 0) * box["w"] / max(1, params["work_w"])   # working px -> source px
-    full = await asyncio.to_thread(prepare.stitch, orig, result, mask, box, feather / 3)
+    full = await asyncio.to_thread(prepare.stitch, orig, result, mask, box, feather / 3, bool(params.get("crop_grain", True)))
     out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
     (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(full.save, out_dir / "InpaintStudio" / f"{run_id}_full.png")

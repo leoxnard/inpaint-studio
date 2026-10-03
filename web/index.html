@@ -122,8 +122,12 @@
             <input type="checkbox" id="cropStitch"> Edit around the mask only (keeps full resolution)</label>
           <label class="crop-ctx">Context around the mask <output id="cropContextOut">50 %</output>
             <input type="range" id="cropContext" min="25" max="150" step="5" value="50"></label>
+          <label class="check" title="The edit comes out clean; this adds the photo's grain (measured around the mask) inside the mask so the pasted area does not look smoother than the rest.">
+            <input type="checkbox" id="cropGrain" checked> Match film grain</label>
           <div class="hint" id="cropInfo"></div>
         </div>
+        <label class="check outpaint-only" title="Shifts the new area's colour and brightness, line by line along the border, to match the old image next to it, fading out away from the border.">
+          <input type="checkbox" id="outpaintColors" checked> Match colours at the border</label>
       </section>
 
       <p class="sec hint gen-only">To keep working on a result, open it in <a href="#runs">Runs</a> and choose “Use result as new input”.</p>

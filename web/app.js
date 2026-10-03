@@ -11,7 +11,7 @@ const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays",
-  "upscaleModel", "upscaleFactor", "colorCorrection", "cropStitch", "cropContext",
+  "upscaleModel", "upscaleFactor", "colorCorrection", "cropStitch", "cropContext", "cropGrain", "outpaintColors",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -982,6 +982,8 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     clean_overlays: $("cleanOverlays").checked,
     loras: state.loras.filter((l) => l.name && l.strength),
     outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas()) : undefined,
+    outpaint_colors: outpaintOn() ? $("outpaintColors").checked : undefined,
+    crop_grain: cropOn() ? $("cropGrain").checked : undefined,
     crop_stitch: cropOn() || undefined, crop_context: cropOn() ? num("cropContext") / 100 : undefined, match_ref: $("matchRef").checked,
     post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
@@ -1673,7 +1675,7 @@ function renderDetails(run, status) {
   $("loadSettings").title = run.params ? "Switch to Create with this run's settings (the image stays)"
     : "The settings of this run are not known to this page (it was queued elsewhere)";
   $("useResult").hidden = !(done && run.resultUrl);
-  $("alignBtn").hidden = !(done && run.serverId && run.rawUrl && run.maskUrl);
+  $("alignBtn").hidden = !(done && run.serverId && run.rawUrl && run.maskUrl && !run.params?.outpaint);
   $("downloadBtn").hidden = !(done && run.resultUrl);
   if (done && run.resultUrl) {
     $("downloadBtn").href = run.aligned?.url || run.resultUrl;

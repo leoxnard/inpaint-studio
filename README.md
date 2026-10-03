@@ -154,13 +154,18 @@ Chosen under **Area to change** in Create.
   or the inpainted background looks out of context.
 - **Extend canvas** – outpainting: pick the new shape with the aspect tiles under Size and drag the image
   to where it should sit. The new area is filled with stretched, blurred edge colours and inpainted
-  (with a small overlap into the old image so the border blends).
+  (with a small overlap into the old image so the border blends). The model draws a slightly lighter or
+  darker halo where its new area starts, so the blend starts after it; **Match colours at the border**
+  (on by default) also shifts the new area, line by line along the border, to the colours of the old
+  image next to it. The blended result is saved as `<run>_fixed.png`.
 
 **Edit around the mask only** (under the area cards, for masked modes) is crop & stitch: only a crop around
 the mask goes to the model, scaled to the full working size, and the result is pasted back into the
 original at its full resolution. Outside the mask the original pixels stay exactly the same. Use it for
 small changes in large photos: a 20 MP photo otherwise comes back at ~1 MP. **Context** sets how much
-around the mask goes along (more context = better fit, less detail). The stage shows the crop as a dashed box.
+around the mask goes along (more context = better fit, less detail). The stage shows the crop as a dashed box. The
+edit comes out without the photo's grain; **Match film grain** (on by default) measures the grain around
+the mask (strength and how much it is the same in all colour channels) and adds matching noise inside it.
 
 The mask canvas zooms with ⌘/Ctrl + scroll or a pinch (1–8×); scroll or Space + drag pans, `0` resets.
 

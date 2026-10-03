@@ -54,16 +54,40 @@ def crop(img: Image.Image, box: dict[str, int]) -> Image.Image:
     return img.crop((box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"]))
 
 
+def grain_std(img: np.ndarray, where: np.ndarray) -> np.ndarray:
+    """Strength of the fine noise (film grain, sensor noise) per channel: std of the high-pass where True."""
+    hp = img - cv2.GaussianBlur(img, (0, 0), 1.5)
+    return hp[where].std(axis=0) if where.any() else np.zeros(img.shape[-1], np.float32)
+
+
 def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: dict[str, int],
-           feather: float = 0) -> Image.Image:
+           feather: float = 0, grain: bool = False, seed: int = 0) -> Image.Image:
     """Paste the edited crop back into the original. mask is the full-size mask (source pixels);
-    feather is a blur radius in source pixels. Pixels outside the (feathered) mask stay untouched."""
+    feather is a blur radius in source pixels. Pixels outside the (feathered) mask stay untouched.
+    grain: the edit comes out clean, so add the original's grain (measured outside the mask in the crop)
+    minus what the edit already has, as fine noise inside the mask."""
     original = original.convert("RGB")
     mask = mask.convert("L").resize(original.size, Image.BILINEAR)
     m = crop(mask, box)
     if feather > 0:
         m = m.filter(ImageFilter.GaussianBlur(feather))
     region = result.convert("RGB").resize((box["w"], box["h"]), Image.LANCZOS)
+    if grain:
+        o = np.asarray(crop(original, box), np.float32)
+        r = np.asarray(region, np.float32)
+        hard = np.asarray(crop(mask, box)) > 127
+        need = np.sqrt(np.maximum(grain_std(o, ~hard) ** 2 - grain_std(r, hard) ** 2, 0))
+        if need.max() > 0.5:
+            # film / sensor grain is mostly the same in all channels: mix shared and per-channel noise like the original
+            hp = (o - cv2.GaussianBlur(o, (0, 0), 1.5))[~hard]
+            c = np.corrcoef(hp.T) if len(hp) > 10 else np.eye(3)
+            corr = float(np.clip((c[0, 1] + c[0, 2] + c[1, 2]) / 3, 0, 1))
+            rng = np.random.default_rng(seed)
+            noise = (np.sqrt(corr) * rng.standard_normal(r.shape[:2] + (1,))
+                     + np.sqrt(1 - corr) * rng.standard_normal(r.shape)).astype(np.float32)
+            noise = cv2.GaussianBlur(noise, (0, 0), 0.6)   # grain is a little coarser than single pixels
+            noise /= grain_std(noise, np.ones(noise.shape[:2], bool)).clip(1e-6)
+            region = Image.fromarray(np.clip(r + noise * need, 0, 255).astype(np.uint8))
     out = original.copy()
     out.paste(region, (box["x"], box["y"]), m)
     return out

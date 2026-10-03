@@ -84,3 +84,19 @@ def test_size_endpoint_reports_the_crop():
                                     "mask_bbox": [1000, 1000, 1400, 1200], "crop_context": 0.5}).json()
     assert rep["crop"]["x"] == 800 and rep["crop"]["w"] == 800 and rep["crop"]["h"] == 512
     assert rep["crop"]["scale"] > 1   # a small crop is scaled up to the working size
+
+
+def test_stitch_adds_the_originals_grain_inside_the_mask():
+    rng = np.random.default_rng(5)
+    base = np.full((400, 400, 3), 128, np.float32)
+    grainy = Image.fromarray(np.clip(base + rng.normal(0, 8, base.shape), 0, 255).astype(np.uint8))
+    m = np.zeros((400, 400), np.uint8)
+    m[150:250, 150:250] = 255
+    box = {"x": 0, "y": 0, "w": 400, "h": 400}
+    clean = Image.new("RGB", (400, 400), (128, 128, 128))
+    hp = lambda img: prepare.grain_std(np.asarray(img, np.float32), m > 127).mean()
+    assert hp(prepare.stitch(grainy, clean, Image.fromarray(m), box)) < 0.5
+    with_grain = prepare.stitch(grainy, clean, Image.fromarray(m), box, grain=True)
+    target = prepare.grain_std(np.asarray(grainy, np.float32), m == 0).mean()
+    assert abs(hp(with_grain) - target) < 0.15 * target
+    assert (np.asarray(with_grain)[m == 0] == np.asarray(grainy)[m == 0]).all()

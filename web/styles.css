@@ -690,3 +690,5 @@ body.mode-outpaint:not(.task-generate) #display.dragging { cursor: grabbing; }
 .lora-box { display: grid; gap: 8px; }
 .lora-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px auto; gap: 6px; align-items: center; }
 .lora-row select { min-width: 0; }
+.outpaint-only { display: none; margin-top: 12px; }
+body.mode-outpaint:not(.task-generate) .outpaint-only { display: flex; }

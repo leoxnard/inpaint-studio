@@ -169,6 +169,53 @@ def match_colors(original: np.ndarray, raw: np.ndarray, keep: np.ndarray) -> np.
     return np.clip(out * 255, 0, 255)
 
 
+def _smoothstep(t: np.ndarray) -> np.ndarray:
+    t = np.clip(t, 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def outpaint_blend(original: Image.Image, raw: Image.Image, box: tuple[int, int, int, int], overlap: int,
+                   colors: bool = True) -> Image.Image:
+    """Outpainting: paste the generated image (raw) around the old one (box = x0, y0, x1, y1 in raw pixels).
+    The model draws a lighter or darker halo right where its regenerated area starts (overlap px inside the
+    old image), so the blend starts after that halo and ends just outside the old image, where the
+    original is only a blurred fill. colors: also shift the generated area, per line along each extended
+    edge, by the Lab difference between a strip of the old image and a strip of the new area (median
+    filtered, so a tree or a shadow at the edge doesn't count), fading out with the distance."""
+    w, h = raw.size
+    o = np.asarray(original.convert("RGB").resize((w, h), Image.BICUBIC), np.float32)
+    r = np.asarray(raw.convert("RGB"), np.float32)
+    x0, y0, x1, y1 = box
+    inside = np.zeros((h, w), np.uint8)
+    inside[y0:y1, x0:x1] = 1
+    signed = cv2.distanceTransform(1 - inside, cv2.DIST_L2, 5) - cv2.distanceTransform(inside, cv2.DIST_L2, 5)
+    start, end = -0.4 * overlap, 0.15 * overlap + 1   # signed distance from the old image's edge
+    if colors:
+        lab0 = cv2.cvtColor(o / 255, cv2.COLOR_RGB2LAB)
+        lab1 = cv2.cvtColor(r / 255, cv2.COLOR_RGB2LAB)
+        strip = max(8, round(0.02 * max(h, w)))
+        falloff = max(8 * strip, round(0.3 * min(h, w)))
+        a, b = round(-start), round(end)
+        xs, ys = np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32)
+        sides = [  # extended?, old strip (original), new strip (raw), distance beyond the edge, lines along axis
+            (x0 > b + strip, lab0[:, x0 + a:x0 + a + strip], lab1[:, x0 - b - strip:x0 - b], (x0 - xs)[None, :], 1),
+            (w - x1 > b + strip, lab0[:, x1 - a - strip:x1 - a], lab1[:, x1 + b:x1 + b + strip], (xs - x1)[None, :], 1),
+            (y0 > b + strip, lab0[y0 + a:y0 + a + strip], lab1[y0 - b - strip:y0 - b], (y0 - ys)[:, None], 0),
+            (h - y1 > b + strip, lab0[y1 - a - strip:y1 - a], lab1[y1 + b:y1 + b + strip], (ys - y1)[:, None], 0),
+        ]
+        for extended, old, new, dist, axis in sides:
+            if not extended or old.size == 0 or new.size == 0:
+                continue
+            diff = np.median(old, axis=axis) - np.median(new, axis=axis)   # one Lab offset per line
+            diff = np.stack([cv2.medianBlur(np.ascontiguousarray(diff[:, c:c + 1]), 5)[:, 0] for c in range(3)], -1)
+            diff = cv2.GaussianBlur(diff[:, None, :], (1, 0), sigmaX=0.1, sigmaY=strip)[:, 0, :]
+            fade = _smoothstep(1 - np.maximum(dist, 0) / falloff) * (dist >= start)
+            lab1 = lab1 + (diff[:, None, :] if axis == 1 else diff[None, :, :]) * fade[..., None]
+        r = np.clip(cv2.cvtColor(lab1.astype(np.float32), cv2.COLOR_LAB2RGB) * 255, 0, 255)
+    wgt = _smoothstep((signed - start) / (end - start))[..., None]
+    return Image.fromarray(np.rint(o * (1 - wgt) + r * wgt).astype(np.uint8))
+
+
 def compose(original: Image.Image, raw: Image.Image, mask: Image.Image,
             dx: float, dy: float, scale: float,
             colors: bool = False, warp: bool = False, poisson: bool = False) -> tuple[Image.Image, dict]:

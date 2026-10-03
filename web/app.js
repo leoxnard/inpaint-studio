@@ -2486,8 +2486,8 @@ function renderRefs() {
   const first = state.task === "generate" ? 1 : 2;
   $("refsHint").textContent = (state.task === "generate"
     ? "Optional. Refer to them as image 1, 2 … in the prompt."
-    : "Optional. Your image is image 1 and stays the one that is edited (the model is told so). Say what to take from each reference, e.g. \u201cface\u201d, and click it to crop that part.")
-    + ` This model takes up to ${max}; each one makes the run a lot slower.`;
+    : "Optional. Your image stays image 1. Name what to take from each reference, e.g. \u201cface\u201d; click it to crop.")
+    + ` Up to ${max}; each one slows the run.`;
   const grid = $("refGrid");
   grid.innerHTML = "";
   state.refs.forEach((r, i) => {

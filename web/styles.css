@@ -57,6 +57,19 @@ body {
 .topbar h1 img { display: block; flex: none; }
 h1, h2 { font-family: var(--font-head); }
 .topbar .spacer { flex: 1; }
+/* Inside the Mac app the page is the whole window: the top bar doubles as the title bar, with the
+   traffic lights on its left (macos/InpaintStudio.swift), so it looks like a native toolbar. */
+.native-app .topbar {
+  height: 52px; padding: 0 12px 0 92px; flex-wrap: nowrap; gap: 12px;
+  -webkit-user-select: none; user-select: none; cursor: default;
+}
+.native-app.fullscreen .topbar { padding-left: 16px; }
+.native-app .topbar h1 { font: 600 14px/1 -apple-system, system-ui, sans-serif; gap: 8px; }
+.native-app .topbar h1 img { width: 20px; height: 20px; }
+.native-app .viewswitch { padding: 2px; }
+.native-app .viewswitch a { padding: 3px 14px; font-size: 13px; min-height: 0; }
+.native-app .topbar button { min-height: 28px; padding: 4px 14px; font-size: 13px; }
+.native-app .topbar .pill { font-size: 12px; }
 .viewswitch { display: flex; gap: 4px; border: 1px solid var(--hairline-strong); border-radius: var(--r-pill); padding: 3px; }
 .viewswitch a {
   display: flex; align-items: center; gap: 8px; padding: 0 14px; min-height: 36px; border-radius: var(--r-pill);

@@ -45,14 +45,47 @@ func serverUp() -> Bool { get("healthz").status == 200 }
 
 func statusPage(_ text: String) -> String {
     """
-    <html><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
-    font:15px -apple-system,sans-serif;color:#555;background:#fff">\(text)</body></html>
+    <html><head><style>:root{color-scheme:light dark}
+    body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+    font:13px -apple-system,sans-serif;color:#737373;background:#fff;-webkit-user-select:none;cursor:default}
+    @media (prefers-color-scheme:dark){body{background:#0A0A0A;color:#A3A3A3}}</style></head>
+    <body>\(text)</body></html>
     """
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+// Height of the page's top bar in the app; the traffic lights are centred in it
+let barHeight: CGFloat = 52
+
+// Runs in every page: marks it as running in the app (styles.css hides the system title bar look there)
+// and reports whether the mouse is over an empty part of the top bar, which then drags the window.
+let pageScript = """
+document.documentElement.classList.add('native-app');
+addEventListener('mousemove', (e) => {
+  const bar = e.target.closest && e.target.closest('.topbar');
+  const drag = !!bar && !e.target.closest('a, button, input, select, textarea, label, [role=button], .pill');
+  if (drag !== window.__drag) { window.__drag = drag; webkit.messageHandlers.drag.postMessage(drag); }
+}, true);
+addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('input, textarea, img, canvas, [contenteditable]') && !String(getSelection())) e.preventDefault();
+}, true);
+"""
+
+/// The page is the whole window (no system title bar); empty parts of its top bar move the window.
+class AppWebView: WKWebView {
+    var overDragArea = false
+    override func mouseDown(with event: NSEvent) {
+        if overDragArea, let w = window {
+            if event.clickCount == 2 { w.performZoom(nil) } else { w.performDrag(with: event) }
+            return
+        }
+        super.mouseDown(with: event)
+    }
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate,
+                   WKDownloadDelegate, WKScriptMessageHandler {
     var window: NSWindow!
-    var web: WKWebView!
+    var web: AppWebView!
     var titleObservation: NSKeyValueObservation?
     var ready = false
 
@@ -60,21 +93,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         buildMenu()
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        web = WKWebView(frame: .zero, configuration: config)
+        config.userContentController.addUserScript(
+            WKUserScript(source: pageScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        config.userContentController.add(self, name: "drag")
+        web = AppWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
         if #available(macOS 13.3, *) { web.isInspectable = true }
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         window.title = "Inpaint Studio"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.delegate = self
         window.contentView = web
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 480, height: 400)
         window.center()
         window.setFrameAutosaveName("main")
         window.makeKeyAndOrderFront(nil)
+        placeTrafficLights()
         titleObservation = web.observe(\.title) { [weak self] web, _ in
             if let t = web.title, !t.isEmpty { self?.window.title = t }
         }
@@ -125,6 +165,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             self.ready = true
             self.web.load(URLRequest(url: base))
         }
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        web.overDragArea = message.body as? Bool ?? false
+    }
+
+    // Moves the close/minimise/zoom buttons down so they sit centred in the page's top bar.
+    // AppKit puts them back on resize and full screen changes, so this runs again after those.
+    func placeTrafficLights() {
+        guard let close = window.standardWindowButton(.closeButton),
+              let titlebar = close.superview?.superview, !window.styleMask.contains(.fullScreen) else { return }
+        titlebar.frame = NSRect(x: 0, y: window.frame.height - barHeight, width: window.frame.width, height: barHeight)
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        for (i, type) in buttons.enumerated() {
+            guard let b = window.standardWindowButton(type) else { continue }
+            b.setFrameOrigin(NSPoint(x: 20 + CGFloat(i) * 20, y: (barHeight - b.frame.height) / 2))
+        }
+    }
+
+    func windowDidResize(_ note: Notification) { placeTrafficLights() }
+    func windowDidExitFullScreen(_ note: Notification) {
+        placeTrafficLights()
+        web.evaluateJavaScript("document.documentElement.classList.remove('fullscreen')")
+    }
+    func windowWillEnterFullScreen(_ note: Notification) {
+        web.evaluateJavaScript("document.documentElement.classList.add('fullscreen')")
     }
 
     // Dock click with the window closed: show it again

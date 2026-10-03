@@ -259,7 +259,7 @@ label .lbl { display: flex; justify-content: space-between; gap: 8px; }
 .compare { position: relative; display: inline-block; line-height: 0; user-select: none; -webkit-user-select: none; touch-action: none; cursor: ew-resize; max-width: 100%; -webkit-tap-highlight-color: transparent; }
 .compare img { display: block; max-width: 100%; max-height: 70vh; pointer-events: none; -webkit-user-drag: none; }
 .compare *::selection, .compare::selection { background: transparent; }
-.compare #cmpAfter { position: absolute; inset: 0; width: 100%; height: 100%; clip-path: inset(0 0 0 50%); }
+.compare #cmpAfter { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; clip-path: inset(0 0 0 50%); }
 .divider { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: #fff; transform: translateX(-1px); }
 .divider span {
   position: absolute; top: 50%; left: 50%; width: 28px; height: 28px; margin: -14px;
@@ -649,3 +649,12 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 #resultFilter { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 #resultFilter button { flex: none; }
 @media (max-width: 480px) { #resultFilter button { padding: 0 10px; } }
+
+/* variations of one queued batch, under the viewer */
+.variants { display: flex; gap: 8px; overflow-x: auto; padding: 8px 0; scrollbar-width: thin; }
+.variants button { flex: none; width: 64px; height: 64px; padding: 0; border-radius: 10px; overflow: hidden;
+  border: 2px solid transparent; background: var(--surface, transparent); display: grid; place-items: center; font-size: 12px; }
+.variants button.active { border-color: var(--ink); }
+.variants img { width: 100%; height: 100%; object-fit: cover; }
+.runbox .row #variants { flex: none; width: auto; min-height: 44px; }
+.rtile.picking { outline: 2px dashed var(--ink); outline-offset: 2px; }

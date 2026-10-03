@@ -865,7 +865,7 @@ async function runEdit({ thenNext = false } = {}) {
     if (generate) {
       saveForm();
       const { w, h } = aspectDims();
-      await submitJob(editParams({ image: null, srcW: w, srcH: h, maskName: null, useMask: false }));
+      await submitVariants(editParams({ image: null, srcW: w, srcH: h, maskName: null, useMask: false }));
       return;
     }
     let maskName = null;
@@ -877,7 +877,7 @@ async function runEdit({ thenNext = false } = {}) {
       maskName = await uploadMaskBlob(blob);
     }
     saveForm();
-    await submitJob(editParams({ image: state.imageName, srcW: state.srcW, srcH: state.srcH, maskName, useMask }));
+    await submitVariants(editParams({ image: state.imageName, srcW: state.srcW, srcH: state.srcH, maskName, useMask }));
     const item = currentBatchItem();
     if (item) { item.status = "queued"; renderBatch(); if (thenNext) openNextBatchItem(); }
   } catch (e) {
@@ -910,12 +910,23 @@ function jobFromSummary(sum) {
   return job;
 }
 
-async function submitJob(params, url = "/api/jobs") {
+// Variations: the same run n times, each with its own seed (random, or seed, seed+1, …), tied by a group id
+async function submitVariants(params) {
+  const n = parseInt($("variants").value, 10) || 1;
+  if (n === 1) return submitJob(params);
+  const group = Math.random().toString(36).slice(2, 10);
+  for (let i = 0; i < n; i++) {
+    const seed = $("randomSeed").checked ? (i ? Math.floor(Math.random() * 2 ** 32) : params.seed) : params.seed + i;
+    await submitJob({ ...params, seed, group, variant: i }, "/api/jobs", { quiet: i < n - 1 });
+  }
+}
+
+async function submitJob(params, url = "/api/jobs", { quiet = false } = {}) {
   const sum = await postJson(url, params);
   const job = jobFromSummary(sum);
   if (url === "/api/jobs") job.params = params;   // known only to the page that queued it ("Load settings in Create")
   renderQueue();
-  showToast("Added to the queue", { runsLink: true });
+  if (!quiet) showToast(params.group ? `${params.variant + 1} variations added to the queue` : "Added to the queue", { runsLink: true });
   // show it right away if nothing else is running, otherwise it just waits in the queue
   if (state.follow && ![...state.jobs.values()].some((j) => j !== job && j.status === "running")) viewJob(job);
 }
@@ -1259,6 +1270,17 @@ function showFinal() {
   for (const img of $("filmstrip").children) img.classList.remove("active");
   $("resultEmpty").hidden = true;
   const after = $("viewRaw").checked && run.rawUrl ? run.rawUrl : (run.aligned?.url || run.resultUrl);
+  const other = comparing(run);
+  $("cmpTagL").textContent = other ? "Other" : "Before";
+  $("cmpTagR").textContent = other ? "This" : "After";
+  if (other) {   // compare with another run: its result on the left, this one on the right
+    $("cmpBefore").src = other.aligned?.url || other.resultUrl;
+    $("cmpAfter").src = after;
+    $("liveImg").hidden = true;
+    $("compare").hidden = false;
+    setDivider(50);
+    return;
+  }
   if (!run.beforeUrl || !$("compareToggle").checked) {
     $("liveImg").src = after;
     $("liveImg").hidden = false;
@@ -1382,6 +1404,7 @@ function renderViewer() {
   }
   updateProgressText();
   renderDetails(run, status);
+  renderVariants(run);
   renderQueue();
   renderHistory();
   syncRunHash();
@@ -1408,6 +1431,50 @@ function settingsRows(run) {
   const took = runTook(run);
   rows.push(["Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : ""]);
   return rows.filter(([, v]) => v !== "" && v != null);
+}
+
+// ------------------------------------------------------------------ compare two runs, variations
+const comparing = (run) => (state.compare && run && state.compare.base === run ? state.compare.other : null);
+
+// settings that differ between this run and the one it is compared with
+function renderDiff(run) {
+  const other = comparing(run);
+  $("detDiffSec").hidden = !other;
+  if (!other) return;
+  const dl = $("detDiff");
+  dl.innerHTML = "";
+  const a = run.params || {}, b = other.params || {};
+  const show = (v) => (v == null || v === "" ? "–" : typeof v === "object" ? JSON.stringify(v) : String(v));
+  const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !["group", "variant"].includes(k));
+  let n = 0;
+  for (const k of keys.sort()) {
+    if (show(a[k]) === show(b[k])) continue;
+    const dt = document.createElement("dt"); dt.textContent = k.replace(/_/g, " ");
+    const dd = document.createElement("dd"); dd.textContent = `${show(a[k])} → ${show(b[k])}`;
+    dl.append(dt, dd);
+    n++;
+  }
+  if (!n) { const dd = document.createElement("dd"); dd.className = "hint"; dd.textContent = "Same settings."; dl.append(dd); }
+}
+
+// the other variations of the same queued batch, as thumbnails under the viewer
+function renderVariants(run) {
+  const strip = $("variantStrip");
+  const group = run?.params?.group;
+  const sibs = group ? [...state.runs, ...state.jobs.values()].filter((r) => r.params?.group === group) : [];
+  strip.hidden = sibs.length < 2;
+  if (strip.hidden) return;
+  strip.innerHTML = "";
+  sibs.sort((x, y) => (x.params.variant ?? 0) - (y.params.variant ?? 0));
+  for (const r of sibs) {
+    const b = document.createElement("button");
+    b.className = r === run ? "active" : "";
+    b.title = `Variation ${(r.params.variant ?? 0) + 1} · seed ${r.params.seed}`;
+    if (r.resultUrl) { const img = document.createElement("img"); img.src = r.resultUrl; img.alt = ""; b.append(img); }
+    else b.textContent = runStatus(r) === "running" ? "…" : runStatus(r) === "error" ? "Failed" : "Waiting";
+    b.onclick = () => selectRun(r);
+    strip.append(b);
+  }
 }
 
 function renderDetails(run, status) {
@@ -1466,12 +1533,22 @@ function renderDetails(run, status) {
   $("removeRun").textContent = run.cancelling ? "Removing…" : "Remove from queue";
   $("deleteRun").hidden = !(done || status === "error");
   $("retryRun").hidden = status !== "error";
+  $("compareBtn").hidden = !(done && run.resultUrl);
+  $("compareBtn").textContent = comparing(run) ? "Exit compare" : state.picking ? "Pick a result…" : "Compare with…";
+  renderDiff(run);
   $("matchInfo").textContent = run.match || "";
 }
 
 $("cancelRun").onclick = () => { if (state.run && state.jobs.has(state.run.id)) cancelJob(state.run); };
 $("removeRun").onclick = $("cancelRun").onclick;
 $("deleteRun").onclick = () => { if (state.run) deleteRun(state.run); };
+$("compareBtn").onclick = () => {
+  if (comparing(state.run) || state.picking) { state.compare = null; state.picking = false; showRun(state.run); renderHistory(); return; }
+  state.picking = true;
+  renderViewer();
+  renderHistory();
+  showToast("Pick a result to compare with");
+};
 $("retryRun").onclick = async () => {
   const run = state.run;
   if (!run?.serverId) return;
@@ -1584,7 +1661,8 @@ function renderHistory() {
   }
   for (const run of list) {
     const b = document.createElement("button");
-    b.className = "rtile" + (run === state.run ? " active" : "") + (run.status === "error" ? " failed" : "");
+    b.className = "rtile" + (run === state.run ? " active" : "") + (run.status === "error" ? " failed" : "")
+      + (state.picking && run !== state.run && run.resultUrl ? " picking" : "");
     b.setAttribute("aria-label", `Open run: ${run.prompt || "untitled"}`);
     const pic = document.createElement("span"); pic.className = "rpic";
     if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
@@ -1775,6 +1853,15 @@ function route() {
 window.addEventListener("hashchange", route);
 const findRun = (id) => state.jobs.get(id) || state.runs.find((r) => r.serverId === id) || null;
 function selectRun(run) {
+  if (state.picking && state.run && run !== state.run && run.resultUrl) {   // "Compare with…": this tile is the other run
+    state.picking = false;
+    state.compare = { base: state.run, other: run };
+    showRun(state.run);
+    renderHistory();
+    return;
+  }
+  state.picking = false;
+  state.compare = null;
   if (state.jobs.has(run.id)) { state.follow = true; viewJob(run); return; }
   state.follow = false;
   showRun(run);

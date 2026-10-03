@@ -282,7 +282,6 @@ label .lbl { display: flex; justify-content: space-between; gap: 8px; }
   .layout, .layout.runs { grid-template-columns: 1fr; }
   .col-resizer { display: none; }
   .runs-center { overflow: visible; padding: 16px; }
-  .runs-center .bigarea { min-height: 300px; }
   .views > .layout { flex: none; }
   .layout > * { min-height: auto; }
   .sidebar, .sidebar.col-right { border: 0; border-bottom: 1px solid var(--hairline); overflow: visible; padding: 16px; }
@@ -504,8 +503,15 @@ button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
 .runhead .spacer { flex: 1; }
 .strong { color: var(--ink); font-weight: 600; }
 .viewer-tools { gap: 10px 18px; }
-.runs-center .bigarea { flex: 1 1 auto; min-height: 420px; max-height: none; }
-.runs-center #liveImg, .runs-center .compare img { max-height: 65vh; }
+.runs-center .bigarea { flex: none; height: 65vh; min-height: 300px; max-height: none; container-type: size; }
+/* with the adjust panel open, image + panel fit on screen together */
+.runs-center:has(#alignPanel:not([hidden])) .bigarea { height: max(300px, calc(100vh - 460px)); }
+/* the image follows the area's real height, so it shrinks instead of being cut off when panels open below */
+.runs-center #liveImg, .runs-center .compare img { max-height: 100cqh; }
+@media (max-width: 1100px) {  /* stacked layout: the page scrolls, the area hugs the image */
+  .runs-center .bigarea, .runs-center:has(#alignPanel:not([hidden])) .bigarea { height: auto; container-type: normal; }
+  .runs-center #liveImg, .runs-center .compare img { max-height: 65vh; }
+}
 #resultEmpty { font-size: 16px; line-height: 1.5; max-width: 560px; }
 .steps { display: flex; flex-direction: column; gap: 6px; }
 .results { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--hairline); padding-top: 14px; }

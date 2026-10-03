@@ -220,3 +220,11 @@ def test_node_phase_maps_nodes_to_the_workflow_strip():
     assert graphs.node_phase("ref1_crop", "ImageCrop")["phase"] == "load"
     assert graphs.node_phase("unet", "UnetLoaderGGUF")["phase"] == "load"
     assert graphs.node_phase("upto_1", "SplitSigmas") is None and graphs.node_phase("noise", "RandomNoise") is None
+
+
+def test_clean_overlays_adds_the_watermark_instruction():
+    p = dict(prompt="x", family="qwen21", task="edit", mode="paste", clean_overlays=True)
+    enc = graphs.edit_prompt(p)
+    assert enc.startswith("x\n\nRemove all watermarks") and enc.endswith(graphs.KEEP_IDENTICAL)
+    assert graphs.edit_prompt({**p, "task": "generate", "mode": None}) == "x\n\n" + graphs.CLEAN_NOTE_GENERATE
+    assert graphs.edit_prompt({**p, "clean_overlays": False, "mode": None}) == "x"

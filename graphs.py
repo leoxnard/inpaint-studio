@@ -102,6 +102,11 @@ def build_mask_graph(image: str, megapixels: float, text: str, threshold: float 
     return g
 
 
+# "Remove watermarks and text" (p["clean_overlays"]): appended to the prompt
+CLEAN_NOTE = ("Remove all watermarks, logos, captions and overlaid text from the image and restore what "
+              "is behind them.")
+CLEAN_NOTE_GENERATE = "The image has no watermarks, logos, captions or overlaid text."
+
 KEEP_IDENTICAL = ("Keep everything else in the image exactly identical to the original: same framing, "
                   "perspective, positions, people, objects, colors, lighting and fine details. "
                   "Only change what is described above.")
@@ -165,6 +170,8 @@ def edit_prompt(p: dict[str, Any]) -> str:
         prompt = f"{note}\n\n{prompt}"
     if takes := reference_takes(p):
         prompt = f"{prompt}\n\n{takes}"
+    if p.get("clean_overlays"):
+        prompt = f"{prompt}\n\n{CLEAN_NOTE_GENERATE if p.get('task') == 'generate' else CLEAN_NOTE}"
     if p.get("mode") == "paste":
         # p["keep_note"] replaces the default (Advanced in the UI), empty turns it off;
         # keep_identical=False is the older way to turn it off

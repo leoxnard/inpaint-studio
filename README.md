@@ -43,6 +43,11 @@ Every run also writes `config.json` next to its images (`output/InpaintStudio/<r
 settings, the exact text the encoder got and the ComfyUI graph. Each reference makes the run much slower: one extra image at 0.95 MP took the
 6-step Turbo edit from about 1 to about 7 minutes on a 32 GB Mac, without gray noise.
 
+## Remove watermarks and text
+The checkbox under the prompt adds "Remove all watermarks, logos, captions and overlaid text from the
+image and restore what is behind them." to the prompt (when generating: "The image has no watermarks,
+logos, captions or overlaid text."). With a mask, only the masked area can change.
+
 ## Batch (folder)
 Open a folder or drop several images: they appear as a thumbnail grid and nothing starts on its
 own. Go through them one by one (mask, refine, **Submit and next**; each image keeps its own mask),

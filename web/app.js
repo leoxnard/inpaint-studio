@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
-  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote",
+  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -637,6 +637,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     // only an edited instruction is sent; otherwise the server adds its default (graphs.KEEP_IDENTICAL)
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
+    clean_overlays: $("cleanOverlays").checked,
     post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
@@ -1202,6 +1203,7 @@ function settingsRows(run) {
   ];
   if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
   if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
+  if (p.clean_overlays) rows.push(["Watermarks", "Removed"]);
   const took = run.took || (run.finished && run.started ? run.finished - run.started : run.finished && run.created ? run.finished - run.created : null);
   rows.push(["Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : ""]);
   return rows.filter(([, v]) => v !== "" && v != null);
@@ -1449,7 +1451,8 @@ function loadRunSettings(run) {
   for (const [id, v] of [["sampler", p.sampler], ["scheduler", p.scheduler]]) if (v) setSelectValue(id, v);
   if (p.upscaler && [...$("upscaler").options].some((o) => o.value === p.upscaler)) $("upscaler").value = p.upscaler;
   $("keepNote").value = p.keep_note ?? (p.keep_identical === false ? "" : KEEP_NOTE);
-  const checks = { postColors: p.post_colors, postWarp: p.post_warp, postPoisson: p.post_poisson };
+  const checks = { postColors: p.post_colors, postWarp: p.post_warp, postPoisson: p.post_poisson,
+    cleanOverlays: p.clean_overlays };
   for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
   $("randomSeed").checked = false;   // reproduce the run
   $("refNote").value = p.ref_note ?? defaultRefNote();

@@ -45,7 +45,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note")
+                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -527,6 +527,48 @@ async def align_run(run_id: str, req: AlignReq):
     return await adjust_run(json.loads(f.read_text()), req)
 
 
+class UpscaleReq(BaseModel):
+    factor: int = 2
+    upscaler: str | None = None  # component key; default: the first installed upscaler
+
+
+@app.post("/api/runs/{run_id}/upscale")
+async def upscale_run(run_id: str, req: UpscaleReq):
+    """Upscale a finished result afterwards (the adjusted one if saved); queued as a new run."""
+    f = RUNS / run_id / "run.json"
+    if not f.is_file():
+        raise HTTPException(404, "run not found")
+    run = json.loads(f.read_text())
+    if run.get("status") != "done" or not run.get("result_url"):
+        raise HTTPException(400, "only finished runs with a result can be upscaled")
+    if req.factor not in (2, 4):
+        raise HTTPException(400, "factor must be 2 or 4")
+    have = installer.installed(installer.load_config())
+    ups = {k: c for k, c in presets.COMPONENTS.items() if c.get("kind") == "upscaler" and have[f"component:{k}"]}
+    if not ups:
+        raise HTTPException(400, "no upscaler installed (see Downloads)")
+    key = req.upscaler if req.upscaler in ups else next(iter(ups))
+    aligned = RUNS / run_id / "aligned.png"
+    src = Image.open(aligned) if run.get("aligned") and aligned.is_file() else await _fetch_view(run["result_url"])
+    buf = io.BytesIO()
+    src.convert("RGB").save(buf, "PNG")
+    image = await upload_to_comfy(buf.getvalue(), f"{uuid.uuid4().hex[:8]}_upscale_{run_id}.png", SUBFOLDER)
+    new_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    params = {**(run.get("params") or {}), "upscale": req.factor, "upscaler": key, "upscale_of": run_id,
+              "steps": 1, "save_every": 0, "save_last": 0, "refs": [], "post_colors": False,
+              "post_warp": False, "post_poisson": False, "use_mask": False, "mask": None}
+    size = {**(run.get("size") or {}), "work_w": src.width * req.factor, "work_h": src.height * req.factor}
+    graph = graphs.build_upscale_graph(image, ups[key]["path"].rsplit("/", 1)[-1], int(ups[key]["scale"]),
+                                       req.factor, f"InpaintStudio/{new_id}")
+    new = {"id": new_id, "created": time.time(), "status": "queued", "before_url": input_mask_url(image),
+           "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": size, "frames": []}  # before = the source
+    save_run(new)
+    job = {"run": new, "params": params, "graph": graph, "value": 0}
+    JOBS[new_id] = job
+    job["task"] = asyncio.create_task(run_job(job))
+    return job_summary(job)
+
+
 # ---------------------------------------------------------------- job queue
 # Every "Run edit" becomes a job: it is submitted to ComfyUI right away (ComfyUI queues it) and
 # a background task follows it on its own ComfyUI websocket. Browsers only subscribe to
@@ -642,7 +684,7 @@ async def run_job(job: dict) -> None:
                         return drop_counter(img) if img else None
                     res, before, raw, upscaled = first("out_result"), first("out_before"), first("out_raw"), first("out_upscaled")
                     use_mask = params.get("use_mask") and params.get("mask")
-                    run.update(before_url=view_url(before) if before else None, raw_url=view_url(raw) if raw else None,
+                    run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,
                                mask_url=input_mask_url(params["mask"]) if use_mask else None)
                     post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")}
                     if params.get("mode") == "paste" and use_mask and raw and any(post.values()):
@@ -651,7 +693,7 @@ async def run_job(job: dict) -> None:
                         except Exception as e:  # never fail the run because of the post-processing
                             print(f"post-processing failed for {run_id}: {e!r}")
                     await finish_job(job, "done",
-                                     result_url=view_url(res) if res else None, before_url=view_url(before) if before else None,
+                                     result_url=view_url(res) if res else None, before_url=view_url(before) if before else run.get("before_url"),
                                      raw_url=view_url(raw) if raw else None,
                                      upscaled_url=view_url(upscaled) if upscaled else None,
                                      mask_url=input_mask_url(params["mask"]) if use_mask else None,

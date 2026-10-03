@@ -788,10 +788,10 @@ function jobFromSummary(sum) {
   return job;
 }
 
-async function submitJob(params) {
-  const sum = await postJson("/api/jobs", params);
+async function submitJob(params, url = "/api/jobs") {
+  const sum = await postJson(url, params);
   const job = jobFromSummary(sum);
-  job.params = params;   // known only to the page that queued it ("Load settings in Create")
+  if (url === "/api/jobs") job.params = params;   // known only to the page that queued it ("Load settings in Create")
   renderQueue();
   showToast(`Queued as Run ${runNumber(job)}`, { runsLink: true });
   // show it right away if nothing else is running, otherwise it just waits in the queue
@@ -1317,6 +1317,7 @@ function renderDetails(run, status) {
     : "The settings of this run are not known to this page (it was queued elsewhere)";
   $("useResult").hidden = !(done && run.resultUrl);
   $("alignBtn").hidden = !(done && run.serverId && run.rawUrl && run.maskUrl);
+  $("upscaleRow").hidden = !(done && run.serverId && run.resultUrl);
   $("downloadBtn").hidden = !(done && run.resultUrl);
   if (done && run.resultUrl) {
     $("downloadBtn").href = run.aligned?.url || run.resultUrl;
@@ -1449,6 +1450,11 @@ function renderHistory() {
     const pic = document.createElement("span"); pic.className = "rpic";
     if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
     if (run.resultUrl) { const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img); }
+    if (run.params?.upscale_of) {   // an upscale of another run: ×2 / ×4 badge in the corner
+      const badge = document.createElement("span"); badge.className = "rbadge";
+      badge.textContent = `×${run.params.upscale}`;
+      pic.append(badge);
+    }
     const meta = document.createElement("span"); meta.className = "rmeta";
     const l = document.createElement("span"); l.textContent = `Run ${n}`;
     const st = document.createElement("span"); st.className = run.status === "error" ? "strong" : "hint";
@@ -2058,6 +2064,13 @@ function schedulePreview() {
   clearTimeout(alignTimer);
   alignTimer = setTimeout(() => alignRequest({ ...alignValues(), save: false }), 250);
 }
+$("upscaleRow").addEventListener("click", async (e) => {
+  const factor = parseInt(e.target.dataset.factor, 10);
+  if (!factor) return;
+  try {
+    await submitJob({ factor, upscaler: $("upscaler").value || null }, `/api/runs/${state.run.serverId}/upscale`);
+  } catch (err) { showError(err.message); }
+});
 $("alignBtn").onclick = () => {
   const run = state.run;
   $("alignPanel").hidden = false;

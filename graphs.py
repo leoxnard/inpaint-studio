@@ -487,3 +487,19 @@ def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int, last:
         else:
             latent = [f"chunk_{i}", 0]
     return latent
+
+
+def build_upscale_graph(image: str, model: str, native: int, factor: int, prefix: str) -> dict:
+    """Upscale a finished result afterwards (its own run): upscale model, fitted to `factor` when the
+    model's native scale differs, saved as the run's result."""
+    g: dict[str, Any] = {
+        "load": {"class_type": "LoadImage", "inputs": {"image": image}},
+        "up_model": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": model}},
+        "up": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["up_model", 0], "image": ["load", 0]}},
+    }
+    up = ["up", 0]
+    if native != factor:
+        g["up_fit"] = {"class_type": "ImageScaleBy", "inputs": {"image": up, "upscale_method": "lanczos", "scale_by": factor / native}}
+        up = ["up_fit", 0]
+    g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": up, "filename_prefix": prefix}}
+    return g

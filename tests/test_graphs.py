@@ -228,3 +228,11 @@ def test_clean_overlays_adds_the_watermark_instruction():
     assert enc.startswith("x\n\nRemove all watermarks") and enc.endswith(graphs.KEEP_IDENTICAL)
     assert graphs.edit_prompt({**p, "task": "generate", "mode": None}) == "x\n\n" + graphs.CLEAN_NOTE_GENERATE
     assert graphs.edit_prompt({**p, "clean_overlays": False, "mode": None}) == "x"
+
+
+def test_upscale_graph_fits_the_factor():
+    g = graphs.build_upscale_graph("in.png", "up4.pth", native=4, factor=2, prefix="InpaintStudio/x")
+    assert g["up_fit"]["inputs"]["scale_by"] == 0.5
+    assert g["out_result"]["inputs"]["images"] == ["up_fit", 0]
+    g = graphs.build_upscale_graph("in.png", "up2.pth", native=2, factor=2, prefix="InpaintStudio/x")
+    assert "up_fit" not in g and g["out_result"]["inputs"]["images"] == ["up", 0]

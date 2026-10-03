@@ -398,6 +398,10 @@
           <button class="primary" id="loadSettings" title="Switch to Create with this run's settings (the image stays)">Load settings in Create</button>
           <button id="useResult">Use result as new input</button>
           <button id="alignBtn" title="Free edit + paste: align the generated image and fix colours, local warp and edges before pasting">Align to original</button>
+          <div class="row nowrap" id="upscaleRow" hidden title="Upscale this result (the adjusted one if saved) with the upscaler chosen in Create; saved as a new run">
+            <button data-factor="2">Upscale ×2</button>
+            <button data-factor="4">Upscale ×4</button>
+          </div>
           <a class="btn" id="downloadBtn" download>Download</a>
           <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
           <button id="downloadSteps">Download shown steps</button>

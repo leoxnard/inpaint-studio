@@ -24,6 +24,17 @@
         "7382"
       ],
       "port": 7382
+    },
+    {
+      "name": "inpaint-studio-dev-auto",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "python",
+        "server.py"
+      ],
+      "port": 7383,
+      "autoPort": true
     }
   ]
 }

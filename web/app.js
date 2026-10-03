@@ -1360,6 +1360,7 @@ function renderHistory() {
   const box = $("history");
   box.innerHTML = "";
   const f = state.resultFilter;
+  if (f === "removed") { renderRemoved(box); return; }
   const list = state.runs.filter((r) => f === "all" || runTask(r) === f);
   $("resultCount").textContent = `${list.length} result${list.length === 1 ? "" : "s"}`;
   if (!list.length) {
@@ -1401,12 +1402,55 @@ async function hideRun(run) {
   } catch (e) { showError(e.message); }
 }
 
+// Removed runs (hidden with ×, files kept): a tile restores the run into the history and opens it
+state.removed = [];
+function renderRemoved(box) {
+  const list = state.removed;
+  $("resultCount").textContent = `${list.length} removed`;
+  if (!list.length) { box.innerHTML = `<div class="hint">No removed runs.</div>`; return; }
+  for (const run of list) {
+    const b = document.createElement("button");
+    b.className = "rtile removed";
+    b.setAttribute("aria-label", `Restore the run from ${relTime(run.finished || run.created)}`);
+    const pic = document.createElement("span"); pic.className = "rpic";
+    if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
+    if (run.resultUrl) { const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img); }
+    const meta = document.createElement("span"); meta.className = "rmeta";
+    const l = document.createElement("span"); l.textContent = "Restore";
+    const st = document.createElement("span"); st.className = "hint"; st.textContent = relTime(run.finished || run.created);
+    meta.append(l, st);
+    b.append(pic, meta);
+    b.title = `${run.prompt}\n\nClick to bring it back into the results`;
+    b.onclick = () => restoreRun(run);
+    const wrap = document.createElement("div"); wrap.className = "rwrap";
+    wrap.append(b);
+    box.appendChild(wrap);
+  }
+}
+async function loadRemovedRuns() {
+  try { state.removed = (await api("/api/runs?hidden=1")).map(runFromStored); } catch (e) { showError(e.message); }
+  if (state.resultFilter === "removed") renderHistory();
+}
+async function restoreRun(run) {
+  try {
+    await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/restore`, {});
+    state.removed = state.removed.filter((r) => r !== run);
+    state.runs.push(run);
+    state.runs.sort((a, b) => (b.created || 0) - (a.created || 0));
+    setResultFilter("all");
+    selectRun(run);
+  } catch (e) { showError(e.message); }
+}
+function setResultFilter(f) {
+  state.resultFilter = f;
+  for (const x of $("resultFilter").children) x.setAttribute("aria-pressed", String(x.dataset.filter === f));
+  if (f === "removed") loadRemovedRuns();
+  renderHistory();
+}
+
 $("resultFilter").addEventListener("click", (e) => {
   const b = e.target.closest("[data-filter]");
-  if (!b) return;
-  state.resultFilter = b.dataset.filter;
-  for (const x of $("resultFilter").children) x.setAttribute("aria-pressed", String(x === b));
-  renderHistory();
+  if (b) setResultFilter(b.dataset.filter);
 });
 
 $("downloadSteps").onclick = async () => {

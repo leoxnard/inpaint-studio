@@ -51,4 +51,5 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   `<run>/step_NN_TOTAL.png` (+ `raw_step_…`), `<run>/config.json` (all params, encoder prompt, graph). The server strips ComfyUI's `_00001_` counter.
 - Run history: `~/Library/Application Support/Inpaint Studio/runs/<id>/run.json` + live preview
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by
-  `GET /api/runs`, removed by `DELETE /api/runs/{id}`.
+  `GET /api/runs`, removed by `DELETE /api/runs/{id}`. × in Results hides a run (`POST …/hide`, files kept);
+  `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed).

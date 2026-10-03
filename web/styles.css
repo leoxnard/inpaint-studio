@@ -521,6 +521,8 @@ button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
 .rpic { display: block; width: 100%; aspect-ratio: 1; border-radius: var(--r-img); background: var(--surface); overflow: hidden; }
 .rpic img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .rtile.failed .rpic { opacity: .45; }
+.rtile.removed .rpic { opacity: .55; }
+.rtile.removed:hover .rpic { opacity: 1; }
 .rmeta { padding: 0 4px 4px; font-size: 12px; display: flex; justify-content: space-between; gap: 4px; }
 /* queue cards */
 .queue { display: flex; flex-direction: column; gap: 8px; }

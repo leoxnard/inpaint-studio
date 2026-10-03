@@ -361,14 +361,15 @@ def save_run(run: dict) -> None:
 
 
 @app.get("/api/runs")
-async def list_runs():
+async def list_runs(hidden: bool = False):
+    """Finished runs, newest first; hidden=1 lists the ones removed from the history instead."""
     runs = []
     for f in RUNS.glob("*/run.json"):
         try:
             runs.append(json.loads(f.read_text()))
         except (OSError, json.JSONDecodeError):
             continue
-    runs = [r for r in runs if r.get("status") == "done" and not r.get("hidden")]
+    runs = [r for r in runs if r.get("status") == "done" and bool(r.get("hidden")) == hidden]
     return sorted(runs, key=lambda r: r.get("created", 0), reverse=True)
 
 
@@ -393,6 +394,18 @@ async def hide_run(run_id: str):
     run["hidden"] = True
     save_run(run)
     return {"hidden": run_id}
+
+
+@app.post("/api/runs/{run_id}/restore")
+async def restore_run(run_id: str):
+    """Brings a removed run back into the history."""
+    f = (RUNS / run_id / "run.json").resolve()
+    if f.parent.parent != RUNS.resolve() or not f.is_file():
+        raise HTTPException(404, "run not found")
+    run = json.loads(f.read_text())
+    run.pop("hidden", None)
+    save_run(run)
+    return run
 
 
 # ---------------------------------------------------------------- live edit over websocket

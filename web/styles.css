@@ -471,10 +471,13 @@ button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad)
 .pstate.error { color: var(--bad); }
 .pstate.running { color: var(--accent); }
 .plist { display: flex; flex-direction: column; gap: 6px; }
-.prow { display: grid; grid-template-columns: 26px 1fr; gap: 2px 8px; align-items: start; padding: 6px 4px; border-top: 1px solid var(--border); }
+.prow { display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 8px; align-items: start; padding: 6px 4px; border-top: 1px solid var(--border); }
 .prow:first-child { border-top: 0; }
 .prow .pi { grid-row: 1 / span 4; width: 22px; display: flex; justify-content: center; padding-top: 1px; }
 .prow .pt { font-size: 13px; }
+.prow > :not(.pi):not(.px) { grid-column: 2; }
+.prow .px { grid-column: 3; grid-row: 1; padding: 0 8px; min-height: 0; line-height: 20px; font-size: 15px; background: none; border: 0; color: var(--muted); cursor: pointer; }
+.prow .px:hover { color: var(--bad); }
 .prow.pending, .prow.skipped, .prow.cancelled { opacity: .55; }
 .prow .msg { font-size: 12px; }
 .prow.error .msg { color: var(--bad); }

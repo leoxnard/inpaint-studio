@@ -39,3 +39,45 @@ def test_installed_detects_models_and_desktop_yaml(tmp_path, monkeypatch):
     assert st["installed_quants"] == ["Q4_K_M"] and not st["complete"] and st["missing_components"] == ["qwen3vl_8b", "vae_qwen21"]
     order = installer.expand(["model:qwen21_uc:Q8_0"], have)
     assert order == ["component:qwen3vl_8b", "component:vae_qwen21", "model:qwen21_uc:Q8_0"]
+
+
+def test_queue_runs_items_in_order_and_accepts_more_while_running(monkeypatch):
+    import asyncio
+
+    async def scenario():
+        inst = installer.Installer()
+        log, gate = [], asyncio.Event()
+
+        async def step(cfg, s, st):
+            log.append(s)
+            if s == "component:a":
+                await gate.wait()
+            if s == "component:bad":
+                raise RuntimeError("boom")
+            if s == "component:slow":
+                await asyncio.sleep(10)
+
+        monkeypatch.setattr(inst, "_step", step)
+        monkeypatch.setattr(installer, "load_config", lambda: {})
+        monkeypatch.setattr(installer, "item_title", lambda s: s)
+        done = asyncio.Event()
+
+        async def on_done():
+            done.set()
+
+        inst.start(["component:a", "component:skip"], on_done)
+        await asyncio.sleep(0)
+        inst.start(["component:a", "component:bad", "component:slow", "component:c"], on_done)  # a is ignored
+        inst.cancel("component:skip")
+        gate.set()
+        while "component:slow" not in log:
+            await asyncio.sleep(0)
+        inst.cancel("component:slow")
+        await asyncio.wait_for(done.wait(), 2)
+        return log, {s: st["state"] for s, st in inst.steps.items()}, inst.error
+
+    log, states, error = asyncio.run(scenario())
+    assert log == ["component:a", "component:bad", "component:slow", "component:c"]
+    assert states == {"component:a": "done", "component:skip": "cancelled", "component:bad": "error",
+                      "component:slow": "cancelled", "component:c": "done"}
+    assert error == "boom"

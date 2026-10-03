@@ -95,7 +95,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     head.appendChild(ui.title);
     ui.back = el("button", "small", "Back to app");
     ui.back.style.marginLeft = "auto";
-    ui.back.onclick = () => { stopPoll(); onBack(); };
+    ui.back.onclick = () => onBack();   // downloads go on in the background
     head.appendChild(ui.back);
     inner.appendChild(head);
     inner.appendChild(el("p", "lead", data.ready
@@ -127,7 +127,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     const row = el("div", "row");
     ui.overallIcon = el("span");
     ui.overallText = el("span");
-    ui.cancel = el("button", "small", "Cancel");
+    ui.cancel = el("button", "small", "Cancel all");
     ui.cancel.style.marginLeft = "auto";
     ui.cancel.onclick = async () => {
       ui.cancel.disabled = true;
@@ -154,7 +154,13 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
       r.bar = el("div", "pbar");
       r.bar.appendChild(el("i"));
       r.detail = el("div", "detail");
-      r.el.append(r.icon, r.title, r.msg, r.bar, r.detail);
+      r.x = el("button", "px", "×");
+      r.x.title = "Cancel this download";
+      r.x.onclick = async () => {
+        r.x.disabled = true;
+        try { await postJson("/api/setup/cancel", { item: id }); } catch (e) { showErr(e.message); }
+      };
+      r.el.append(r.icon, r.title, r.msg, r.bar, r.detail, r.x);
       ui.pRows[id] = r;
       ui.plist.appendChild(r.el);
     }
@@ -196,6 +202,9 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     r.bar.firstChild.style.width = det ? `${Math.min(100, (have / total) * 100).toFixed(1)}%` : "";
     r.detail.textContent = ist.state === "running" ? (ist.detail || "") : "";
     r.detail.hidden = !r.detail.textContent;
+    const active = ist.state === "pending" || ist.state === "running";
+    r.x.hidden = !active || !running();
+    if (!active) r.x.disabled = false;
   }
 
   function updateProgress() {
@@ -252,6 +261,12 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     b.onclick = onclick;
     return b;
   }
+  // download/install buttons stay usable while a download runs: a click adds the item to the queue
+  function queueBtn(id, b) {
+    b.classList.add("queue");
+    b.dataset.item = id;
+    return b;
+  }
   const installedBadge = () => el("span", "badge ok", "Installed");
 
   async function confirmDelete(item, title, size, extra) {
@@ -290,7 +305,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
       side.appendChild(installedBadge());
       if (deletable) side.appendChild(actBtn("Delete", "danger", onDelete));
     } else {
-      side.appendChild(actBtn("Install", "primary", () => startInstall([id])));
+      side.appendChild(queueBtn(id, actBtn("Install", "primary", () => startInstall([id]))));
     }
     r.appendChild(side);
     return r;
@@ -387,10 +402,10 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
         row.appendChild(actBtn("Delete", "danger", () => confirmDelete(q.id, `${p.title} ${q.quant}`, q.size)));
       } else {
         const d = downloadLabel(p, q);
-        row.appendChild(actBtn(d.label, "primary", () => {
+        row.appendChild(queueBtn(q.id, actBtn(d.label, "primary", () => {
           if (q.fit === "no" && !window.confirm(`${p.title} ${q.quant} is probably too large for this Mac (needs ~${fmtBytes(q.memory)}). Download anyway?`)) return;
           startInstall([q.id]);
-        }, d.title));
+        }, d.title)));
       }
       table.appendChild(row);
     }
@@ -575,9 +590,14 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
   function updateActions() {
     const busy = running() || waitingComfy;
     root.classList.toggle("busy", busy);
-    for (const b of root.querySelectorAll("button.act, select.act, input.act")) b.disabled = busy || b.dataset.locked === "1";
+    const steps = data.install?.steps || {};
+    const queued = (id) => running() && ["pending", "running"].includes(steps[id]?.state);
+    for (const b of root.querySelectorAll("button.act, select.act, input.act")) {
+      const canQueue = b.classList.contains("queue") && data.ready && !waitingComfy;
+      b.disabled = (canQueue ? queued(b.dataset.item) : busy) || b.dataset.locked === "1";
+    }
     for (const i of root.querySelectorAll("input.act-input")) i.disabled = busy;
-    ui.back.hidden = !data.ready || busy;
+    ui.back.hidden = !data.ready;
     if (ui.installSel) {
       ui.installSel.disabled = busy || !guidedItems(false).length;
       ui.installAll.disabled = busy || !guidedItems(true).length;
@@ -596,11 +616,12 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     if (!items.length) return;
     showErr("");
     try {
-      readyAtStart = data.ready;
+      const queueing = running();
+      if (!queueing) readyAtStart = data.ready;
       data = await postJson("/api/setup/install", { items });
       wasRunning = true;
       updateAll();
-      root.scrollTo({ top: 0 });
+      if (!queueing) root.scrollTo({ top: 0 });
       schedulePoll();
     } catch (e) { showErr(e.message); }
   }
@@ -660,19 +681,20 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
   // section "models": jump straight to the model list (download centre)
   async function open({ section: target } = {}) {
     stopPoll();
-    waitingComfy = false;
     root.hidden = false;
     await load();
     build();
     const anchor = target === "models" && root.querySelector("#setupModels");
     if (anchor) anchor.scrollIntoView({ block: "start" });
     else root.scrollTop = 0;
-    if (running()) { wasRunning = true; readyAtStart = data.ready; schedulePoll(); }
+    if (waitingComfy) return;   // a finished queue is still waiting for ComfyUI (polling went on in the background)
+    if (running() && !wasRunning) { wasRunning = true; readyAtStart = data.ready; }
+    if (wasRunning) schedulePoll();
   }
 
+  // a running queue keeps being polled after closing, so the app picks up new models when it finishes
   function close() {
-    stopPoll();
-    waitingComfy = false;
+    if (!wasRunning) stopPoll();
     root.hidden = true;
   }
 

@@ -243,10 +243,9 @@ class InstallReq(BaseModel):
 
 @app.post("/api/setup/install")
 async def setup_install(req: InstallReq):
-    """Install base steps, components ("component:<id>") and models ("model:<preset>:<quant>");
-    a model's missing text encoder / VAE are added automatically."""
-    if INSTALLER.running:
-        raise HTTPException(409, "setup is already running")
+    """Queue base steps, components ("component:<id>") and models ("model:<preset>:<quant>");
+    a model's missing text encoder / VAE are added automatically. While a download runs, new items
+    are appended to the queue."""
     if not req.items or not all(installer.valid_item(i) for i in req.items):
         raise HTTPException(400, "unknown or no items")
     cfg = installer.load_config()
@@ -256,7 +255,8 @@ async def setup_install(req: InstallReq):
         return await setup_status()
 
     async def done() -> None:
-        new_code = any(i in ("comfyui", "gguf_node") or i.startswith("component:viggle_node") for i in order)
+        finished = [i for i, st in INSTALLER.steps.items() if st["state"] == "done"]
+        new_code = any(i in ("comfyui", "gguf_node") or i.startswith("component:viggle_node") for i in finished)
         if new_code and COMFY_PROC.managed:
             COMFY_PROC.stop()  # restart so new code / nodes are loaded
         elif new_code and await comfy_up():
@@ -286,9 +286,13 @@ async def setup_delete(req: DeleteReq):
     return await setup_status()
 
 
+class CancelReq(BaseModel):
+    item: str | None = None  # None cancels the whole queue
+
+
 @app.post("/api/setup/cancel")
-async def setup_cancel():
-    INSTALLER.cancel()
+async def setup_cancel(req: CancelReq):
+    INSTALLER.cancel(req.item)
     return {"ok": True}
 
 

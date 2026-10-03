@@ -195,8 +195,12 @@ def expand(items: list[str], have: dict[str, bool]) -> list[str]:
 # ---------------------------------------------------------------- install
 
 class Installer:
+    """Download queue: items run one after another; more can be queued while one is running."""
+
     def __init__(self) -> None:
         self.task: asyncio.Task | None = None
+        self.current: asyncio.Task | None = None
+        self.skip = False
         self.steps: dict[str, dict] = {}
         self.error: str | None = None
         self.restart_hint = False
@@ -209,41 +213,69 @@ class Installer:
         return {"running": self.running, "steps": self.steps, "error": self.error, "restart_comfy": self.restart_hint}
 
     def start(self, order: list[str], on_done) -> None:
-        self.steps = {s: {"state": "pending", "title": item_title(s), "message": "", "done": 0, "total": None, "rate": 0}
-                      for s in order}
-        self.error = None
-        self.restart_hint = False
-        self.task = asyncio.create_task(self._run(order, on_done))
+        """Queue items (already queued or running ones are ignored); starts the worker when idle.
+        on_done runs once the queue is empty."""
+        if not self.running:
+            self.steps = {}
+            self.error = None
+            self.restart_hint = False
+        for s in order:
+            if self.steps.get(s, {}).get("state") in ("pending", "running"):
+                continue
+            self.steps.pop(s, None)  # re-queued after an error or cancel: move to the end
+            self.steps[s] = {"state": "pending", "title": item_title(s), "message": "", "done": 0, "total": None, "rate": 0}
+        if not self.running:
+            self.task = asyncio.create_task(self._run(on_done))
 
-    def cancel(self) -> None:
-        if self.running:
+    def cancel(self, item: str | None = None) -> None:
+        """Cancel one queued or running item, or the whole queue."""
+        if not self.running:
+            return
+        if item is None:
             self.task.cancel()
+            return
+        st = self.steps.get(item)
+        if st and st["state"] == "pending":
+            st.update(state="cancelled", message="Cancelled")
+        elif st and st["state"] == "running" and self.current:
+            self.skip = True
+            self.current.cancel()
 
-    async def _run(self, order: list[str], on_done) -> None:
+    def _next(self) -> str | None:
+        return next((s for s, st in self.steps.items() if st["state"] == "pending"), None)
+
+    async def _step(self, cfg: dict, s: str, st: dict) -> None:
+        if ":" in s:
+            url, dest, size = item_target(cfg, s)
+            await self._download(url, dest, size, st)
+        else:
+            await getattr(self, f"_install_{s}")(cfg, s, st)
+
+    async def _run(self, on_done) -> None:
         cfg = load_config()
         try:
-            for s in order:
+            while (s := self._next()) is not None:
                 st = self.steps[s]
                 st["state"] = "running"
-                if ":" in s:
-                    url, dest, size = item_target(cfg, s)
-                    await self._download(url, dest, size, st)
-                else:
-                    await getattr(self, f"_install_{s}")(cfg, s, st)
-                st.update(state="done", message="Done")
+                self.skip = False
+                self.current = asyncio.create_task(self._step(cfg, s, st))
+                try:
+                    await self.current
+                    st.update(state="done", message="Done")
+                except asyncio.CancelledError:
+                    if not self.skip:
+                        raise  # whole queue cancelled
+                    st.update(state="cancelled", message="Cancelled")
+                except Exception as e:  # shown in the UI; the queue goes on with the next item
+                    self.error = str(e) or repr(e)
+                    st.update(state="error", message=self.error)
         except asyncio.CancelledError:
             for st in self.steps.values():
                 if st["state"] in ("running", "pending"):
                     st.update(state="cancelled", message="Cancelled")
             raise
-        except Exception as e:  # shown in the UI
-            self.error = str(e) or repr(e)
-            for st in self.steps.values():
-                if st["state"] == "running":
-                    st.update(state="error", message=self.error)
-                elif st["state"] == "pending":
-                    st.update(state="skipped", message="Skipped after an error")
         finally:
+            self.current = None
             await on_done()
 
     # -- steps

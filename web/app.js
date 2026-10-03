@@ -379,16 +379,28 @@ function draw() {
 }
 
 // ------------------------------------------------------------------ extend canvas (outpaint)
-// The image sits on a larger canvas with the aspect from the Size tiles; it is dragged into place and the
-// new area is generated (the server pads the image and masks the new area).
+// The image sits on a larger canvas with the aspect from the Size tiles; it is dragged into place and made
+// smaller by its corner handles (more new area around it). The server pads the image and masks the new area.
 function outpaintOn() { return state.task !== "generate" && $("mode").value === "outpaint" && !upscaling(); }
-state.outpaintPos = { fx: 0.5, fy: 0.5 };   // where the image sits in the free space (0 = left/top, 1 = right/bottom)
+// fx/fy: where the image sits in the free space (0 = left/top, 1 = right/bottom);
+// scale: image size relative to the tightest canvas of the chosen shape (1 = touches two sides)
+state.outpaint = { fx: 0.5, fy: 0.5, scale: 1, image: null };
+const OUTPAINT_MIN_SCALE = 0.25;
 
 function outpaintCanvas() {
+  const o = state.outpaint;
+  if (o.image !== state.imageName) Object.assign(o, { fx: 0.5, fy: 0.5, scale: 1, image: state.imageName });   // new image
   const [aw, ah] = $("aspect").value.split(":").map(Number);
   const sw = state.srcW, sh = state.srcH, a = aw / ah;
-  const w = a > sw / sh ? Math.round(sh * a) : sw, h = a > sw / sh ? sh : Math.round(sw / a);
-  return { w, h, x: Math.round(state.outpaintPos.fx * (w - sw)), y: Math.round(state.outpaintPos.fy * (h - sh)) };
+  const tw = a > sw / sh ? sh * a : sw, th = a > sw / sh ? sh : sw / a;   // tightest canvas around the image
+  const w = Math.round(tw / o.scale), h = Math.round(th / o.scale);
+  return { w, h, x: Math.round(o.fx * (w - sw)), y: Math.round(o.fy * (h - sh)) };
+}
+
+// the image's rectangle as fractions of the canvas (what the drag handles work with)
+function outpaintRect() {
+  const c = outpaintCanvas();
+  return { c, l: c.x / c.w, t: c.y / c.h, iw: state.srcW / c.w, ih: state.srcH / c.h };
 }
 
 function drawOutpaint() {
@@ -401,46 +413,90 @@ function drawOutpaint() {
   dctx.fillStyle = "#4a4a4a";   // checkerboard: this area is new
   const q = Math.max(8, Math.round(w / 40));
   for (let y = 0; y < h; y += q) for (let x = (y / q) % 2 ? q : 0; x < w; x += 2 * q) dctx.fillRect(x, y, q, q);
-  dctx.drawImage(state.imgEl, c.x * s, c.y * s, state.srcW * s, state.srcH * s);
-  const lw = Math.max(1.5, w / display.getBoundingClientRect().width * 1.5);
+  const ix = c.x * s, iy = c.y * s, iw = state.srcW * s, ih = state.srcH * s;
+  dctx.drawImage(state.imgEl, ix, iy, iw, ih);
+  const px = w / display.getBoundingClientRect().width;   // canvas pixels per screen pixel
+  const lw = Math.max(1.5, px * 1.5);
   dctx.save();
   dctx.lineWidth = lw;
   dctx.setLineDash([lw * 5, lw * 4]);
   dctx.strokeStyle = "#fff";
-  dctx.strokeRect(c.x * s, c.y * s, state.srcW * s, state.srcH * s);
+  dctx.strokeRect(ix, iy, iw, ih);
+  dctx.setLineDash([]);
+  const k = 10 * px;   // corner handles, 10 screen px
+  for (const [hx, hy] of [[ix, iy], [ix + iw, iy], [ix, iy + ih], [ix + iw, iy + ih]]) {
+    dctx.fillStyle = "#fff";
+    dctx.fillRect(hx - k / 2, hy - k / 2, k, k);
+    dctx.strokeStyle = "rgba(0,0,0,.6)";
+    dctx.lineWidth = px;
+    dctx.strokeRect(hx - k / 2, hy - k / 2, k, k);
+  }
   dctx.restore();
+}
+
+// which corner handle (0 tl, 1 tr, 2 bl, 3 br) is under the pointer, within 14 screen px
+function outpaintCorner(e) {
+  const r = display.getBoundingClientRect(), g = outpaintRect();
+  const corners = [[g.l, g.t], [g.l + g.iw, g.t], [g.l, g.t + g.ih], [g.l + g.iw, g.t + g.ih]];
+  const i = corners.findIndex(([fx, fy]) => Math.hypot(r.left + fx * r.width - e.clientX, r.top + fy * r.height - e.clientY) <= 14);
+  return i < 0 ? null : i;
 }
 
 let opDrag = null;
 display.addEventListener("pointerdown", (e) => {
   if (!outpaintOn() || !state.imgEl || e.button !== 0) return;
   e.stopImmediatePropagation();
-  const c = outpaintCanvas();
-  opDrag = { x: e.clientX, y: e.clientY, fx: state.outpaintPos.fx, fy: state.outpaintPos.fy, c };
-  display.setPointerCapture(e.pointerId);
+  opDrag = { x: e.clientX, y: e.clientY, corner: outpaintCorner(e), start: { ...state.outpaint }, g: outpaintRect() };
+  try { display.setPointerCapture(e.pointerId); } catch { /* moves still arrive over the canvas */ }
   display.classList.add("dragging");
 }, true);
 display.addEventListener("pointermove", (e) => {
-  if (!opDrag) return;
+  if (!outpaintOn()) return;
+  if (!opDrag) {   // hover: show what a drag would do
+    const k = outpaintCorner(e);
+    display.style.cursor = k == null ? "" : k === 0 || k === 3 ? "nwse-resize" : "nesw-resize";
+    return;
+  }
   e.stopImmediatePropagation();
-  const r = display.getBoundingClientRect(), c = opDrag.c;
-  const perPx = c.w / r.width;   // source pixels per screen pixel
-  const freeW = c.w - state.srcW, freeH = c.h - state.srcH;
-  const clamp = (v) => Math.min(1, Math.max(0, v));
-  state.outpaintPos = {
-    fx: freeW ? clamp(opDrag.fx + (e.clientX - opDrag.x) * perPx / freeW) : 0.5,
-    fy: freeH ? clamp(opDrag.fy + (e.clientY - opDrag.y) * perPx / freeH) : 0.5,
-  };
+  const r = display.getBoundingClientRect(), g = opDrag.g, o = state.outpaint;
+  const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
+  if (opDrag.corner == null) {   // move: the drag distance as a share of the free space
+    const freeW = 1 - g.iw, freeH = 1 - g.ih;
+    o.fx = freeW > 1e-6 ? clamp(opDrag.start.fx + (e.clientX - opDrag.x) / r.width / freeW) : 0.5;
+    o.fy = freeH > 1e-6 ? clamp(opDrag.start.fy + (e.clientY - opDrag.y) / r.height / freeH) : 0.5;
+  } else {   // resize from a corner: the opposite corner stays where it is
+    const right = opDrag.corner === 1 || opDrag.corner === 3, bottom = opDrag.corner >= 2;
+    const ax = right ? g.l : g.l + g.iw, ay = bottom ? g.t : g.t + g.ih;   // fixed corner (canvas fractions)
+    const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+    // new size factor from the pointer, keeping the image's shape; the larger of both directions wins
+    const f = Math.max(Math.abs(px - ax) / g.iw, Math.abs(py - ay) / g.ih);
+    const scale = clamp(opDrag.start.scale * f, OUTPAINT_MIN_SCALE, 1);
+    const k = scale / opDrag.start.scale, iw = g.iw * k, ih = g.ih * k;   // new image size (fractions)
+    const l = right ? ax : ax - iw, t = bottom ? ay : ay - ih;
+    o.scale = scale;
+    o.fx = 1 - iw > 1e-6 ? clamp(l / (1 - iw)) : 0.5;
+    o.fy = 1 - ih > 1e-6 ? clamp(t / (1 - ih)) : 0.5;
+  }
   render();
 }, true);
 for (const ev of ["pointerup", "pointercancel"]) {
   display.addEventListener(ev, (e) => {
     if (!opDrag) return;
     e.stopImmediatePropagation();
+    const resized = opDrag.corner != null;
     opDrag = null;
     display.classList.remove("dragging");
+    if (resized) refreshSizeDebounced();   // the canvas got bigger or smaller: new working size
   }, true);
 }
+// double-click: back to the tightest canvas, image centred
+display.addEventListener("dblclick", (e) => {
+  if (!outpaintOn()) return;
+  e.stopImmediatePropagation();
+  Object.assign(state.outpaint, { fx: 0.5, fy: 0.5, scale: 1 });
+  refreshSizeDebounced();
+  render();
+}, true);
 $("aspect").addEventListener("change", () => { if (outpaintOn()) { refreshSizeDebounced(); render(); } });
 
 // ------------------------------------------------------------------ LoRAs (Advanced)

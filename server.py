@@ -906,8 +906,12 @@ async def outpaint_input(params: dict, run_id: str) -> None:
     except (KeyError, TypeError, ValueError) as e:
         raise HTTPException(400, "outpaint needs canvas_w, canvas_h, x and y") from e
     orig = await load_input(params["image"])
-    if cw * ch > 80_000_000:
-        raise HTTPException(400, "the new canvas is too large")
+    f = min(1.0, (40_000_000 / max(1, cw * ch)) ** 0.5)
+    if f < 1:   # a small image on a big canvas: the run works at ~1 MP anyway, so pad a smaller copy
+        orig = orig.resize((max(1, round(orig.width * f)), max(1, round(orig.height * f))), Image.LANCZOS)
+        cw, ch = round(cw * f), round(ch * f)
+        x, y = min(round(x * f), cw - orig.width), min(round(y * f), ch - orig.height)
+        params["outpaint"] = {**o, "canvas_w": cw, "canvas_h": ch, "x": x, "y": y}
     try:
         canvas, mask = await asyncio.to_thread(prepare.pad, orig, x, y, cw, ch)
     except ValueError as e:

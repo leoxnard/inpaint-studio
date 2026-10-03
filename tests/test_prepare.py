@@ -100,3 +100,26 @@ def test_stitch_adds_the_originals_grain_inside_the_mask():
     target = prepare.grain_std(np.asarray(grainy, np.float32), m == 0).mean()
     assert abs(hp(with_grain) - target) < 0.15 * target
     assert (np.asarray(with_grain)[m == 0] == np.asarray(grainy)[m == 0]).all()
+
+
+def test_outpaint_input_shrinks_a_huge_canvas(monkeypatch):
+    import asyncio
+
+    import server
+    uploads = []
+
+    async def load_input(name):
+        return Image.new("RGB", (4000, 3000), (10, 20, 30))
+
+    async def upload(data, name, sub):
+        uploads.append(Image.open(__import__("io").BytesIO(data)).size)
+        return f"{sub}/{name}"
+    monkeypatch.setattr(server, "load_input", load_input)
+    monkeypatch.setattr(server, "upload_to_comfy", upload)
+    p = {"image": "a.png", "outpaint": {"canvas_w": 16000, "canvas_h": 12000, "x": 12000, "y": 0},
+         "megapixels": 0.95, "resolution": 1008}
+    asyncio.run(server.outpaint_input(p, "r1"))
+    cw, ch = p["src_w"], p["src_h"]
+    assert cw * ch <= 40_000_000 * 1.01 and uploads[0] == (cw, ch)
+    o, (ow, oh) = p["outpaint"], p["orig_size"]
+    assert o["x"] + ow == cw and o["y"] == 0          # still in the top right corner

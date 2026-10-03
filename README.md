@@ -153,7 +153,8 @@ Chosen under **Area to change** in Create.
   from the original outside the mask. Try this when the model keeps redrawing the old content
   or the inpainted background looks out of context.
 - **Extend canvas** – outpainting: pick the new shape with the aspect tiles under Size and drag the image
-  to where it should sit. The new area is filled with stretched, blurred edge colours and inpainted
+  to where it should sit. Drag a corner handle to make the image smaller (down to ¼, the opposite corner
+  stays), so there is new area on more sides; double-click resets. The new area is filled with stretched, blurred edge colours and inpainted
   (with a small overlap into the old image so the border blends). The model draws a slightly lighter or
   darker halo where its new area starts, so the blend starts after it; **Match colours at the border**
   (on by default) also shifts the new area, line by line along the border, to the colours of the old

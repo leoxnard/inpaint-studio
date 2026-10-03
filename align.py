@@ -175,7 +175,7 @@ def _smoothstep(t: np.ndarray) -> np.ndarray:
 
 
 def outpaint_blend(original: Image.Image, raw: Image.Image, box: tuple[int, int, int, int], overlap: int,
-                   colors: bool = True) -> Image.Image:
+                   colors: bool = True, holes: np.ndarray | None = None) -> Image.Image:
     """Outpainting: paste the generated image (raw) around the old one (box = x0, y0, x1, y1 in raw pixels).
     The model draws a lighter or darker halo right where its regenerated area starts (overlap px inside the
     old image), so the blend starts after that halo and ends just outside the old image, where the
@@ -212,7 +212,12 @@ def outpaint_blend(original: Image.Image, raw: Image.Image, box: tuple[int, int,
             fade = _smoothstep(1 - np.maximum(dist, 0) / falloff) * (dist >= start)
             lab1 = lab1 + (diff[:, None, :] if axis == 1 else diff[None, :, :]) * fade[..., None]
         r = np.clip(cv2.cvtColor(lab1.astype(np.float32), cv2.COLOR_LAB2RGB) * 255, 0, 255)
-    wgt = _smoothstep((signed - start) / (end - start))[..., None]
+    wgt = _smoothstep((signed - start) / (end - start))
+    if holes is not None and holes.any():
+        # erased parts come from the generated image (a wider grown hole was tried: the model then copied
+        # more of the blurred fill, worse than the faint edge this leaves)
+        wgt = np.maximum(wgt, cv2.GaussianBlur(holes.astype(np.float32) / 255, (0, 0), max(1.0, overlap / 6)))
+    wgt = wgt[..., None]
     return Image.fromarray(np.rint(o * (1 - wgt) + r * wgt).astype(np.uint8))
 
 

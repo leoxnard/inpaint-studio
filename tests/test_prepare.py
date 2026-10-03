@@ -123,3 +123,15 @@ def test_outpaint_input_shrinks_a_huge_canvas(monkeypatch):
     assert cw * ch <= 40_000_000 * 1.01 and uploads[0] == (cw, ch)
     o, (ow, oh) = p["outpaint"], p["orig_size"]
     assert o["x"] + ow == cw and o["y"] == 0          # still in the top right corner
+
+
+def test_pad_masks_and_fills_erased_holes():
+    img = noise(400, 300, 4)
+    holes = np.zeros((150, 200), np.uint8)   # any size: stretched to the image
+    holes[50:100, 50:100] = 255               # -> image px 100..200 x 100..200
+    canvas, mask = prepare.pad(img, 0, 0, 600, 300, holes=Image.fromarray(holes))
+    c, m, o = np.asarray(canvas), np.asarray(mask), np.asarray(img)
+    assert (m[110:190, 110:190] == 255).all()                 # the hole is regenerated
+    assert (m[250:290, 20:80] == 0).all()                     # far from hole and border: kept
+    assert (c[250:290, 20:80] == o[250:290, 20:80]).all()
+    assert np.abs(c[110:190, 110:190].astype(int) - o[110:190, 110:190]).mean() > 20   # old content is gone

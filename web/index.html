@@ -141,6 +141,17 @@
         <div class="empty" id="stageEmpty">Load an image to start: drop it anywhere or use Image on the left.</div>
         <div class="spinner-wrap" id="maskSpinner" hidden><div class="spinner"></div><span>Computing mask...</span></div>
       </div>
+      <div class="op-tools outpaint-only" id="opTools" role="toolbar" aria-label="Extend canvas tools">
+        <div class="seg" id="opToolSeg" role="group" aria-label="Canvas tool">
+          <button data-optool="move" aria-pressed="true" title="Drag the image, resize it at its corners">Move</button>
+          <button data-optool="erase" aria-pressed="false" title="Erase parts of the image; they are generated new, like the added area">Erase</button>
+          <button data-optool="restore" aria-pressed="false" title="Bring erased parts back">Restore</button>
+        </div>
+        <label class="op-brush">Brush <output id="opBrushOut">6 %</output>
+          <input type="range" id="opBrush" min="1" max="30" step="1" value="6"></label>
+        <button id="opUndo" title="Undo the last erase stroke">Undo</button>
+        <button id="opClear" title="Bring back everything that was erased">Clear</button>
+      </div>
       <div class="genframe gen-only" id="genFrame">
         <div id="genShape">The new image will have this shape. Results appear in Runs.</div>
       </div>

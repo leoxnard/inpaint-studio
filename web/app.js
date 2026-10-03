@@ -389,7 +389,10 @@ const OUTPAINT_MIN_SCALE = 0.25;
 
 function outpaintCanvas() {
   const o = state.outpaint;
-  if (o.image !== state.imageName) Object.assign(o, { fx: 0.5, fy: 0.5, scale: 1, image: state.imageName });   // new image
+  if (o.image !== state.imageName) {   // new image: centred, full size, nothing erased
+    Object.assign(o, { fx: 0.5, fy: 0.5, scale: 1, image: state.imageName });
+    state.opErase = null; state.opErased = false; state.opHistory = [];
+  }
   const [aw, ah] = $("aspect").value.split(":").map(Number);
   const sw = state.srcW, sh = state.srcH, a = aw / ah;
   const tw = a > sw / sh ? sh * a : sw, th = a > sw / sh ? sh : sw / a;   // tightest canvas around the image
@@ -414,7 +417,18 @@ function drawOutpaint() {
   const q = Math.max(8, Math.round(w / 40));
   for (let y = 0; y < h; y += q) for (let x = (y / q) % 2 ? q : 0; x < w; x += 2 * q) dctx.fillRect(x, y, q, q);
   const ix = c.x * s, iy = c.y * s, iw = state.srcW * s, ih = state.srcH * s;
-  dctx.drawImage(state.imgEl, ix, iy, iw, ih);
+  if (state.opErased && state.opErase) {   // erased parts show the checkerboard: they are new area too
+    const t = opComp;
+    t.width = Math.max(1, Math.round(iw)); t.height = Math.max(1, Math.round(ih));
+    const tc = t.getContext("2d");
+    tc.drawImage(state.imgEl, 0, 0, t.width, t.height);
+    tc.globalCompositeOperation = "destination-out";
+    tc.drawImage(state.opErase, 0, 0, t.width, t.height);
+    tc.globalCompositeOperation = "source-over";
+    dctx.drawImage(t, ix, iy, iw, ih);
+  } else {
+    dctx.drawImage(state.imgEl, ix, iy, iw, ih);
+  }
   const px = w / display.getBoundingClientRect().width;   // canvas pixels per screen pixel
   const lw = Math.max(1.5, px * 1.5);
   dctx.save();
@@ -423,6 +437,17 @@ function drawOutpaint() {
   dctx.strokeStyle = "#fff";
   dctx.strokeRect(ix, iy, iw, ih);
   dctx.setLineDash([]);
+  if (state.opTool !== "move") {   // erasing: brush outline instead of the corner handles
+    if (state.opHover) {
+      dctx.strokeStyle = "#fff";
+      dctx.lineWidth = px * 1.5;
+      dctx.beginPath();
+      dctx.arc(state.opHover.x * w, state.opHover.y * h, opBrushPx() / 2 * (iw / opEraseCanvas().width), 0, Math.PI * 2);
+      dctx.stroke();
+    }
+    dctx.restore();
+    return;
+  }
   const k = 10 * px;   // corner handles, 10 screen px
   for (const [hx, hy] of [[ix, iy], [ix + iw, iy], [ix, iy + ih], [ix + iw, iy + ih]]) {
     dctx.fillStyle = "#fff";
@@ -442,16 +467,108 @@ function outpaintCorner(e) {
   return i < 0 ? null : i;
 }
 
+// ---- erasing parts of the image (Erase / Restore): a mask over the image, white = erased
+state.opTool = "move";
+state.opHistory = [];
+const opComp = document.createElement("canvas");
+function opEraseCanvas() {
+  if (!state.opErase) {
+    const f = Math.min(1, 1024 / Math.max(state.srcW, state.srcH));
+    state.opErase = document.createElement("canvas");
+    state.opErase.width = Math.max(1, Math.round(state.srcW * f));
+    state.opErase.height = Math.max(1, Math.round(state.srcH * f));
+  }
+  return state.opErase;
+}
+const opBrushPx = () => (num("opBrush") / 100) * opEraseCanvas().width;   // brush diameter in erase-mask px
+function opPoint(e) {   // pointer -> erase-mask pixels
+  const r = display.getBoundingClientRect(), g = outpaintRect(), m = opEraseCanvas();
+  const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+  return { x: (fx - g.l) / g.iw * m.width, y: (fy - g.t) / g.ih * m.height };
+}
+function opStroke(a, b) {
+  const ctx = opEraseCanvas().getContext("2d");
+  ctx.globalCompositeOperation = state.opTool === "restore" ? "destination-out" : "source-over";
+  ctx.strokeStyle = ctx.fillStyle = "#fff";
+  ctx.lineCap = ctx.lineJoin = "round";
+  ctx.lineWidth = opBrushPx();
+  ctx.beginPath();
+  if (a) { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  else { ctx.arc(b.x, b.y, ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fill(); }
+  ctx.globalCompositeOperation = "source-over";
+  state.opErased = true;
+}
+function setOpTool(t) {
+  state.opTool = t;
+  for (const b of $("opToolSeg").children) b.setAttribute("aria-pressed", String(b.dataset.optool === t));
+  display.classList.toggle("op-paint", t !== "move");
+  state.opHover = null;
+  render();
+}
+$("opToolSeg").addEventListener("click", (e) => { const b = e.target.closest("[data-optool]"); if (b) setOpTool(b.dataset.optool); });
+$("opBrush").addEventListener("input", () => { $("opBrushOut").textContent = `${$("opBrush").value} %`; render(); });
+$("opUndo").onclick = () => {
+  const snap = state.opHistory.pop();
+  if (!snap || !state.opErase) return;
+  state.opErase.getContext("2d").putImageData(snap, 0, 0);
+  render();
+};
+$("opClear").onclick = () => {
+  if (!state.opErase) return;
+  const m = state.opErase;
+  state.opHistory.push(m.getContext("2d").getImageData(0, 0, m.width, m.height));
+  if (state.opHistory.length > 5) state.opHistory.shift();
+  m.getContext("2d").clearRect(0, 0, m.width, m.height);
+  state.opErased = false;
+  render();
+};
+// the erased parts as a black/white PNG for the server (null when nothing is erased)
+async function opEraseBlob() {
+  const m = state.opErase;
+  if (!state.opErased || !m) return null;
+  const t = document.createElement("canvas");
+  t.width = m.width; t.height = m.height;
+  const tc = t.getContext("2d");
+  tc.fillStyle = "#000"; tc.fillRect(0, 0, t.width, t.height);
+  tc.drawImage(m, 0, 0);
+  const d = tc.getImageData(0, 0, t.width, t.height).data;
+  if (!d.some((v, i) => i % 4 === 0 && v > 127)) return null;
+  return new Promise((res) => t.toBlob(res, "image/png"));
+}
+
 let opDrag = null;
 display.addEventListener("pointerdown", (e) => {
   if (!outpaintOn() || !state.imgEl || e.button !== 0) return;
   e.stopImmediatePropagation();
+  if (state.opTool !== "move") {   // erase / restore stroke
+    const m = opEraseCanvas();
+    state.opHistory.push(m.getContext("2d").getImageData(0, 0, m.width, m.height));
+    if (state.opHistory.length > 5) state.opHistory.shift();
+    const p = opPoint(e);
+    opStroke(null, p);
+    opDrag = { paint: true, last: p };
+    try { display.setPointerCapture(e.pointerId); } catch { /* moves still arrive over the canvas */ }
+    render();
+    return;
+  }
   opDrag = { x: e.clientX, y: e.clientY, corner: outpaintCorner(e), start: { ...state.outpaint }, g: outpaintRect() };
   try { display.setPointerCapture(e.pointerId); } catch { /* moves still arrive over the canvas */ }
   display.classList.add("dragging");
 }, true);
 display.addEventListener("pointermove", (e) => {
   if (!outpaintOn()) return;
+  if (state.opTool !== "move") {   // erase / restore: brush outline follows the pointer
+    const r = display.getBoundingClientRect();
+    state.opHover = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    if (opDrag?.paint) {
+      e.stopImmediatePropagation();
+      const p = opPoint(e);
+      opStroke(opDrag.last, p);
+      opDrag.last = p;
+    }
+    render();
+    return;
+  }
   if (!opDrag) {   // hover: show what a drag would do
     const k = outpaintCorner(e);
     display.style.cursor = k == null ? "" : k === 0 || k === 3 ? "nwse-resize" : "nesw-resize";
@@ -483,7 +600,7 @@ for (const ev of ["pointerup", "pointercancel"]) {
   display.addEventListener(ev, (e) => {
     if (!opDrag) return;
     e.stopImmediatePropagation();
-    const resized = opDrag.corner != null;
+    const resized = !opDrag.paint && opDrag.corner != null;
     opDrag = null;
     display.classList.remove("dragging");
     if (resized) refreshSizeDebounced();   // the canvas got bigger or smaller: new working size
@@ -491,7 +608,7 @@ for (const ev of ["pointerup", "pointercancel"]) {
 }
 // double-click: back to the tightest canvas, image centred
 display.addEventListener("dblclick", (e) => {
-  if (!outpaintOn()) return;
+  if (!outpaintOn() || state.opTool !== "move") return;
   e.stopImmediatePropagation();
   Object.assign(state.outpaint, { fx: 0.5, fy: 0.5, scale: 1 });
   refreshSizeDebounced();
@@ -702,6 +819,7 @@ const endStroke = () => { if (stroking) scheduleMaskSave(); stroking = false; la
 display.addEventListener("pointerup", endStroke);
 display.addEventListener("pointercancel", endStroke);
 display.addEventListener("pointerleave", () => { $("brushCursor").hidden = true; });
+display.addEventListener("pointerleave", () => { if (state.opHover) { state.opHover = null; render(); } });
 display.addEventListener("pointerenter", moveCursor);
 
 function moveCursor(e) {
@@ -1096,7 +1214,12 @@ async function runEdit({ thenNext = false } = {}) {
       maskName = await uploadMaskBlob(blob);
     }
     saveForm();
-    await submitVariants(editParams({ image: state.imageName, srcW: state.srcW, srcH: state.srcH, maskName, useMask }));
+    const params = editParams({ image: state.imageName, srcW: state.srcW, srcH: state.srcH, maskName, useMask });
+    if (params.outpaint) {   // extend canvas: erased parts of the image are generated new too
+      const blob = await opEraseBlob();
+      if (blob) params.outpaint.erase = await uploadMaskBlob(blob);
+    }
+    await submitVariants(params);
     const item = currentBatchItem();
     if (item) { item.status = "queued"; renderBatch(); if (thenNext) openNextBatchItem(); }
   } catch (e) {

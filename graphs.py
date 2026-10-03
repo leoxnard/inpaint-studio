@@ -107,6 +107,12 @@ CLEAN_NOTE = ("Remove all watermarks, logos, captions and overlaid text from the
               "is behind them.")
 CLEAN_NOTE_GENERATE = "The image has no watermarks, logos, captions or overlaid text."
 
+# extend canvas: the new area and erased parts arrive as blurred, smeared colour; edit models copy their input,
+# so without this they keep the blur
+OUTPAINT_NOTE = ("The blurred, smeared areas of the image are missing parts of the photo. Fill them with sharp, "
+                 "realistic content that continues the scene naturally, matching the perspective, light and detail of "
+                 "the rest. Keep everything sharp in the image as it is.")
+
 KEEP_IDENTICAL = ("Keep everything else in the image exactly identical to the original: same framing, "
                   "perspective, positions, people, objects, colors, lighting and fine details. "
                   "Only change what is described above.")
@@ -172,6 +178,8 @@ def edit_prompt(p: dict[str, Any]) -> str:
         prompt = f"{prompt}\n\n{takes}"
     if p.get("clean_overlays"):
         prompt = f"{prompt}\n\n{CLEAN_NOTE_GENERATE if p.get('task') == 'generate' else CLEAN_NOTE}"
+    if p.get("outpaint"):
+        prompt = f"{prompt}\n\n{OUTPAINT_NOTE}"
     if p.get("mode") == "paste":
         # p["keep_note"] replaces the default (Advanced in the UI), empty turns it off;
         # keep_identical=False is the older way to turn it off

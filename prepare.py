@@ -93,10 +93,26 @@ def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: d
     return out
 
 
+def hole_mask(holes: Image.Image | None, x: int, y: int, size: tuple[int, int], canvas_w: int, canvas_h: int,
+              grow: int) -> np.ndarray:
+    """Erased parts of the image (white = erased, any size, stretched to the image) on the canvas, grown by
+    a few pixels so the new content blends into what is kept. 0/255, canvas size."""
+    out = np.zeros((canvas_h, canvas_w), np.uint8)
+    if holes is None:
+        return out
+    h = np.asarray(holes.convert("L").resize(size, Image.BILINEAR)) > 127
+    out[y:y + size[1], x:x + size[0]] = h * 255
+    if grow > 0 and out.any():
+        out = cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * grow + 1, 2 * grow + 1)))
+    return out
+
+
 def pad(img: Image.Image, x: int, y: int, canvas_w: int, canvas_h: int,
-        overlap: int = OUTPAINT_OVERLAP) -> tuple[Image.Image, Image.Image]:
+        overlap: int = OUTPAINT_OVERLAP, holes: Image.Image | None = None) -> tuple[Image.Image, Image.Image]:
     """Place img at (x, y) on a canvas_w × canvas_h canvas. Returns the filled canvas and the mask
-    (new area + overlap into the old image on the extended sides, feathered)."""
+    (new area + overlap into the old image on the extended sides, feathered). holes: parts of the image
+    that were erased (white); they are filled from their surroundings (so the model does not copy what was
+    there) and masked like the new area."""
     img = img.convert("RGB")
     w, h = img.size
     if not (0 <= x <= canvas_w - w and 0 <= y <= canvas_h - h):
@@ -105,10 +121,13 @@ def pad(img: Image.Image, x: int, y: int, canvas_w: int, canvas_h: int,
     a = np.asarray(img)
     filled = cv2.copyMakeBorder(a, top, bottom, left, right, cv2.BORDER_REPLICATE)
     sigma = max(canvas_w, canvas_h) / 40
+    hole = hole_mask(holes, x, y, (w, h), canvas_w, canvas_h, max(2, overlap // 4))
+    if hole.any():   # fill the holes from their edges first, so the blur below has no old content to smear
+        filled = cv2.inpaint(filled, hole, 5, cv2.INPAINT_TELEA)
     blurred = cv2.GaussianBlur(filled, (0, 0), sigma)
     inside = np.zeros((canvas_h, canvas_w), bool)
     inside[top:top + h, left:left + w] = True
-    out = np.where(inside[..., None], filled, blurred)
+    out = np.where((inside & (hole == 0))[..., None], filled, blurred)
 
     mask = np.full((canvas_h, canvas_w), 255, np.uint8)
     o = overlap
@@ -118,4 +137,7 @@ def pad(img: Image.Image, x: int, y: int, canvas_w: int, canvas_h: int,
         mask_img = mask_img.filter(ImageFilter.GaussianBlur(o / 3))
         # the new area itself stays fully masked, only the overlap fades
         mask_img = Image.fromarray(np.where(inside, np.asarray(mask_img), 255).astype(np.uint8))
+    if hole.any():
+        soft = cv2.GaussianBlur(hole, (0, 0), max(1.0, o / 6))
+        mask_img = Image.fromarray(np.maximum(np.asarray(mask_img), np.maximum(soft, hole)))
     return Image.fromarray(out), mask_img

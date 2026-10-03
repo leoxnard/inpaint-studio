@@ -700,3 +700,8 @@ body.mode-outpaint:not(.task-generate) #display.dragging { cursor: grabbing; }
 .lora-row select { min-width: 0; }
 .outpaint-only { display: none; margin-top: 12px; }
 body.mode-outpaint:not(.task-generate) .outpaint-only { display: flex; }
+/* extend canvas tools under the stage: move / erase / restore */
+.op-tools { flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 0 0; }
+.op-tools .op-brush { display: grid; grid-template-columns: auto auto; gap: 2px 8px; align-items: center; min-width: 160px; }
+.op-tools .op-brush input { grid-column: 1 / -1; width: 100%; }
+body.mode-outpaint:not(.task-generate) #display.op-paint { cursor: crosshair; }

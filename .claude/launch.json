@@ -12,6 +12,18 @@
         "7381"
       ],
       "port": 7381
+    },
+    {
+      "name": "inpaint-studio-dev-2",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "uvicorn",
+        "server:app",
+        "--port",
+        "7382"
+      ],
+      "port": 7382
     }
   ]
 }

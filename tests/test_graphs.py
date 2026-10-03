@@ -262,3 +262,9 @@ def test_loras_are_chained_after_the_model_loader():
     assert g["unet"]["inputs"] == {"model": ["lora_0", 0], "lora_name": "b.safetensors", "strength_model": 1.2}
     users = [n for n, v in g.items() if ["unet", 0] in v["inputs"].values()]
     assert users   # the sampler side still uses "unet", now the last LoRA
+
+
+def test_outpaint_adds_the_fill_note():
+    p = {"prompt": "x", "outpaint": {"canvas_w": 10, "canvas_h": 10, "x": 0, "y": 0}}
+    assert graphs.edit_prompt(p).endswith(graphs.OUTPAINT_NOTE)
+    assert graphs.OUTPAINT_NOTE not in graphs.edit_prompt({"prompt": "x"})

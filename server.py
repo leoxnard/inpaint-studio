@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import websockets
+import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -49,7 +50,7 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
                   "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of", "color_correction", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -912,15 +913,22 @@ async def outpaint_input(params: dict, run_id: str) -> None:
         cw, ch = round(cw * f), round(ch * f)
         x, y = min(round(x * f), cw - orig.width), min(round(y * f), ch - orig.height)
         params["outpaint"] = {**o, "canvas_w": cw, "canvas_h": ch, "x": x, "y": y}
+    holes = (await _fetch_view(input_mask_url(o["erase"]))).convert("L") if o.get("erase") else None   # erased parts
     try:
-        canvas, mask = await asyncio.to_thread(prepare.pad, orig, x, y, cw, ch)
+        canvas, mask = await asyncio.to_thread(prepare.pad, orig, x, y, cw, ch, prepare.OUTPAINT_OVERLAP, holes)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     files = []
-    for img, name in ((canvas, f"{run_id}_canvas.png"), (mask, f"{run_id}_canvasmask.png")):
+    parts = [(canvas, f"{run_id}_canvas.png"), (mask, f"{run_id}_canvasmask.png")]
+    if holes is not None:   # where the erased parts are on the canvas, for the blend after the run
+        grow = max(2, prepare.OUTPAINT_OVERLAP // 4)
+        parts.append((Image.fromarray(prepare.hole_mask(holes, x, y, orig.size, cw, ch, grow)), f"{run_id}_holes.png"))
+    for img, name in parts:
         buf = io.BytesIO()
         img.save(buf, "PNG")
         files.append(await upload_to_comfy(buf.getvalue(), name, SUBFOLDER))
+    if holes is not None:
+        params["outpaint_holes"] = files[2]
     params.update(orig_image=params["image"], orig_size=list(orig.size), image=files[0], mask=files[1], use_mask=True,
                   mode="inpaint", src_w=cw, src_h=ch, crop_stitch=False)
     fit_size(params)
@@ -934,8 +942,11 @@ async def outpaint_fix(run: dict, params: dict, before_url: str, raw_url: str) -
     s = raw.size[0] / int(o["canvas_w"])   # canvas px -> working px
     ow, oh = params["orig_size"]
     box = (round(int(o["x"]) * s), round(int(o["y"]) * s), round((int(o["x"]) + ow) * s), round((int(o["y"]) + oh) * s))
+    holes = None
+    if params.get("outpaint_holes"):
+        holes = np.asarray((await _fetch_view(input_mask_url(params["outpaint_holes"]))).convert("L").resize(raw.size, Image.BILINEAR))
     fixed = await asyncio.to_thread(align.outpaint_blend, before, raw, box, round(prepare.OUTPAINT_OVERLAP * s),
-                                    bool(params.get("outpaint_colors", True)))
+                                    bool(params.get("outpaint_colors", True)), holes)
     fixed.save(RUNS / run_id / "aligned.png")
     run["aligned"] = {"outpaint": True, "colors": bool(params.get("outpaint_colors", True)),
                       "url": f"/data/runs/{run_id}/aligned.png?t={int(time.time() * 1000)}"}

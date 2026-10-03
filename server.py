@@ -51,8 +51,8 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
 
 @asynccontextmanager
 async def lifespan(app):
-    mark_orphaned_runs()
     await start_comfy()
+    await reattach_runs()
     yield
     INSTALLER.cancel()
     COMFY_PROC.stop()
@@ -456,6 +456,26 @@ async def hide_run(run_id: str):
     return {"hidden": run_id}
 
 
+@app.post("/api/runs/{run_id}/retry")
+async def retry_run(run_id: str):
+    """Queues a failed (or any) run again with the same settings, as a new run."""
+    stored = load_job(run_id) if (RUNS / run_id).resolve().parent == RUNS.resolve() else None
+    if not stored:
+        raise HTTPException(404, "this run cannot be retried (no job.json)")
+    new_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    # the run id only appears in output prefixes and file names, so a textual swap is safe
+    params = json.loads(json.dumps(stored["params"]).replace(run_id, new_id))
+    graph = json.loads(json.dumps(stored["graph"]).replace(run_id, new_id))
+    old = json.loads((RUNS / run_id / "run.json").read_text())
+    run = {"id": new_id, "created": time.time(), "status": "queued", "params": old.get("params", {}),
+           "size": old.get("size"), "frames": []}
+    if old.get("before_url") and params.get("task") == "upscale":
+        run["before_url"] = old["before_url"]
+    if params.get("task") != "upscale":
+        save_run_config(new_id, run, params, graph)
+    return start_job(run, params, graph)
+
+
 @app.post("/api/runs/{run_id}/restore")
 async def restore_run(run_id: str):
     """Brings a removed run back into the history."""
@@ -593,11 +613,7 @@ async def upscale(req: UpscaleReq):
     size = {"work_w": round(w * req.factor), "work_h": round(h * req.factor)}
     run = {"id": run_id, "created": time.time(), "status": "queued", "before_url": input_mask_url(req.image),
            "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": size, "frames": []}
-    save_run(run)
-    job = {"run": run, "params": params, "graph": graph, "value": 0}
-    JOBS[run_id] = job
-    job["task"] = asyncio.create_task(run_job(job))
-    return job_summary(job)
+    return start_job(run, params, graph)
 
 
 # ---------------------------------------------------------------- job queue
@@ -633,7 +649,7 @@ def job_summary(job: dict) -> dict:
             "seed": run["params"].get("seed"), "steps": run["params"].get("steps"), "value": job.get("value", 0),
             "created": run["created"], "started": run.get("started"), "size": run.get("size"), "frames": run["frames"],
             "error": run.get("error"),
-            "phase": job.get("phase"), "decode_steps": decode_steps(job["params"])}
+            "phase": job.get("phase"), "decode_steps": decode_steps(job["params"]), "reattached": job.get("reattached", False)}
 
 
 async def finish_job(job: dict, status: str, **extra) -> None:
@@ -712,26 +728,7 @@ async def run_job(job: dict) -> None:
                     await finish_job(job, "cancelled", error="Cancelled")
                     return
                 elif kind == "execution_success" or (kind == "executing" and data.get("node") is None and data.get("prompt_id") == pid):
-                    outs = (await wait_history(pid, timeout=30)).get("outputs", {})
-                    def first(key: str) -> dict | None:
-                        img = (outs.get(key, {}).get("images") or [None])[0]
-                        return drop_counter(img) if img else None
-                    res, before, raw, upscaled = first("out_result"), first("out_before"), first("out_raw"), first("out_upscaled")
-                    use_mask = params.get("use_mask") and params.get("mask")
-                    run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,
-                               mask_url=input_mask_url(params["mask"]) if use_mask else None)
-                    post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")}
-                    if params.get("mode") == "paste" and use_mask and raw and any(post.values()):
-                        try:  # automatic fixes; the plain paste stays available as <run>.png
-                            await adjust_run(run, AlignReq(save=True, **post))
-                        except Exception as e:  # never fail the run because of the post-processing
-                            print(f"post-processing failed for {run_id}: {e!r}")
-                    await finish_job(job, "done",
-                                     result_url=view_url(res) if res else None, before_url=view_url(before) if before else run.get("before_url"),
-                                     raw_url=view_url(raw) if raw else None,
-                                     upscaled_url=view_url(upscaled) if upscaled else None,
-                                     mask_url=input_mask_url(params["mask"]) if use_mask else None,
-                                     filename=res["filename"] if res else None)
+                    await complete_run(job, pid)
                     return
     except asyncio.CancelledError:
         raise
@@ -739,6 +736,75 @@ async def run_job(job: dict) -> None:
         await finish_job(job, "error", error=str(e.detail))
     except Exception as e:  # keep the queue alive, report to the UI
         await finish_job(job, "error", error=repr(e))
+
+
+async def complete_run(job: dict, pid: str) -> None:
+    """Collects the outputs of a finished prompt, runs the automatic paste fixes and finishes the job."""
+    run, params, run_id = job["run"], job["params"], job["run"]["id"]
+    outs = (await wait_history(pid, timeout=30)).get("outputs", {})
+    def first(key: str) -> dict | None:
+        img = (outs.get(key, {}).get("images") or [None])[0]
+        return drop_counter(img) if img else None
+    res, before, raw, upscaled = first("out_result"), first("out_before"), first("out_raw"), first("out_upscaled")
+    use_mask = params.get("use_mask") and params.get("mask")
+    run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,
+               mask_url=input_mask_url(params["mask"]) if use_mask else None)
+    post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")}
+    if params.get("mode") == "paste" and use_mask and raw and any(post.values()):
+        try:  # automatic fixes; the plain paste stays available as <run>.png
+            await adjust_run(run, AlignReq(save=True, **post))
+        except Exception as e:  # never fail the run because of the post-processing
+            print(f"post-processing failed for {run_id}: {e!r}")
+    await finish_job(job, "done",
+                     result_url=view_url(res) if res else None, before_url=view_url(before) if before else run.get("before_url"),
+                     raw_url=view_url(raw) if raw else None,
+                     upscaled_url=view_url(upscaled) if upscaled else None,
+                     mask_url=input_mask_url(params["mask"]) if use_mask else None,
+                     filename=res["filename"] if res else None)
+
+
+def start_job(run: dict, params: dict, graph: dict) -> dict:
+    """Saves the run (and job.json with everything needed to follow or retry it) and starts following it."""
+    save_run(run)
+    (RUNS / run["id"] / "job.json").write_text(json.dumps({"params": params, "graph": graph}, default=str))
+    job = {"run": run, "params": params, "graph": graph, "value": 0}
+    JOBS[run["id"]] = job
+    job["task"] = asyncio.create_task(run_job(job))
+    return job_summary(job)
+
+
+async def follow_job(job: dict) -> None:
+    """Follows a prompt submitted by an earlier server process (reattached after a restart). ComfyUI sends
+    progress and previews only to the client that submitted it, so this only polls queue and history."""
+    run, pid = job["run"], job["run"]["prompt_id"]
+    try:
+        while True:
+            if pid in await comfy_json("GET", f"/history/{pid}"):
+                await complete_run(job, pid)
+                return
+            q = await comfy_json("GET", "/queue")
+            if pid in [item[1] for item in q["queue_running"]]:
+                if run["status"] != "running":
+                    run.update(status="running", started=run.get("started") or time.time())
+                    save_run(run)
+                    await broadcast({"type": "running", "job_id": run["id"], "started": run["started"]})
+            elif pid not in [item[1] for item in q["queue_pending"]]:
+                await finish_job(job, "error", error="Server restarted before the job finished")
+                return
+            await asyncio.sleep(2)
+    except asyncio.CancelledError:
+        raise
+    except HTTPException as e:
+        await finish_job(job, "error", error=str(e.detail))
+    except Exception as e:
+        await finish_job(job, "error", error=repr(e))
+
+
+def load_job(run_id: str) -> dict | None:
+    try:
+        return json.loads((RUNS / run_id / "job.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def save_run_config(run_id: str, run: dict, params: dict, graph: dict) -> None:
@@ -791,12 +857,8 @@ async def create_job(params: dict):
     graph = graphs.build_edit_graph(params)
     run = {"id": run_id, "created": time.time(), "status": "queued",
            "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": rep, "frames": []}
-    save_run(run)
     save_run_config(run_id, run, params, graph)
-    job = {"run": run, "params": params, "graph": graph, "value": 0}
-    JOBS[run_id] = job
-    job["task"] = asyncio.create_task(run_job(job))
-    return job_summary(job)
+    return start_job(run, params, graph)
 
 
 @app.get("/api/jobs")
@@ -845,14 +907,23 @@ async def start_comfy():
         print(f"could not start ComfyUI: {e!r}")
 
 
-def mark_orphaned_runs():
-    # jobs live in memory; runs left "queued"/"running" by a previous server process are stale
+async def reattach_runs():
+    """Runs left "queued"/"running" by a previous server process: if ComfyUI still has the prompt (e.g. Comfy
+    Desktop kept running), follow it again; otherwise the run failed."""
+    up = await comfy_up()
     for f in RUNS.glob("*/run.json"):
         try:
             run = json.loads(f.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if run.get("status") in ("queued", "running"):
+        if run.get("status") not in ("queued", "running"):
+            continue
+        stored = load_job(run["id"])
+        if up and stored and run.get("prompt_id"):
+            job = {"run": run, "params": stored["params"], "graph": stored["graph"], "value": 0, "reattached": True}
+            JOBS[run["id"]] = job
+            job["task"] = asyncio.create_task(follow_job(job))
+        else:
             run.update({"status": "error", "error": "Server restarted before the job finished"})
             save_run(run)
 

@@ -583,3 +583,21 @@ button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
 }
 .rwrap:hover .rtile-x, .rtile-x:focus-visible { opacity: 1; }
 .rtile-x:hover:not(:disabled) { background: #000; color: #fff; opacity: .8; }
+
+/* cancelling a run takes until ComfyUI finishes its current step */
+.qcard.cancelling { opacity: .7; }
+.qcard.cancelling .progress .bar {
+  width: 100% !important; background: repeating-linear-gradient(-45deg, var(--body) 0 7px, transparent 7px 14px);
+  background-size: 28px 100%; animation: stripes .7s linear infinite;
+}
+.cancelling-text { animation: pulse-text 1.2s ease-in-out infinite; }
+@keyframes pulse-text { 50% { opacity: .4; } }
+.bigarea.cancelling > img, .bigarea.cancelling > .compare { filter: grayscale(1); opacity: .5; transition: filter .4s, opacity .4s; }
+button.busy { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+button.busy::before {
+  content: ""; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; animation: spin .8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qcard.cancelling .progress .bar, .cancelling-text, button.busy::before { animation: none; }
+}

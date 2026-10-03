@@ -834,7 +834,8 @@ function renderQueue() {
   let pos = 0;
   for (const job of jobs) {
     const card = document.createElement("div");
-    card.className = "qcard" + (job === state.run ? " active" : "") + (job.status === "running" ? " running" : "");
+    card.className = "qcard" + (job === state.run ? " active" : "") + (job.status === "running" ? " running" : "")
+      + (job.cancelling ? " cancelling" : "");
     const main = document.createElement("button");
     main.className = "qmain";
     const thumb = document.createElement("span"); thumb.className = "qthumb";
@@ -852,12 +853,13 @@ function renderQueue() {
       const fill = document.createElement("div"); fill.className = "bar";
       fill.style.width = `${job.max ? (job.value / job.max) * 100 : 0}%`;
       bar.append(fill);
-      const st = document.createElement("span"); st.className = "qstep"; st.textContent = stepText(job);
+      const st = document.createElement("span"); st.className = "qstep"; st.textContent = job.cancelling ? "Cancelling…" : stepText(job);
       card.append(bar, st);
     } else {
       const row = document.createElement("div"); row.className = "row";
       const p = document.createElement("span"); p.className = "hint grow"; p.textContent = `Position ${++pos}`;
-      const rm = document.createElement("button"); rm.className = "small"; rm.textContent = "Remove";
+      const rm = document.createElement("button"); rm.className = "small" + (job.cancelling ? " busy" : "");
+      rm.textContent = job.cancelling ? "Removing…" : "Remove"; rm.disabled = !!job.cancelling;
       rm.setAttribute("aria-label", `Remove Run ${runNumber(job)} from queue`);
       rm.onclick = () => cancelJob(job);
       row.append(p, rm);
@@ -876,8 +878,18 @@ function renderQueueLabel() {
   $("cancelEdit").hidden = !n;
 }
 
+// Cancelling takes a moment (ComfyUI stops at the end of the current step): until the job is gone
+// the card, the viewer and the button show it with an animation (job.cancelling).
 async function cancelJob(job) {
-  try { await postJson(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, {}); } catch (e) { showError(e.message); }
+  job.cancelling = true;
+  renderQueue();
+  if (state.run === job) renderViewer();
+  try { await postJson(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, {}); } catch (e) {
+    job.cancelling = false;
+    renderQueue();
+    if (state.run === job) renderViewer();
+    showError(e.message);
+  }
 }
 
 function updateProgressText() {
@@ -1071,6 +1083,9 @@ function renderViewer() {
   $("runStatus").textContent = { queued: "Waiting", running: "Running", done: `Finished ${relTime(run?.finished || run?.created)}`,
     error: "Failed", cancelled: "Cancelled", none: "" }[status] ?? status;
   $("runStatus").className = status === "running" || status === "error" ? "strong" : "hint";
+  const cancelling = !!(run?.cancelling && (status === "running" || status === "queued"));
+  if (cancelling) { $("runStatus").textContent = "Cancelling…"; $("runStatus").className = "strong cancelling-text"; }
+  $("bigArea").classList.toggle("cancelling", cancelling);
   $("runFile").textContent = run?.filename || "";
   // toolbar above the image
   $("rawSeg").hidden = !(run && hasRaw(run));
@@ -1177,6 +1192,12 @@ function renderDetails(run, status) {
   $("downloadSteps").hidden = !visibleFrames(run).length;
   $("cancelRun").hidden = status !== "running";
   $("removeRun").hidden = status !== "queued";
+  for (const id of ["cancelRun", "removeRun"]) {
+    $(id).disabled = !!run.cancelling;
+    $(id).classList.toggle("busy", !!run.cancelling);
+  }
+  $("cancelRun").textContent = run.cancelling ? "Cancelling…" : "Cancel run";
+  $("removeRun").textContent = run.cancelling ? "Removing…" : "Remove from queue";
   $("deleteRun").hidden = !(done || status === "error");
   $("matchInfo").textContent = run.match || "";
 }

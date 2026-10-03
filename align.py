@@ -122,6 +122,19 @@ def _fill_smooth(field: np.ndarray, weight: np.ndarray, sigma: float) -> np.ndar
     return np.where(den3 > 1e-6, num / np.maximum(den3, 1e-6), mean) * conf + mean * (1 - conf)
 
 
+def _flow_reliable(g0: np.ndarray, g1: np.ndarray, flow: np.ndarray, back: np.ndarray) -> np.ndarray:
+    """Pixels whose flow can be trusted: forward and backward flow agree (< 1 px round trip) and the
+    warped detail (high-pass, so a colour drift doesn't count) matches the original. Where the edit
+    drew something different, DIS still returns a vector, often a large wrong one."""
+    h, w = g0.shape
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    mx, my = gx + flow[..., 0], gy + flow[..., 1]
+    round_trip = flow + cv2.remap(back, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    hp = lambda g: g.astype(np.float32) - cv2.GaussianBlur(g.astype(np.float32), (0, 0), 3)
+    detail = cv2.GaussianBlur(np.abs(hp(g0) - cv2.remap(hp(g1), mx, my, cv2.INTER_LINEAR)), (0, 0), 2)
+    return ((np.linalg.norm(round_trip, axis=-1) < 1.0) & (detail < 6)).astype(np.float32)
+
+
 def fix_warp(original: np.ndarray, raw: np.ndarray, keep: np.ndarray) -> np.ndarray:
     """Undo small local distortions of raw: dense optical flow (DIS) original -> raw, measured outside
     the mask, smoothed and continued into it, then raw is resampled onto the original's grid."""
@@ -130,8 +143,11 @@ def fix_warp(original: np.ndarray, raw: np.ndarray, keep: np.ndarray) -> np.ndar
     small = (max(16, round(w * f)), max(16, round(h * f)))
     g0 = cv2.cvtColor(cv2.resize(original, small, interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2GRAY)
     g1 = cv2.cvtColor(cv2.resize(raw, small, interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2GRAY)
-    flow = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM).calc(g0, g1, None)
-    k = cv2.resize(keep.astype(np.uint8), small, interpolation=cv2.INTER_NEAREST).astype(np.float32)
+    dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    flow, back = dis.calc(g0, g1, None), dis.calc(g1, g0, None)
+    k = cv2.resize(keep.astype(np.uint8), small, interpolation=cv2.INTER_NEAREST)
+    k = cv2.erode(k, np.ones((9, 9), np.uint8))  # patches touching the mask compare different content
+    k = k.astype(np.float32) * _flow_reliable(g0, g1, flow, back)
     flow = _fill_smooth(flow, k, sigma=max(small) / 40)
     flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR) / f
     gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))

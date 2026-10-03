@@ -9,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
+  "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -410,10 +410,70 @@ function strokeTo(p) {
   last = p;
   render();
 }
+// ------------------------------------------------------------------ magic wand + bucket fill
+// 4-connected flood fill from (x, y) over pixels where inside(i) is true; returns the filled pixels.
+// The image border stops it like a wall, so an open outline that ends at the border still closes.
+function floodFill(w, h, x, y, inside) {
+  const done = new Uint8Array(w * h);
+  const start = y * w + x;
+  if (!inside(start)) return done;
+  const stack = new Int32Array(w * h);
+  let n = 0;
+  stack[n++] = start;
+  done[start] = 1;
+  while (n) {
+    const i = stack[--n], px = i % w;
+    for (const j of [px > 0 ? i - 1 : -1, px < w - 1 ? i + 1 : -1, i - w, i + w]) {
+      if (j >= 0 && j < w * h && !done[j] && inside(j)) { done[j] = 1; stack[n++] = j; }
+    }
+  }
+  return done;
+}
+
+function imagePixels(w, h) {   // the image at mask size, cached per image
+  if (state.wandCache?.el !== state.imgEl || state.wandCache.w !== w || state.wandCache.h !== h) {
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const cc = c.getContext("2d", { willReadFrequently: true });
+    cc.drawImage(state.imgEl, 0, 0, w, h);
+    state.wandCache = { el: state.imgEl, w, h, px: cc.getImageData(0, 0, w, h).data };
+  }
+  return state.wandCache.px;
+}
+
+function fillAt(p) {
+  const m = state.mask, w = m.width, h = m.height;
+  const x = Math.floor(p.x * w / display.width), y = Math.floor(p.y * h / display.height);
+  if (x < 0 || y < 0 || x >= w || y >= h) return;
+  const ctx = m.getContext("2d", { willReadFrequently: true });
+  const data = ctx.getImageData(0, 0, w, h), mp = data.data;
+  let filled;
+  if (state.mode === "bucket") {   // unpainted area, walled in by painted pixels and the border
+    filled = floodFill(w, h, x, y, (i) => mp[i * 4 + 3] < 128);
+  } else {                         // wand: similar colour in the image, connected to the click
+    const px = imagePixels(w, h), s = (y * w + x) * 4, tol = parseFloat($("tolerance").value);
+    const r = px[s], g = px[s + 1], b = px[s + 2];
+    filled = floodFill(w, h, x, y, (i) => Math.max(Math.abs(px[i * 4] - r), Math.abs(px[i * 4 + 1] - g),
+      Math.abs(px[i * 4 + 2] - b)) <= tol);
+  }
+  for (let i = 0; i < filled.length; i++) {
+    if (filled[i]) { mp[i * 4] = mp[i * 4 + 1] = mp[i * 4 + 2] = mp[i * 4 + 3] = 255; }
+  }
+  ctx.putImageData(data, 0, 0);
+  state.hasMask = true;
+  render();
+}
+
 display.addEventListener("pointerdown", (e) => {
   if (!maskOn() || state.mode === "off" || !state.imgEl || e.button !== 0) return;
   if (!ensureMask()) return;
   pushHistory();
+  if (state.mode === "wand" || state.mode === "bucket") {
+    fillAt(canvasPoint(e));
+    updateStale();
+    scheduleMaskSave();
+    return;
+  }
   stroking = true; last = null;
   display.setPointerCapture(e.pointerId);
   strokeTo(canvasPoint(e));
@@ -431,7 +491,7 @@ display.addEventListener("pointerenter", moveCursor);
 
 function moveCursor(e) {
   const cur = $("brushCursor");
-  if (!maskOn() || state.mode === "off" || !state.imgEl) { cur.hidden = true; return; }
+  if (!maskOn() || state.mode === "off" || state.mode === "wand" || state.mode === "bucket" || !state.imgEl) { cur.hidden = true; return; }
   const r = display.getBoundingClientRect();
   const d = parseFloat($("brushSize").value) * r.width / display.width;
   cur.hidden = false;
@@ -444,7 +504,9 @@ function moveCursor(e) {
 function setMode(mode) {
   state.mode = mode;
   for (const b of $("brushMode").children) b.classList.toggle("active", b.dataset.mode === mode);
-  display.classList.toggle("brush", mode !== "off" && maskOn());
+  const pick = mode === "wand" || mode === "bucket";
+  display.classList.toggle("brush", mode !== "off" && !pick && maskOn());
+  display.classList.toggle("pick", pick && maskOn());
   if (mode === "off") $("brushCursor").hidden = true;
 }
 $("brushMode").addEventListener("click", (e) => { if (e.target.dataset.mode) setMode(e.target.dataset.mode); });
@@ -1651,6 +1713,7 @@ function initApp() {
   if (state.task === "generate") refreshSize();
   bindOutput("threshold", "thresholdOut", (v) => (+v).toFixed(2));
   bindOutput("brushSize", "brushSizeOut", (v) => `${v} px`);
+  bindOutput("tolerance", "toleranceOut", (v) => `${v}`);
   bindOutput("opacity", "opacityOut", (v) => `${Math.round(v * 100)}%`);
   for (const id of PERSIST) $(id).addEventListener("change", saveForm);
   $("aspect").addEventListener("change", refreshSizeDebounced);

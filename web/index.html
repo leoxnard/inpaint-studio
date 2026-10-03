@@ -156,6 +156,8 @@
             <div class="seg" id="brushMode" role="group" aria-label="Brush">
               <button data-mode="paint" class="active">Paint</button>
               <button data-mode="erase">Erase</button>
+              <button data-mode="wand" title="Magic wand: click to add the connected area of similar colour">Wand</button>
+              <button data-mode="bucket" title="Fill: click inside an outline to fill it (the image border closes open outlines)">Bucket</button>
               <button data-mode="off">Off</button>
             </div>
             <div class="row nowrap">
@@ -170,6 +172,9 @@
             </label>
             <label><span class="lbl">Overlay <output id="opacityOut"></output></span>
               <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.4">
+            </label>
+            <label title="Magic wand: how different a colour may be and still be selected"><span class="lbl">Tolerance <output id="toleranceOut"></output></span>
+              <input type="range" id="tolerance" min="1" max="128" step="1" value="32">
             </label>
           </div>
         </div>

@@ -245,3 +245,20 @@ def test_seedvr2_graph_follows_the_template():
     assert g["sampler"]["inputs"]["steps"] == 1 and g["sampler"]["inputs"]["seed"] == 7
     assert g["post"]["inputs"]["color_correction_method"] == "wavelet"
     assert g["out_result"]["inputs"]["images"] == ["post", 0]
+
+
+def test_loras_are_chained_after_the_model_loader():
+    import presets
+    p = dict(presets.resolve("qwen21_uc", None), family="qwen21", task="edit", image="a.png", mask=None, megapixels=0.95,
+             resolution=1008, prompt="x", negative="", steps=4, denoise=1.0, seed=1, cfg=1.0, sampler="euler",
+             scheduler="simple", feather=0, work_w=1024, work_h=1024, prefix="P")
+    plain = graphs.build_edit_graph(p)
+    assert "unet_file" not in plain and plain["unet"]["class_type"].startswith(("Unet", "UNET"))
+    g = graphs.build_edit_graph({**p, "loras": [{"name": "a.safetensors", "strength": 0.8},
+                                                 {"name": "off.safetensors", "strength": 0},
+                                                 {"name": "b.safetensors", "strength": 1.2}]})
+    assert g["unet_file"]["class_type"] == plain["unet"]["class_type"]
+    assert g["lora_0"]["inputs"] == {"model": ["unet_file", 0], "lora_name": "a.safetensors", "strength_model": 0.8}
+    assert g["unet"]["inputs"] == {"model": ["lora_0", 0], "lora_name": "b.safetensors", "strength_model": 1.2}
+    users = [n for n, v in g.items() if ["unet", 0] in v["inputs"].values()]
+    assert users   # the sampler side still uses "unet", now the last LoRA

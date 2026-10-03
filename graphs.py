@@ -224,6 +224,24 @@ def reference_images(g: dict[str, Any], p: dict[str, Any], family: str) -> list[
     return links
 
 
+MAX_LORAS = 3
+
+
+def apply_loras(g: dict[str, Any], loras: Any) -> None:
+    """LoRAs ([{name, strength}], at most MAX_LORAS) chained after the diffusion model loader. The last
+    LoRA node takes the key "unet", so every node that uses the model gets it with the LoRAs applied."""
+    valid = [(str(l["name"]), float(l.get("strength", 1.0))) for l in (loras or [])
+             if isinstance(l, dict) and l.get("name") and float(l.get("strength", 1.0)) != 0][:MAX_LORAS]
+    if not valid:
+        return
+    g["unet_file"] = g.pop("unet")
+    prev = ["unet_file", 0]
+    for i, (name, strength) in enumerate(valid):
+        key = "unet" if i == len(valid) - 1 else f"lora_{i}"
+        g[key] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": prev, "lora_name": name, "strength_model": strength}}
+        prev = [key, 0]
+
+
 def turbo_steps(steps: int) -> int:
     return min(7, max(5, int(steps)))
 
@@ -260,6 +278,7 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
         g["unet"] = {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet}}
     else:
         g["unet"] = {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}}
+    apply_loras(g, p.get("loras"))
 
     prompt, negative = edit_prompt(p), p.get("negative", "")
     refs = reference_images(g, p, family)

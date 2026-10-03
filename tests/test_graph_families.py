@@ -30,7 +30,8 @@ CASES = [(*c, ["r1.png", "r2.png", "r3.png", "r4.png"] if i % 2 else []) for i, 
 def test_graph_matches_comfy_nodes(pid, task, use_mask, mode, every, refs):
     files = presets.resolve(pid, None)
     g = graphs.build_edit_graph(dict(BASE, **files, task=task, use_mask=use_mask, mode=mode, save_every=every, refs=refs,
-                                     upscale=2 if every else 0, upscale_model="4x.safetensors", upscale_native=4))
+                                     upscale=2 if every else 0, upscale_model="4x.safetensors", upscale_native=4,
+                                     loras=[{"name": "l.safetensors", "strength": 0.7}] if every else []))
     for nid, node in g.items():
         info = OBJECT_INFO.get(node["class_type"])
         if not info and node["class_type"] in CUSTOM_NODES:  # installed together with its preset

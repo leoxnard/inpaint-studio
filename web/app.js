@@ -155,6 +155,7 @@ async function loadModels() {
       if (want) sel.value = want;
     };
     fill("sampler", m.samplers, "euler");
+    renderLoras();
     fill("scheduler", m.schedulers, "simple");
     if (!$("sampler").value && m.samplers.includes("euler")) $("sampler").value = "euler";
     // file overrides: the first option ("From preset") is the default and sends nothing
@@ -440,6 +441,39 @@ for (const ev of ["pointerup", "pointercancel"]) {
   }, true);
 }
 $("aspect").addEventListener("change", () => { if (outpaintOn()) { refreshSizeDebounced(); render(); } });
+
+// ------------------------------------------------------------------ LoRAs (Advanced)
+// Up to 3 LoRA files from ComfyUI's models/loras, each with a strength; kept in this browser.
+const LORA_KEY = "inpaint-studio-loras-v1", MAX_LORAS = 3;
+state.loras = (() => { try { return JSON.parse(localStorage.getItem(LORA_KEY) || "[]"); } catch { return []; } })();
+const saveLoras = () => { try { localStorage.setItem(LORA_KEY, JSON.stringify(state.loras)); } catch { /* private mode */ } };
+
+function renderLoras() {
+  const avail = state.models?.loras || [];
+  const box = $("loraRows");
+  box.innerHTML = "";
+  state.loras.forEach((l, i) => {
+    const row = document.createElement("div"); row.className = "lora-row";
+    const sel = document.createElement("select"); sel.setAttribute("aria-label", "LoRA file");
+    for (const v of new Set([...avail, l.name].filter(Boolean))) sel.add(new Option(v + (avail.includes(v) ? "" : " (missing)"), v));
+    sel.value = l.name || "";
+    sel.onchange = () => { l.name = sel.value; saveLoras(); };
+    const str = document.createElement("input"); str.type = "number"; str.min = "-2"; str.max = "2"; str.step = "0.05";
+    str.value = l.strength ?? 1; str.setAttribute("aria-label", "LoRA strength");
+    str.oninput = () => { l.strength = parseFloat(str.value) || 0; saveLoras(); };
+    const rm = document.createElement("button"); rm.type = "button"; rm.textContent = "×"; rm.setAttribute("aria-label", "Remove this LoRA");
+    rm.onclick = () => { state.loras.splice(i, 1); saveLoras(); renderLoras(); };
+    row.append(sel, str, rm);
+    box.append(row);
+  });
+  $("loraAdd").disabled = !avail.length || state.loras.length >= MAX_LORAS;
+  $("loraHint").textContent = avail.length ? "Applied to the diffusion model, in this order." : "No LoRAs found. Put .safetensors files into models/loras and reload.";
+}
+$("loraAdd").onclick = () => {
+  state.loras.push({ name: state.models?.loras?.[0] || "", strength: 1 });
+  saveLoras();
+  renderLoras();
+};
 
 // ------------------------------------------------------------------ crop & stitch
 // Optional: only a crop around the mask is edited (more detail) and pasted back into the full-size original.
@@ -945,6 +979,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     clean_overlays: $("cleanOverlays").checked,
+    loras: state.loras.filter((l) => l.name && l.strength),
     outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas()) : undefined,
     crop_stitch: cropOn() || undefined, crop_context: cropOn() ? num("cropContext") / 100 : undefined, match_ref: $("matchRef").checked,
     post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
@@ -1553,6 +1588,7 @@ function settingsRows(run) {
   if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
   if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
   if (p.clean_overlays) rows.push(["Watermarks", "Removed"]);
+  if (p.loras?.length) rows.push(["LoRAs", p.loras.map((l) => `${l.name.replace(/\.safetensors$/, "")} (${l.strength})`).join(", ")]);
   if (p.crop_box) rows.push(["Crop", `${p.crop_box.w} × ${p.crop_box.h} of ${(p.orig_size || []).join(" × ")}`]);
   const took = runTook(run);
   rows.push(["Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : ""]);
@@ -1916,6 +1952,9 @@ function loadRunSettings(run) {
     megapixels: p.megapixels, resolution: p.resolution, saveEvery: p.save_every, saveLast: p.save_last, seed: p.seed,
     upscale: p.upscale != null ? String(p.upscale) : null };
   for (const [id, v] of Object.entries(fields)) if (v != null) $(id).value = v;
+  state.loras = (p.loras || []).map((l) => ({ ...l }));
+  saveLoras();
+  renderLoras();
   for (const [id, v] of [["sampler", p.sampler], ["scheduler", p.scheduler]]) if (v) setSelectValue(id, v);
   if (p.upscaler && [...$("upscaler").options].some((o) => o.value === p.upscaler)) $("upscaler").value = p.upscaler;
   $("keepNote").value = p.keep_note ?? (p.keep_identical === false ? "" : KEEP_NOTE);

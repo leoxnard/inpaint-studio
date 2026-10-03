@@ -49,7 +49,7 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
                   "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of", "color_correction", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -308,7 +308,7 @@ async def models():
     clips = [c for c in options("CLIPLoader", "clip_name") if "qwen3vl" in c.lower()]
     vaes = [v for v in options("VAELoader", "vae_name") if "qwen_image" in v.lower()]
     return {
-        "unets": unets, "clips": clips, "vaes": vaes,
+        "unets": unets, "clips": clips, "vaes": vaes, "loras": options("LoraLoaderModelOnly", "lora_name"),
         "samplers": options("KSampler", "sampler_name"), "schedulers": options("KSampler", "scheduler"),
         "token_limit": graphs.TOKEN_LIMIT,
     }

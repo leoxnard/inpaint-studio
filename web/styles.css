@@ -668,3 +668,8 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 body.mode-outpaint:not(.task-generate) #aspectTiles.gen-only { display: grid !important; }
 body.mode-outpaint:not(.task-generate) #display { cursor: grab; }
 body.mode-outpaint:not(.task-generate) #display.dragging { cursor: grabbing; }
+
+/* LoRA rows in Advanced: file, strength, remove */
+.lora-box { display: grid; gap: 8px; }
+.lora-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px auto; gap: 6px; align-items: center; }
+.lora-row select { min-width: 0; }

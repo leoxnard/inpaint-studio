@@ -3,37 +3,48 @@
 A small local web app for mask-based image editing with **Qwen-Image 2.1** through a running
 **ComfyUI** (default `http://127.0.0.1:8188`).
 
-1. **Mask** – load an image, type what to mask (SAM3), tune threshold / expand / invert and
-   see the mask in seconds. Refine it with a paint/erase brush.
-2. **Edit** – enter the prompt and parameters and run. Every sampling step is shown live and
-   kept as a filmstrip; the result comes with a before/after slider, download and
-   "use result as new input" for chained edits.
+The UI has two views, switched in the header (the address keeps the view, e.g. `#runs/<id>`):
+
+- **Create** – on the left you pick the task (edit a photo or generate a new one), the model,
+  the image, the size and the area to change (whole image, masked inpaint, or free edit + paste).
+  The middle shows the image with the mask; under it you find the mask (SAM3: type what to mask,
+  tune threshold / refine / expand / invert) and touch it up with a paint/erase brush. On the
+  right are the prompt and settings and the button that adds the run to the queue. You can keep
+  working while the run waits or renders.
+- **Runs** – the queue on the left (running run with progress, waiting runs with Remove), the
+  selected run in the middle (live preview while it renders, then the result with a before/after
+  slider, the saved steps and all results with filters) and its details and actions on the right
+  (load its settings in Create, use the result as new input, align, download, delete).
 
 The app predicts the working size and warns (or auto-fixes) when it would exceed ~4096 latent
 tokens, the point where the edit turns into gray noise on Apple Silicon.
 
 ## Batch (folder)
 Open a folder or drop several images: they appear as a thumbnail grid and nothing starts on its
-own. Go through them one by one (mask, refine, **Submit & next**; each image keeps its own mask),
-or **Mask all** first (masks only, nothing queued), review them with ← → and submit them
-together with **Submit all masked**. Or use **Auto-mask & submit all** (current mask settings; images where nothing is found are
-marked and skipped) or **Submit all without mask**.
+own. Go through them one by one (mask, refine, **Submit and next**; each image keeps its own mask),
+or open **Batch…** and use **Mask all** first (masks only, nothing queued), review them with ← → and
+submit them together with **Submit all masked**. Or use **Auto-mask and submit all** (current mask
+settings; images where nothing is found are marked and skipped) or **Submit all without mask**.
+The **+** tile adds more images to an open batch.
 
 ## Align (advanced)
-For free edit + paste runs, **Align…** in the viewer lines the generated image up with the
+For free edit + paste runs, **Align to original** in Runs lines the generated image up with the
 original before pasting: Auto-align estimates shift and scale from the area outside the mask
 (phase correlation), then fine-tune with the arrows (Shift = 5 px) and scale. Uncovered edges keep
 the original. The aligned result is saved next to the run; the original result stays.
 
 ## Queue
-"Run edit" adds a job to a server-side queue, so you can keep preparing the next edit. The
-Queue panel shows each job (queued / running step x of y) with a cancel button; jobs keep running
-when the page is reloaded or closed.
+"Add edit to queue" puts a job into a server-side queue, so you can keep preparing the next
+edit. The Runs view shows each job (running with step x of y and the time left, waiting with its
+position); the Runs switch in the header shows how many are active. Jobs keep running when the
+page is reloaded or closed. The backend cannot reorder or pause the queue.
 
 ## Run history
-Every finished run is stored in `data/runs/` (gitignored) and listed again after a reload,
-including its step frames, before/after and the raw edit. Deleting a run there keeps the
-images in the ComfyUI output folder.
+Every finished run is stored in `~/Library/Application Support/Inpaint Studio/runs/` (override with
+`INPAINT_STUDIO_DATA`) and listed again after a reload, including its step frames, before/after
+and the raw edit. Failed runs show up in the results only until the page is reloaded. Deleting a
+run keeps the images in the ComfyUI output folder. Runs are numbered by creation time ("Run 3"),
+so the numbers shift when you delete an older run.
 
 ## Output files
 Per run in the ComfyUI output folder (`InpaintStudio/`):
@@ -88,8 +99,10 @@ Logs: `~/Library/Logs/InpaintStudio.log`, `~/Library/Logs/InpaintStudio-ComfyUI.
 Set `COMFY_URL` / `PORT` to override the defaults (see `.env.example`).
 
 ## Edit modes
-- **Inpaint (mask only)** – only the masked area is re-generated.
-- **Free edit + paste** – the whole image is edited, then only the masked area is pasted into
+Chosen under **Area to change** in Create.
+- **Whole image** – no mask, the prompt can change everything.
+- **Masked area, inpaint** – only the masked area is re-generated.
+- **Masked area, free edit + paste** – the whole image is edited, then only the masked area is pasted into
   the original (starting from the original latent, so it stays aligned). Optionally tells the
   model to keep everything else identical; the UI shows the raw edit and how much it differs
   from the original outside the mask. Try this when the model keeps redrawing the old content

@@ -6,6 +6,12 @@
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "uvicorn", "server:app", "--port", "7380"],
       "port": 7380
+    },
+    {
+      "name": "inpaint-studio-dev",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "server:app", "--port", "7381"],
+      "port": 7381
     }
   ]
 }

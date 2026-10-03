@@ -4,251 +4,296 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Inpaint Studio</title>
+  <!-- Nunito only as a fallback for ui-rounded; the app works offline without it -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700&display=swap">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
     <h1>Inpaint Studio</h1>
-    <div class="modelbar" id="modelBar" hidden>
-      <!-- one visible picker for every installed model + quantisation; #preset / #quant hold the state -->
-      <select id="modelSel" aria-label="Model and quantisation"></select>
-      <select id="preset" hidden></select>
-      <select id="quant" hidden></select>
-      <button id="moreModels" class="linkbtn" title="Open the download centre">Get more models…</button>
-    </div>
-    <div class="topright">
-        <span class="pill" id="statusPill" title="ComfyUI status"><i class="dot"></i><span id="statusText">Checking...</span></span>
-      <button id="setupBtn" class="small" title="Models, components and folders">Downloads</button>
-    </div>
+    <nav class="viewswitch" id="viewSwitch" aria-label="Views" hidden>
+      <a href="#create" id="navCreate" aria-current="page">Create</a>
+      <a href="#runs" id="navRuns">Runs<span class="countbadge" id="runsBadge" hidden></span></a>
+    </nav>
+    <div class="spacer"></div>
+    <span class="pill" id="statusPill" title="ComfyUI status"><i class="dot"></i><span id="statusText">Checking...</span></span>
+    <button id="setupBtn" title="Models, components and folders">Downloads</button>
   </header>
 
   <div id="setupView" class="setup" hidden></div>
 
-  <div class="layout" id="appLayout" hidden>
-    <aside class="sidebar" id="sidebar">
+  <div class="views" id="appLayout" hidden>
+  <div class="layout" id="createView">
+    <aside class="sidebar col-left" id="sidebar" aria-label="Model, image and area">
+      <div class="seg seg-task" id="taskTabs" role="group" aria-label="What do you want to do?">
+        <button data-task="edit" class="active">Edit a photo</button>
+        <button data-task="generate">Generate new</button>
+      </div>
+      <input type="hidden" id="task" value="edit">
 
-      <section class="card edit-only">
-        <h2>Image</h2>
+      <section class="sec modelbar" id="modelBar">
+        <label for="modelSel"><h2 class="h">Model</h2></label>
+        <!-- one visible picker for every installed model + quantisation; #preset / #quant hold the state -->
+        <select id="modelSel" aria-label="Model and quantisation"></select>
+        <select id="preset" hidden></select>
+        <select id="quant" hidden></select>
+        <div class="row between hint"><span id="modelListHint"></span><button id="moreModels" class="linkbtn" title="Open the download centre">Get more</button></div>
+        <div class="hint" id="modelHint" hidden></div>
+      </section>
+
+      <section class="sec edit-only" id="imageSec">
+        <h2 class="h">Image</h2>
         <label class="dropzone" id="dropzone">
           <input type="file" id="fileInput" accept="image/*" multiple hidden>
-          <span id="dropText">Drop an image (or several) here or click to choose</span>
+          <span id="dropText">Drop images here or click to choose</span>
         </label>
+        <div class="batch-grid" id="batchGrid" hidden></div>
+        <div class="hint" id="imageInfo">No image loaded.</div>
         <div class="row wrap">
-          <label class="btn" for="folderInput">Open folder…</label>
+          <label class="btn small" for="folderInput">Open folder…</label>
           <input type="file" id="folderInput" webkitdirectory multiple hidden>
         </div>
-        <div class="hint" id="imageInfo">No image loaded.</div>
-        <div id="batchWrap" hidden>
+        <div id="batchWrap" class="stack" hidden>
           <div class="hint" id="batchInfo"></div>
-          <div class="hint" id="batchKeysHint">← → in the Mask view switch images.</div>
-          <div class="batch-grid" id="batchGrid"></div>
           <div class="row wrap">
-            <button id="batchSubmitNext" class="primary" title="Queue the current image with its mask and open the next open one">Submit &amp; next</button>
+            <button id="batchSubmitNext" title="Queue the current image with its mask and open the next open one">Submit and next</button>
             <button id="batchSkip" title="Skip this image: it is left out of the batch (also of the submit-all buttons) and the next open image opens. Submitting it later still works.">Skip</button>
+            <button id="batchMore" aria-expanded="false" aria-controls="batchMenu">Batch…</button>
+          </div>
+          <div class="row wrap" id="batchMenu" hidden>
             <button id="batchMaskAll" class="needs-mask" title="Compute masks for all open images one after another (nothing is queued). Then review them with ← → and submit.">Mask all</button>
             <button id="batchSubmitMasked" class="needs-mask" title="Queue every image that has a mask (computed or painted)">Submit all masked</button>
-            <button id="batchAutoAll" class="needs-mask" title="Compute a mask with the current mask settings for every open image and queue them; images where nothing is found are skipped">Auto-mask &amp; submit all</button>
+            <button id="batchAutoAll" class="needs-mask" title="Compute a mask with the current mask settings for every open image and queue them; images where nothing is found are skipped">Auto-mask and submit all</button>
             <button id="batchNoMaskAll" title="Queue every open image without a mask (whole image is edited)">Submit all without mask</button>
             <button id="batchClear">Clear batch</button>
           </div>
+          <div class="hint" id="batchKeysHint">← → switch images.</div>
         </div>
       </section>
 
-      <section class="card">
-        <h2>Size &amp; safety</h2>
+      <section class="sec" id="sizeSec">
+        <h2 class="h">Size</h2>
+        <div class="aspect-tiles gen-only" id="aspectTiles" role="radiogroup" aria-label="Aspect ratio"></div>
+        <select id="aspect" hidden>
+          <option value="1:1">1:1</option><option value="4:3">4:3</option><option value="3:4">3:4</option>
+          <option value="3:2">3:2</option><option value="2:3">2:3</option><option value="16:9">16:9</option><option value="9:16">9:16</option>
+        </select>
         <div class="grid2">
           <label>Megapixels
             <input type="number" id="megapixels" value="0.95" min="0.3" max="2" step="0.01">
           </label>
-          <label class="edit-only">Resolution (ref.)
+          <label class="edit-only" title="Size of the reference image the text encoder sees">Reference px
             <input type="number" id="resolution" value="1008" min="256" max="2048" step="16">
           </label>
         </div>
-        <label class="gen-only">Aspect ratio
-          <select id="aspect">
-            <option value="1:1">1:1</option><option value="4:3">4:3</option><option value="3:4">3:4</option>
-            <option value="3:2">3:2</option><option value="2:3">2:3</option><option value="16:9">16:9</option><option value="9:16">9:16</option>
-          </select>
-        </label>
-        <label class="check edit-only"><input type="checkbox" id="autofix" checked> Auto-fix size</label>
-        <label class="check edit-only" title="Sets Resolution (ref.) so the reference image has exactly the working size. A different size makes the free edit come out slightly shifted and scaled."><input type="checkbox" id="matchRef" checked> Match reference to working size</label>
+        <label class="check edit-only" title="Lowers the size automatically when it would cross the gray-noise limit (4096 latent tokens on Apple Silicon)"><input type="checkbox" id="autofix" checked> Auto-fix size</label>
+        <label class="check edit-only" title="Sets Reference px so the reference image has exactly the working size. A different size makes the free edit come out slightly shifted and scaled."><input type="checkbox" id="matchRef" checked> Match reference to working size</label>
         <div class="sizeinfo" id="sizeInfo">Load an image to see the working size.</div>
-        <div class="hint">Above ~4096 latent tokens the edit turns gray on Apple Silicon.</div>
+        <div class="tokenbar" id="tokenBar" hidden><i></i></div>
       </section>
 
-      <section class="card needs-sam edit-only" id="modeCard">
-        <h2>Mode</h2>
-        <select id="mode" aria-label="Edit mode">
+      <section class="sec needs-sam edit-only" id="modeCard">
+        <h2 class="h">Area to change</h2>
+        <div class="area-cards" id="areaCards" role="radiogroup" aria-label="Area to change">
+          <button role="radio" data-mode="none"><b>Whole image</b><span>No mask. The prompt can change everything.</span></button>
+          <button role="radio" data-mode="inpaint"><b>Masked area, inpaint</b><span>Only the masked pixels are regenerated.</span></button>
+          <button role="radio" data-mode="paste"><b>Masked area, free edit + paste</b><span>Edits freely, then pastes the masked area back.</span></button>
+        </div>
+        <select id="mode" aria-label="Area to change" hidden>
           <option value="paste" selected>Free edit + paste</option>
           <option value="inpaint">Inpaint (mask only)</option>
           <option value="none">No mask (edit whole image)</option>
         </select>
-        <div class="hint" id="modeHint"></div>
       </section>
 
-      <section class="card needs-mask edit-only">
-        <h2>Step 1 &ndash; Mask</h2>
-        <label>What to mask
-          <input type="text" id="maskText" value="person">
-        </label>
-        <label>Threshold <output id="thresholdOut"></output>
-          <input type="range" id="threshold" min="0.05" max="0.95" step="0.01" value="0.4">
-        </label>
-        <div class="grid2">
-          <label>Refine iterations
-            <input type="number" id="refine" min="0" max="5" step="1" value="2">
-          </label>
-          <label>Expand (px)
-            <input type="number" id="expand" min="0" max="200" step="1" value="24">
-          </label>
+      <p class="sec hint gen-only">To keep working on a result, open it in <a href="#runs">Runs</a> and choose “Use result as new input”.</p>
+    </aside>
+
+    <main class="main create-center">
+      <div class="stagebar"><span class="spacer"></span><span class="hint" id="stageInfo"></span></div>
+      <div class="stage edit-only" id="stage">
+        <canvas id="display"></canvas>
+        <div class="empty" id="stageEmpty">Load an image to start: drop it anywhere or use Image on the left.</div>
+        <div class="spinner-wrap" id="maskSpinner" hidden><div class="spinner"></div><span>Computing mask...</span></div>
+      </div>
+      <div class="genframe gen-only" id="genFrame">
+        <div id="genShape">The new image will have this shape. Results appear in Runs.</div>
+      </div>
+
+      <section class="maskpanel needs-mask edit-only" aria-label="Mask">
+        <div class="mp-find">
+          <h2 class="h">Find mask</h2>
+          <div class="row">
+            <input type="text" id="maskText" value="person" aria-label="What to mask" placeholder="What to mask, e.g. person">
+            <button class="primary" id="computeMask">Compute mask</button>
+          </div>
+          <div class="mp-params">
+            <label><span class="lbl">Threshold <output id="thresholdOut"></output></span>
+              <input type="range" id="threshold" min="0.05" max="0.95" step="0.01" value="0.4">
+            </label>
+            <label title="SAM3 refinement passes">Refine
+              <input type="number" id="refine" min="0" max="5" step="1" value="2">
+            </label>
+            <label>Expand, px
+              <input type="number" id="expand" min="0" max="200" step="1" value="24">
+            </label>
+            <label class="check"><input type="checkbox" id="invert"> Invert</label>
+          </div>
+          <div class="row wrap"><span class="hint" id="maskTime"></span><span class="warn" id="maskStale" hidden>Size changed: recompute the mask.</span></div>
         </div>
-        <label class="check"><input type="checkbox" id="invert"> Invert</label>
+        <div class="mp-touch">
+          <h2 class="h">Touch up</h2>
+          <div class="row wrap">
+            <div class="seg" id="brushMode" role="group" aria-label="Brush">
+              <button data-mode="paint" class="active">Paint</button>
+              <button data-mode="erase">Erase</button>
+              <button data-mode="off">Off</button>
+            </div>
+            <div class="row nowrap">
+              <button id="maskUndo" title="Undo (⌘Z)">Undo</button>
+              <button id="maskClear">Clear</button>
+              <button id="maskFill">Fill</button>
+            </div>
+          </div>
+          <div class="grid2">
+            <label><span class="lbl">Brush <output id="brushSizeOut"></output></span>
+              <input type="range" id="brushSize" min="2" max="200" step="1" value="40">
+            </label>
+            <label><span class="lbl">Overlay <output id="opacityOut"></output></span>
+              <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.4">
+            </label>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="sidebar col-right" id="settingsCol" aria-label="Edit settings">
+
+      <div class="sec">
+        <label for="promptPreset">Preset</label>
         <div class="row">
-          <button class="primary" id="computeMask">Compute mask</button>
-          <span class="hint" id="maskTime"></span>
-        </div>
-        <div class="warn" id="maskStale" hidden>Size changed &ndash; recompute mask</div>
-
-        <h3>Brush</h3>
-        <div class="seg" id="brushMode">
-          <button data-mode="paint" class="active">Paint</button>
-          <button data-mode="erase">Erase</button>
-          <button data-mode="off">Off</button>
-        </div>
-        <label>Brush size <output id="brushSizeOut"></output>
-          <input type="range" id="brushSize" min="2" max="200" step="1" value="40">
-        </label>
-        <label>Overlay opacity <output id="opacityOut"></output>
-          <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.5">
-        </label>
-        <div class="row wrap">
-          <button id="maskClear">Clear mask</button>
-          <button id="maskFill">Fill all</button>
-          <button id="maskUndo">Undo</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 id="editHeading">Step 2 &ndash; Edit</h2>
-        <input type="hidden" id="task" value="edit">
-        <div class="seg" id="taskTabs">
-          <button data-task="edit" class="active">Edit</button>
-          <button data-task="generate">Generate</button>
-        </div>
-        <div class="hint" id="modelHint" hidden></div>
-        <label>Prompt preset
           <select id="promptPreset"></select>
-        </label>
-        <div class="row wrap">
-          <button id="promptSave" class="small" title="Save the current prompt as a preset">Save as preset…</button>
-          <button id="promptDelete" class="small" title="Delete the selected custom preset" disabled>Delete preset</button>
+          <button id="promptSave" title="Save the current prompt as a preset">Save as preset</button>
         </div>
+        <button id="promptDelete" class="linkbtn" title="Delete the selected custom preset" disabled>Delete preset</button>
         <label>Prompt
           <textarea id="prompt" rows="4">Replace the person with a walking dog. Keep everything else unchanged.</textarea>
         </label>
+        <label class="check needs-mask paste-only edit-only" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Keep everything else identical</label>
+      </div>
+
+      <div class="sec">
         <div class="grid2">
           <label>Steps
             <input type="number" id="steps" min="1" max="100" step="1" value="20">
           </label>
+          <label class="turbo-hide">CFG
+            <input type="number" id="cfg" min="0" max="20" step="0.1" value="1">
+          </label>
+          <div class="seedrow">
+            <label>Seed
+              <input type="number" id="seed" min="0" step="1" value="0">
+            </label>
+            <label class="check seedrandom"><input type="checkbox" id="randomSeed" checked> Random</label>
+          </div>
           <label class="edit-only">Denoise
             <input type="number" id="denoise" min="0" max="1" step="0.01" value="1">
           </label>
-          <label class="check needs-mask paste-only edit-only" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Tell the model to keep the rest identical</label>
-          <div class="needs-mask edit-only" id="postFixRow" title="Free edit + paste: fix the generated image before pasting, measured from the area outside the mask. The plain paste is kept as <run>.png, the fixed one is <run>_fixed.png.">
-            <div class="hint">After pasting, fix automatically:</div>
-            <label class="check"><input type="checkbox" id="postColors" checked> Match colors &amp; exposure</label>
-            <label class="check"><input type="checkbox" id="postWarp"> Fix local warp</label>
-            <label class="check"><input type="checkbox" id="postPoisson"> Seamless edges (Poisson)</label>
-          </div>
-          <label title="Decode the real intermediate image with the VAE and save it every N steps (like the Steps workflow). 0 = off. Live previews are always recorded and can be shown in the viewer.">Save step every N (0 = off)
+          <label class="needs-mask edit-only">Feather, px
+            <input type="number" id="feather" min="0" max="100" step="1" value="12">
+          </label>
+        </div>
+      </div>
+
+      <fieldset class="sec needs-mask paste-only edit-only" id="postFixRow" title="Free edit + paste: fix the generated image before pasting, measured from the area outside the mask. The plain paste is kept as <run>.png, the fixed one is <run>_fixed.png.">
+        <legend>After pasting, fix</legend>
+        <label class="check"><input type="checkbox" id="postColors" checked> Colours and exposure</label>
+        <label class="check"><input type="checkbox" id="postWarp"> Local warp</label>
+        <label class="check"><input type="checkbox" id="postPoisson"> Seamless edges (Poisson)</label>
+      </fieldset>
+
+      <fieldset class="sec">
+        <legend>Output</legend>
+        <div class="grid2">
+          <label title="Decode the real intermediate image with the VAE and save it every N steps. 0 = off. Live previews are always recorded and can be shown in Runs.">Save every N steps
             <input type="number" id="saveEvery" min="0" max="50" step="1" value="2">
           </label>
-          <label title="Also save each of the last N steps before the result. With 3 and 20 steps: steps 17, 18 and 19 (plus the result). 0 = off.">Save last N steps (0 = off)
+          <label title="Also save each of the last N steps before the result. With 3 and 20 steps: steps 17, 18 and 19 (plus the result). 0 = off.">Save last N steps
             <input type="number" id="saveLast" min="0" max="50" step="1" value="0">
           </label>
-          <label title="Upscale the final result with an upscale model (in pixel space, so large sizes work). Also saved as <run>_x2.png / _x4.png.">Upscale result
+          <label title="Upscale the final result with an upscale model (in pixel space, so large sizes work). Also saved as <run>_x2.png / _x4.png.">Upscale
             <select id="upscale"><option value="0">Off</option><option value="2">2×</option><option value="4">4×</option></select>
           </label>
           <label id="upscalerRow">Upscaler
             <select id="upscaler"></select>
             <button type="button" class="linkbtn" id="getUpscalers" hidden>Get an upscaler…</button>
           </label>
-          <label class="needs-mask edit-only">Feather (px)
-            <input type="number" id="feather" min="0" max="100" step="1" value="12">
-          </label>
-          <label class="turbo-hide">CFG
-            <input type="number" id="cfg" min="0" max="20" step="0.1" value="1">
-          </label>
         </div>
-        <div class="grid2">
-          <label>Seed
-            <input type="number" id="seed" min="0" step="1" value="0">
-          </label>
-          <label class="check seedrandom"><input type="checkbox" id="randomSeed" checked> Random</label>
+      </fieldset>
+
+      <details class="sec">
+        <summary>Advanced: negative prompt, sampler, model files <span class="hint" id="overrideHint" hidden>Custom model files active</span></summary>
+        <label>Negative prompt
+          <textarea id="negative" rows="2"></textarea>
+        </label>
+        <div class="grid2 turbo-hide">
+          <label>Sampler <select id="sampler"></select></label>
+          <label>Scheduler <select id="scheduler"></select></label>
         </div>
-        <details>
-          <summary>Advanced <span class="hint" id="overrideHint" hidden>Custom model files active</span></summary>
-          <label>Negative prompt
-            <textarea id="negative" rows="2"></textarea>
-          </label>
-          <div class="grid2 turbo-hide">
-            <label>Sampler <select id="sampler"></select></label>
-            <label>Scheduler <select id="scheduler"></select></label>
-          </div>
-          <label>UNet <select id="unet"></select></label>
-          <label>CLIP <select id="clip"></select></label>
-          <label>VAE <select id="vae"></select></label>
-        </details>
+        <label>UNet <select id="unet"></select></label>
+        <label>CLIP <select id="clip"></select></label>
+        <label>VAE <select id="vae"></select></label>
+      </details>
+
+      <div class="runbox">
         <div class="row">
-          <button class="primary" id="runEdit">Run edit (add to queue)</button>
-          <button id="cancelEdit">Cancel</button>
+          <button class="primary big" id="runEdit">Add edit to queue</button>
+          <button id="cancelEdit" hidden title="Cancel the running run">Cancel</button>
         </div>
-      </section>
+      </div>
     </aside>
 
-    <main class="main">
-      <div class="tabs">
-        <div class="seg edit-only" id="viewTabs">
-          <button data-view="mask" class="active" id="maskTab">Mask</button>
-          <button data-view="result">Result</button>
-        </div>
-        <span class="hint needs-mask edit-only" id="maskBadge"></span>
-      </div>
+  </div>
 
-      <div class="view" id="maskView">
-        <div class="stage" id="stage">
-          <canvas id="display"></canvas>
-          <div class="empty" id="stageEmpty">Load an image to start.</div>
-          <div class="spinner-wrap" id="maskSpinner" hidden><div class="spinner"></div><span>Computing mask...</span></div>
+  <div class="layout runs" id="runsView" hidden>
+    <aside class="sidebar col-left" aria-label="Queue">
+      <h2 class="h">Queue</h2>
+      <div class="queue" id="queue"></div>
+      <p class="hint" id="queueEmpty">Nothing running or waiting.</p>
+      <p class="hint">New runs are added in <a href="#create">Create</a>. The queue keeps running when you close this page.</p>
+    </aside>
+
+    <main class="main runs-center">
+      <div class="runhead">
+        <h2 id="runTitle">No runs yet</h2>
+        <span id="runStatus"></span>
+        <span class="spacer"></span>
+        <span class="hint" id="runFile"></span>
+      </div>
+      <div class="row wrap viewer-tools" id="viewerTools">
+        <div class="seg" id="rawSeg" role="group" aria-label="Which image">
+          <button data-raw="0" title="The original with only the masked area replaced">Pasted result</button>
+          <button data-raw="1" title="The model's full generated image, before the masked area was pasted in">Raw (full generated image)</button>
+        </div>
+        <input type="checkbox" id="viewRaw" hidden>
+        <label class="check" id="compareRow"><input type="checkbox" id="compareToggle" checked> Compare with original</label>
+      </div>
+      <div class="bigarea" id="bigArea">
+        <div class="empty" id="resultEmpty">No runs yet. Add one in <a href="#create">Create</a>.</div>
+        <img id="liveImg" alt="Run image" hidden>
+        <div class="compare" id="compare" hidden>
+          <img id="cmpBefore" alt="Before">
+          <img id="cmpAfter" alt="After">
+          <div class="divider" id="cmpDivider"><span></span></div>
+          <span class="tag tl">Before</span><span class="tag tr">After</span>
         </div>
       </div>
-
-      <div class="view" id="resultView" hidden>
-        <div class="resultcol">
-          <div class="bigarea" id="bigArea">
-            <div class="empty" id="resultEmpty">No result yet. Run an edit.</div>
-            <img id="liveImg" alt="Live preview" hidden>
-            <div class="compare" id="compare" hidden>
-              <img id="cmpBefore" alt="Before">
-              <img id="cmpAfter" alt="After">
-              <div class="divider" id="cmpDivider"><span></span></div>
-              <span class="tag tl">Before</span><span class="tag tr">After</span>
-            </div>
-          </div>
-          <div class="progress-wrap" id="progressWrap" hidden>
-            <div class="progress"><div class="bar" id="progressBar"></div></div>
-            <div class="hint" id="progressText"></div>
-          </div>
-          <div class="row wrap actions" id="resultActions" hidden>
-            <a class="btn" id="downloadBtn" download>Download</a>
-            <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
-            <button id="downloadSteps">Download all steps</button>
-            <button id="useResult">Use result as new input</button>
-            <button id="showCompare" hidden>Show comparison</button>
-            <button id="alignBtn" hidden title="Free edit + paste: align the generated image and fix colours, local warp and edges before pasting">Adjust…</button>
-            <span class="hint" id="matchInfo"></span>
-          </div>
-          <div class="align-panel" id="alignPanel" hidden>
+      <div class="progress-wrap" id="progressWrap" hidden>
+        <div class="progress"><div class="bar" id="progressBar"></div></div>
+        <div class="hint" id="progressText"></div>
+      </div>
+      <div class="align-panel" id="alignPanel" hidden>
             <div class="row wrap">
               <button id="alignAuto" class="primary">Auto-align</button>
               <div class="nudge">
@@ -275,21 +320,55 @@
               <button id="alignClose">Close</button>
             </div>
           </div>
-          <div id="queueWrap" hidden>
-            <h3>Queue</h3>
-            <div class="history" id="queue"></div>
-          </div>
-          <div class="row wrap viewer-opts" id="viewerOpts" hidden>
-            <label class="check"><input type="checkbox" id="viewLive"> Live previews</label>
-            <label class="check" id="viewRawRow" title="Free edit + paste: the model's full generated image before only the masked area was pasted in"><input type="checkbox" id="viewRaw"> Raw (full generated image)</label>
-            <span class="hint">← → to step through</span>
-          </div>
-          <div class="filmstrip" id="filmstrip"></div>
-          <h3>Run history</h3>
-          <div class="history" id="history"><div class="hint">No runs yet.</div></div>
+      <div class="steps" id="stepsBar" hidden>
+        <div class="row wrap">
+          <span class="hint" id="stepsTitle">Saved steps</span>
+          <label class="check"><input type="checkbox" id="viewLive"> Live previews</label>
         </div>
+        <div class="filmstrip" id="filmstrip"></div>
       </div>
+      <section class="results" aria-labelledby="resultsTitle">
+        <div class="row wrap">
+          <h2 class="h" id="resultsTitle">Results</h2>
+          <div class="seg" id="resultFilter" role="group" aria-label="Filter results">
+            <button data-filter="all" aria-pressed="true">All</button>
+            <button data-filter="edit" aria-pressed="false">Edits</button>
+            <button data-filter="generate" aria-pressed="false">Generated</button>
+          </div>
+          <span class="spacer"></span>
+          <span class="hint" id="resultCount"></span>
+        </div>
+        <div class="results-grid" id="history"></div>
+      </section>
     </main>
+
+    <aside class="sidebar col-right" id="detailsCol" aria-label="Run details">
+      <p class="hint" id="detEmpty">Select a run to see its details.</p>
+      <div class="stack" id="detBody" hidden>
+        <section class="sec">
+          <h2 class="h">Prompt</h2>
+          <p class="det-prompt" id="detPrompt"></p>
+        </section>
+        <section class="sec">
+          <h2 class="h">Settings</h2>
+          <dl class="dl" id="detSettings"></dl>
+        </section>
+        <section class="sec actions">
+          <h2 class="h">Actions</h2>
+          <button class="primary" id="loadSettings" title="Switch to Create with this run's settings (the image stays)">Load settings in Create</button>
+          <button id="useResult">Use result as new input</button>
+          <button id="alignBtn" title="Free edit + paste: align the generated image and fix colours, local warp and edges before pasting">Align to original</button>
+          <a class="btn" id="downloadBtn" download>Download</a>
+          <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
+          <button id="downloadSteps">Download shown steps</button>
+          <button id="cancelRun">Cancel run</button>
+          <button id="removeRun">Remove from queue</button>
+          <button id="deleteRun" class="danger">Delete run</button>
+          <span class="hint" id="matchInfo"></span>
+        </section>
+      </div>
+    </aside>
+  </div>
   </div>
 
   <div class="modal" id="modal" hidden>
@@ -306,7 +385,7 @@
     </div>
   </div>
 
-  <div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastClose" aria-label="Dismiss">&times;</button></div>
+  <div class="toast" id="toast" hidden><span id="toastText"></span><a id="toastLink" href="#runs" hidden>Open Runs</a><button id="toastClose" aria-label="Dismiss">&times;</button></div>
   <div class="cursor" id="brushCursor" hidden></div>
 
   <script type="module" src="/app.js"></script>

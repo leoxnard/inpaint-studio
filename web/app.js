@@ -1,4 +1,5 @@
-// Inpaint Studio frontend: two-step mask + edit UI. Vanilla ES module, no build step.
+// Inpaint Studio frontend: Create view (mask + edit settings) and Runs view (queue, viewer, results).
+// Vanilla ES module, no build step.
 
 import { createSetup } from "/setup.js";
 import { initPromptPresets } from "/promptpresets.js";
@@ -43,7 +44,7 @@ const state = {
   mode: "paint",
   running: false,
   ws: null,
-  view: "mask",
+  view: "create",             // "create" | "runs" (from the location hash)
   run: null,                  // current/last run object
   runs: [],
   task: "edit",               // "edit" | "generate"
@@ -56,15 +57,25 @@ const display = $("display");
 const dctx = display.getContext("2d");
 const tint = document.createElement("canvas");
 const tctx = tint.getContext("2d");
+// mask outline: the eroded mask (ero) is cut out of the mask, the ring (edge) gets a dash pattern
+const ero = document.createElement("canvas");
+const ectx = ero.getContext("2d");
+const edge = document.createElement("canvas");
+const edgectx = edge.getContext("2d");
+let dash = { k: 0, pattern: null };
 
 // ------------------------------------------------------------------ helpers
 let toastTimer = 0;
-function showError(msg) {
+function showToast(msg, { error = false, runsLink = false, ms = 6000 } = {}) {
   $("toastText").textContent = String(msg);
+  $("toast").classList.toggle("error", error);
+  $("toastLink").hidden = !runsLink;
   $("toast").hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $("toast").hidden = true; }, 15000);
+  toastTimer = setTimeout(() => { $("toast").hidden = true; }, ms);
 }
+const showError = (msg) => showToast(msg, { error: true, ms: 15000 });
+$("toastLink").onclick = () => { $("toast").hidden = true; };
 $("toastClose").onclick = () => { $("toast").hidden = true; };
 
 async function api(path, opts) {
@@ -101,7 +112,7 @@ async function pollStatus() {
     const s = await api("/api/status");
     if (s.comfy) {
       pill.className = "pill online";
-      $("statusText").textContent = `ComfyUI online · running ${s.running} · pending ${s.pending}`;
+      $("statusText").textContent = "ComfyUI running";
     } else {
       pill.className = "pill offline";
       $("statusText").textContent = "ComfyUI offline";
@@ -161,9 +172,12 @@ async function refreshSize() {
     try {
       const rep = await postJson("/api/size", body);
       // no reference image: only the target size counts
-      $("sizeInfo").innerHTML = `Working size: <b>${rep.work_w}×${rep.work_h}</b><br>Target tokens: <b>${rep.target_tokens}</b><br>`
-        + (rep.target_tokens <= 4096 ? '<span class="badge ok">OK</span>'
-          : '<span class="badge bad">Gray-noise risk (limit 4096 tokens)</span><br><span class="hint">Lower the megapixels.</span>');
+      const ok = rep.target_tokens <= TOKEN_LIMIT;
+      $("sizeInfo").innerHTML = `${rep.work_w} × ${rep.work_h}, ${rep.target_tokens} of ${TOKEN_LIMIT} tokens`
+        + (ok ? "" : '<br><span class="badge bad">Gray-noise risk</span> Lower the megapixels.');
+      setTokenBar(rep.target_tokens);
+      state.genSize = rep;
+      syncGenFrame();
       return rep;
     } catch (e) {
       showError(e.message);
@@ -199,18 +213,41 @@ async function refreshSize() {
 }
 const refreshSizeDebounced = debounce(refreshSize, 300);
 
+// "1184 × 784, 3626 of 4096 tokens" + a bar; the larger of target and reference counts
+const TOKEN_LIMIT = 4096;
 function renderSizeInfo(rep, applied) {
   const sg = rep.suggested || {};
-  let html = `Working size: <b>${rep.work_w}×${rep.work_h}</b><br>` +
-    `Target tokens: <b>${rep.target_tokens}</b> · ref tokens: <b>${rep.ref_tokens}</b><br>`;
-  if (rep.safe) {
-    html += `<span class="badge ok">OK</span>`;
-    if (applied) html += ` <span class="hint">auto-adjusted to ${sg.megapixels} MP / ${sg.resolution}</span>`;
-  } else {
-    html += `<span class="badge bad">Gray-noise risk (limit 4096 tokens)</span><br>` +
-      `<span class="hint">Suggested: ${sg.megapixels} MP, resolution ${sg.resolution} (${sg.work_w}×${sg.work_h})</span>`;
+  const tokens = Math.max(rep.target_tokens, rep.ref_tokens);
+  let html = `${rep.work_w} × ${rep.work_h}, ${tokens} of ${TOKEN_LIMIT} tokens`;
+  if (rep.ref_tokens !== rep.target_tokens) html += ` <span class="hint">(target ${rep.target_tokens}, reference ${rep.ref_tokens})</span>`;
+  if (rep.safe && applied) html += `<br><span class="hint">Auto-fixed to ${sg.megapixels} MP, reference ${sg.resolution} px.</span>`;
+  if (!rep.safe) {
+    html += `<br><span class="badge bad">Gray-noise risk</span> ` +
+      `<span class="hint">Suggested: ${sg.megapixels} MP, reference ${sg.resolution} px (${sg.work_w} × ${sg.work_h}).</span>`;
   }
   $("sizeInfo").innerHTML = html;
+  setTokenBar(tokens);
+  $("stageInfo").textContent = `${state.imageLabel || "Image"}, ${rep.work_w} × ${rep.work_h}`;
+}
+function setTokenBar(tokens) {
+  const bar = $("tokenBar");
+  bar.hidden = tokens == null;
+  if (tokens == null) return;
+  bar.classList.toggle("over", tokens > TOKEN_LIMIT);
+  bar.firstElementChild.style.width = `${Math.min(100, (tokens / TOKEN_LIMIT) * 100)}%`;
+}
+function clearSizeInfo() {
+  $("sizeInfo").textContent = "Load an image to see the working size.";
+  setTokenBar(null);
+  $("stageInfo").textContent = "";
+}
+// Generate: a dashed frame in the chosen aspect ratio stands in for the image
+function syncGenFrame() {
+  const [a, b] = $("aspect").value.split(":").map(Number);
+  $("genShape").style.aspectRatio = `${a} / ${b}`;
+  $("genShape").classList.toggle("tall", b > a);
+  const g = state.genSize;
+  if (state.task === "generate") $("stageInfo").textContent = g ? `New image, ${g.work_w} × ${g.work_h}` : "New image";
 }
 
 // Makes sure the offscreen mask matches the working size; flags it as stale otherwise.
@@ -299,12 +336,41 @@ function draw() {
     tctx.clearRect(0, 0, tint.width, tint.height);
     tctx.drawImage(state.mask, 0, 0);
     tctx.globalCompositeOperation = "source-in";
-    tctx.fillStyle = "#ff2a2a";
+    tctx.fillStyle = "#000";
     tctx.fillRect(0, 0, tint.width, tint.height);
     dctx.globalAlpha = num("opacity");
     dctx.drawImage(tint, 0, 0, w, h);
     dctx.globalAlpha = 1;
+    dctx.drawImage(maskOutline(), 0, 0, w, h);
   }
+}
+
+// White dashed outline of the mask, about 1.5 screen pixels wide
+function maskOutline() {
+  const m = state.mask, mw = m.width, mh = m.height;
+  const k = Math.max(1, Math.round((1.5 * mw) / (display.clientWidth || mw)));
+  for (const c of [ero, edge]) if (c.width !== mw || c.height !== mh) { c.width = mw; c.height = mh; }
+  ectx.globalCompositeOperation = "copy";
+  ectx.drawImage(m, 0, 0);
+  ectx.globalCompositeOperation = "destination-in";   // erode: keep pixels whose neighbours are in the mask too
+  for (const [dx, dy] of [[k, 0], [-k, 0], [0, k], [0, -k]]) ectx.drawImage(m, dx, dy);
+  edgectx.globalCompositeOperation = "copy";
+  edgectx.drawImage(m, 0, 0);
+  edgectx.globalCompositeOperation = "destination-out";
+  edgectx.drawImage(ero, 0, 0);
+  if (dash.k !== k) {   // diagonal stripes read as dashes along any outline direction
+    const p = document.createElement("canvas");
+    p.width = p.height = 8 * k;
+    const pc = p.getContext("2d");
+    pc.fillStyle = "#fff";
+    pc.beginPath(); pc.moveTo(0, 0); pc.lineTo(4 * k, 0); pc.lineTo(0, 4 * k); pc.closePath(); pc.fill();
+    pc.beginPath(); pc.moveTo(8 * k, 4 * k); pc.lineTo(8 * k, 8 * k); pc.lineTo(4 * k, 8 * k); pc.closePath(); pc.fill();
+    dash = { k, pattern: edgectx.createPattern(p, "repeat") };
+  }
+  edgectx.globalCompositeOperation = "source-in";
+  edgectx.fillStyle = dash.pattern;
+  edgectx.fillRect(0, 0, mw, mh);
+  return edge;
 }
 
 // ------------------------------------------------------------------ brush painting
@@ -391,7 +457,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   // in the Mask view, arrow keys switch between batch images
-  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && $("resultView").hidden && state.batch.length) {
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && state.view === "create" && state.batch.length) {
     e.preventDefault();
     const n = state.batch.length;
     const i = state.batchIdx < 0 ? 0 : (state.batchIdx + (e.key === "ArrowRight" ? 1 : -1) + n) % n;
@@ -399,16 +465,16 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   // arrow keys step through the visible filmstrip; past the last frame shows the final comparison
-  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && !$("resultView").hidden) {
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && state.view === "runs") {
     const run = state.run;
     const frames = run ? visibleFrames(run) : [];
     if (!frames.length) return;
     e.preventDefault();
-    const onCompare = !$("compare").hidden;
     const last = frames.length - 1;
-    let i = onCompare ? last + 1 : (run.shown ?? last);
+    const final = run.done && run.resultUrl;   // the finished result sits after the last frame
+    let i = run.shown ?? (final ? last + 1 : last);
     i += e.key === "ArrowRight" ? 1 : -1;
-    if (i > last) { if (run.resultUrl) showCompare(); else showFrame(last); return; }
+    if (i > last) { if (final) showFinal(); else showFrame(last); return; }
     showFrame(Math.max(0, i));
     $("filmstrip").children[Math.max(0, i)]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
@@ -428,13 +494,14 @@ async function setImageFile(file) {
     if (state.imgUrl) URL.revokeObjectURL(state.imgUrl);
     state.imgUrl = url; state.imgEl = im;
     state.imageName = up.name; state.srcW = up.width; state.srcH = up.height;
+    state.imageLabel = file.name || "image";
     $("imageInfo").textContent = `${file.name || "image"} – original ${up.width}×${up.height}`;
     saveSession({ imageName: up.name, srcW: up.width, srcH: up.height, label: file.name || "image", maskName: null, maskMeta: null });
-    $("dropText").textContent = "Drop another image or click to replace";
     resetMask();
     state.size = null;
+    renderBatch();
     await refreshSize();
-    setView("mask");
+    setView("create");
     render();
   } catch (e) {
     $("imageInfo").textContent = state.imageName ? $("imageInfo").textContent : "No image loaded.";
@@ -533,7 +600,13 @@ function setSubmitting(on) {
   $("runEdit").textContent = on ? "Adding to queue..." : runLabel();
 }
 
-const runLabel = () => (state.task === "generate" ? "Generate (add to queue)" : "Run edit (add to queue)");
+const runLabel = () => (state.task === "generate" ? "Add image to queue" : "Add edit to queue");
+
+// "Run N": runs are numbered by creation time over everything this page knows (saved + queued)
+function runNumber(run) {
+  const all = [...state.runs, ...state.jobs.values()].sort((a, b) => (a.created || 0) - (b.created || 0));
+  return all.indexOf(run) + 1;
+}
 const currentFamily = () => presetById($("preset").value)?.family || "";
 
 // edit parameters from the form for one image (seed is drawn per job when "Random" is on)
@@ -601,6 +674,7 @@ async function runEdit({ thenNext = false } = {}) {
 // ------------------------------------------------------------------ job queue (server-side)
 state.jobs = new Map();   // job_id -> run-like object while queued/running
 state.follow = true;      // viewer follows the running job until the user picks something else
+state.resultFilter = "all";
 
 function jobFromSummary(sum) {
   let job = state.jobs.get(sum.job_id);
@@ -611,6 +685,7 @@ function jobFromSummary(sum) {
   }
   job.status = sum.status || job.status;
   job.value = sum.value || job.value;
+  if (sum.size) job.size = sum.size;
   if (sum.frames) job.frames = sum.frames.map((f) => ({ ...f }));
   if (job.status === "running" && !job.t0) job.t0 = performance.now();
   return job;
@@ -619,31 +694,32 @@ function jobFromSummary(sum) {
 async function submitJob(params) {
   const sum = await postJson("/api/jobs", params);
   const job = jobFromSummary(sum);
+  job.params = params;   // known only to the page that queued it ("Load settings in Create")
   renderQueue();
+  showToast(`Queued as Run ${runNumber(job)}`, { runsLink: true });
   // show it right away if nothing else is running, otherwise it just waits in the queue
   if (state.follow && ![...state.jobs.values()].some((j) => j !== job && j.status === "running")) viewJob(job);
-  setView("result");
 }
 
+// Viewer on a queued or running job; a progress timer keeps the time estimate fresh
 function viewJob(job) {
-  freeRunFrames(state.run);
+  if (state.run !== job) freeRunFrames(state.run);
   state.run = job;
-  $("resultEmpty").hidden = true;
-  $("compare").hidden = true;
-  $("liveImg").hidden = true;
-  $("resultActions").hidden = true;
-  $("showCompare").hidden = true;
-  $("progressWrap").hidden = false;
-  $("matchInfo").textContent = "";
+  job.shown = null;
   clearInterval(state.progressTimer);
   state.progressTimer = setInterval(updateProgressText, 500);
-  updateProgressText();
-  renderFilmstrip();
-  syncViewerOpts();
-  const vis = visibleFrames(job);
-  if (vis.length) showFrame(vis.length - 1);
-  renderQueue();
-  renderHistory();
+  renderViewer();
+}
+
+// Viewer on a saved (finished or failed) run
+function showRun(run) {
+  if (state.run !== run) freeRunFrames(state.run);
+  clearInterval(state.progressTimer);
+  state.run = run;
+  run.shown = null;
+  $("alignPanel").hidden = true;
+  renderViewer();
+  if (run.rawUrl && run.maskUrl && !run.match) measureMatch(run);
 }
 
 function addJobFrame(job, frame) {
@@ -655,24 +731,21 @@ function addJobFrame(job, frame) {
 function jobFinished(m) {
   const job = state.jobs.get(m.job_id);
   state.jobs.delete(m.job_id);
-  renderQueue();
   const viewing = job && state.run === job;
-  if (m.type === "done" && m.run) {
+  if ((m.type === "done" || m.type === "error") && m.run) {
+    // failed runs stay in the results for this session (the server lists only finished ones)
     const run = runFromStored(m.run);
+    if (job?.params) run.params = { ...job.params, ...run.params };
     if (!state.runs.some((r) => r.serverId === run.serverId)) state.runs.unshift(run);
-    renderHistory();
-    if (viewing) {
-      clearInterval(state.progressTimer);
-      showRun(run);
-      $("progressWrap").hidden = false;
-      $("progressBar").style.width = "100%";
-      $("progressText").textContent = job.t0 ? `Done in ${fmtTime((performance.now() - job.t0) / 1000)}` : "Done";
-    }
+    if (viewing) { if (job.t0) run.took = (performance.now() - job.t0) / 1000; showRun(run); }
   } else if (viewing) {
+    job.status = "cancelled"; job.done = true;
     clearInterval(state.progressTimer);
-    $("progressText").textContent = m.type === "cancelled" ? "Cancelled" : `Failed: ${m.run?.error || "unknown error"}`;
   }
-  if (m.type === "error") showError(m.run?.error || "Job failed");
+  if (m.type === "error") showError(m.run?.error || "Run failed");
+  renderQueue();
+  renderHistory();
+  if (viewing && m.type === "cancelled") renderViewer();
   // keep following: switch to the next running job
   const next = [...state.jobs.values()].find((j) => j.status === "running");
   if (next && state.follow && viewing) viewJob(next);
@@ -689,7 +762,10 @@ function connectJobs() {
         for (const sum of m.jobs) jobFromSummary(sum);
         renderQueue();
         const running = [...state.jobs.values()].find((j) => j.status === "running");
-        if (running && state.follow) { setView("result"); viewJob(running); }
+        const wanted = state.wantRun && findRun(state.wantRun);
+        if (wanted) { state.wantRun = null; selectRun(wanted); }
+        else if (running && state.follow) viewJob(running);
+        else if (state.run && !state.run.done && !state.jobs.has(state.run.id)) showLatest();  // finished while offline
         break;
       }
       case "queued": jobFromSummary(m.job); renderQueue(); break;
@@ -700,7 +776,7 @@ function connectJobs() {
         renderQueue();
         const viewingFinished = !state.run || state.run.done || !state.jobs.has(state.run.id);
         if (state.follow && (state.run === job || viewingFinished)) viewJob(job);
-        else if (state.run === job) updateProgressText();
+        else if (state.run === job) renderViewer();
         break;
       }
       case "progress": {
@@ -719,33 +795,70 @@ function connectJobs() {
   ws.onclose = () => setTimeout(connectJobs, 2000); // server restart / sleep -> reconnect
 }
 
+// "Step 12 of 20, about 40 s left"
+function stepText(job) {
+  if (job.status !== "running") return "Waiting";
+  if (!job.value) return "Starting (loading the model)…";
+  let txt = `Step ${job.value} of ${job.max}`;
+  const eta = stepEta(job);
+  if (eta != null) txt += eta > 0 ? `, about ${fmtTime(eta)} left` : ", finishing…";
+  return txt;
+}
+
+const jobThumb = (job) => {
+  const vis = job.frames.filter((f) => f.kind === "saved" || f.kind === "live");
+  if (vis.length) return vis[vis.length - 1].url;
+  return job.params?.image ? inputViewUrl(job.params.image) : null;
+};
+
 function renderQueue() {
   const box = $("queue");
   const jobs = [...state.jobs.values()].sort((a, b) => a.created - b.created);
-  $("queueWrap").hidden = !jobs.length;
+  $("queueEmpty").hidden = !!jobs.length;
   box.innerHTML = "";
   let pos = 0;
   for (const job of jobs) {
-    const b = document.createElement("button");
-    b.className = "queue-item" + (job === state.run ? " active" : "");
-    const status = job.status === "running" ? `running · step ${job.value} / ${job.max}` : `queued #${++pos}`;
-    const t = document.createElement("div"); t.className = "t"; t.textContent = job.prompt;
-    const st = document.createElement("div"); st.className = "s"; st.textContent = `${status} · seed ${job.seed}`;
-    const d = document.createElement("div"); d.append(t, st);
-    const x = document.createElement("span"); x.className = "hist-del"; x.textContent = "×";
-    x.title = job.status === "running" ? "Cancel this job" : "Remove from queue";
-    x.onclick = (ev) => { ev.stopPropagation(); cancelJob(job); };
-    b.append(d, x);
-    b.onclick = () => { state.follow = true; setView("result"); viewJob(job); };
-    box.appendChild(b);
+    const card = document.createElement("div");
+    card.className = "qcard" + (job === state.run ? " active" : "") + (job.status === "running" ? " running" : "");
+    const main = document.createElement("button");
+    main.className = "qmain";
+    const thumb = document.createElement("span"); thumb.className = "qthumb";
+    const src = jobThumb(job);
+    if (src) { const img = document.createElement("img"); img.src = src; img.alt = ""; thumb.append(img); }
+    const txt = document.createElement("span"); txt.className = "qtext";
+    const t = document.createElement("b"); t.textContent = `Run ${runNumber(job)}`;
+    const pr = document.createElement("span"); pr.className = "qprompt"; pr.textContent = job.prompt;
+    txt.append(t, pr);
+    main.append(thumb, txt);
+    main.onclick = () => selectRun(job);
+    card.append(main);
+    if (job.status === "running") {
+      const bar = document.createElement("div"); bar.className = "progress";
+      const fill = document.createElement("div"); fill.className = "bar";
+      fill.style.width = `${job.max ? (job.value / job.max) * 100 : 0}%`;
+      bar.append(fill);
+      const st = document.createElement("span"); st.className = "qstep"; st.textContent = stepText(job);
+      card.append(bar, st);
+    } else {
+      const row = document.createElement("div"); row.className = "row";
+      const p = document.createElement("span"); p.className = "hint grow"; p.textContent = `Position ${++pos}`;
+      const rm = document.createElement("button"); rm.className = "small"; rm.textContent = "Remove";
+      rm.setAttribute("aria-label", `Remove Run ${runNumber(job)} from queue`);
+      rm.onclick = () => cancelJob(job);
+      row.append(p, rm);
+      card.append(row);
+    }
+    box.appendChild(card);
   }
   renderQueueLabel();
 }
 
+// black badge on the Runs switch: running + waiting jobs
 function renderQueueLabel() {
-  const tab = document.querySelector('#viewTabs [data-view="result"]');
   const n = state.jobs ? state.jobs.size : 0;
-  if (tab) tab.textContent = `Result${state.runs.length ? ` · ${state.runs.length} saved` : ""}${n ? ` · ${n} queued` : ""}`;
+  $("runsBadge").hidden = !n;
+  $("runsBadge").textContent = `${n} active`;
+  $("cancelEdit").hidden = !n;
 }
 
 async function cancelJob(job) {
@@ -754,22 +867,18 @@ async function cancelJob(job) {
 
 function updateProgressText() {
   const run = state.run;
-  if (!run || run.done) return;
+  if (!run || run.done || !state.jobs.has(run.id)) return;
   if (run.status === "queued") {
     const ahead = [...state.jobs.values()].filter((j) => j.created < run.created).length;
     $("progressBar").style.width = "0%";
-    $("progressText").textContent = `In queue – ${ahead} job${ahead === 1 ? "" : "s"} ahead`;
+    $("progressText").textContent = `Waiting. ${ahead} run${ahead === 1 ? "" : "s"} ahead of this one.`;
     return;
   }
   const pct = run.max ? (run.value / run.max) * 100 : 0;
   $("progressBar").style.width = `${pct}%`;
   const el = (performance.now() - (run.t0 || performance.now())) / 1000;
-  let txt = run.value ? `step ${run.value} / ${run.max}` : "Waiting for sampler...";
-  txt += ` · ${fmtTime(el)} elapsed`;
-  const eta = stepEta(run);
-  if (eta != null) txt += eta > 0 ? ` · ~${fmtTime(eta)} left` : " · finishing…";
-  else if (run.value > 0 && run.value < run.max) txt += " · estimating…";
-  $("progressText").textContent = txt;
+  $("progressText").textContent = `${stepText(run)} · ${fmtTime(el)} elapsed`;
+  $("detSettings").querySelector("[data-k=time]")?.replaceChildren(fmtTime(el));
 }
 
 // Remaining time from measured step durations (median of the last few steps), counting down
@@ -787,12 +896,23 @@ function stepEta(run) {
 
 function frameAdded(run, frame) {
   run.frames.push(frame);
-  if (state.run !== run) return;
-  syncViewerOpts();
+  if (state.run !== run) { renderQueue(); return; }
   const vis = visibleFrames(run);
   const idx = vis.indexOf(frame);
-  renderFilmstrip();
+  renderSteps();
   if (idx >= 0 && !run.done) showFrame(idx);
+  else if (!run.done && !vis.length) showNewestFrame(run);
+}
+
+// a running job always shows its newest frame, even with "Live previews" off
+function showNewestFrame(run) {
+  const f = run.frames[run.frames.length - 1];
+  if (!f) return false;
+  $("liveImg").src = f.url;
+  $("liveImg").hidden = false;
+  $("compare").hidden = true;
+  $("resultEmpty").hidden = true;
+  return true;
 }
 
 // viewer filters (default off): live previews and raw full images are only shown on demand
@@ -815,12 +935,9 @@ function visibleFrames(run) {
   return out;
 }
 
-function syncViewerOpts() {
-  const run = state.run;
-  $("viewerOpts").hidden = !run;
-  $("viewRawRow").hidden = !(run && (run.rawUrl || run.frames.some((f) => f.variant === "raw")));
-}
+const hasRaw = (run) => !!(run && (run.rawUrl || run.frames.some((f) => f.variant === "raw")));
 
+// one step frame in the viewer
 function showFrame(i) {
   const run = state.run;
   const f = run && visibleFrames(run)[i];
@@ -829,45 +946,208 @@ function showFrame(i) {
   $("liveImg").hidden = false;
   $("compare").hidden = true;
   $("resultEmpty").hidden = true;
-  $("showCompare").hidden = !run.resultUrl;
-  $("showCompare").textContent = run.beforeUrl ? "Show comparison" : "Show result";
   run.shown = i;
   for (const [j, img] of [...$("filmstrip").children].entries()) img.classList.toggle("active", j === i);
 }
 
-function renderFilmstrip() {
+// the finished result: compare slider (edits, "Compare with original" on) or the image alone
+function showFinal() {
+  const run = state.run;
+  if (!run || !run.resultUrl) return;
+  run.shown = null;
+  for (const img of $("filmstrip").children) img.classList.remove("active");
+  $("resultEmpty").hidden = true;
+  const after = $("viewRaw").checked && run.rawUrl ? run.rawUrl : (run.aligned?.url || run.resultUrl);
+  if (!run.beforeUrl || !$("compareToggle").checked) {
+    $("liveImg").src = after;
+    $("liveImg").hidden = false;
+    $("compare").hidden = true;
+    return;
+  }
+  $("cmpBefore").src = run.beforeUrl;
+  $("cmpAfter").src = after;
+  $("liveImg").hidden = true;
+  $("compare").hidden = false;
+  setDivider(50);
+}
+
+function renderSteps() {
   const fs = $("filmstrip");
   fs.innerHTML = "";
   const run = state.run;
-  if (!run) return;
-  visibleFrames(run).forEach((f, i) => {
+  const frames = run ? visibleFrames(run) : [];
+  $("stepsBar").hidden = !(run && run.frames.length);
+  $("stepsTitle").textContent = $("viewLive").checked ? "Live previews" : "Saved steps";
+  frames.forEach((f, i) => {
     const img = document.createElement("img");
     img.src = f.url;
-    img.title = f.kind === "live" ? `Step ${f.step} – live preview`
-      : f.variant === "raw" ? `Step ${f.step} – raw full image (saved)` : `Step ${f.step} – full quality (saved)`;
+    img.alt = `Step ${f.step}`;
+    img.title = f.kind === "live" ? `Step ${f.step}, live preview`
+      : f.variant === "raw" ? `Step ${f.step}, raw full image (saved)` : `Step ${f.step}, full quality (saved)`;
     if (f.kind === "saved") img.classList.add("saved");
     if (f.variant === "raw") img.classList.add("raw");
     img.onclick = () => showFrame(i);
     if (i === run.shown) img.classList.add("active");
     fs.appendChild(img);
   });
-  if (!run.done) fs.scrollLeft = fs.scrollWidth;
+  if (run && !run.done) fs.scrollLeft = fs.scrollWidth;
 }
 
 for (const id of ["viewLive", "viewRaw"]) {
   $(id).addEventListener("change", () => {
     const run = state.run;
     if (!run) return;
-    run.shown = undefined;
-    renderFilmstrip();
-    if (run.done) showCompare(); else { const n = visibleFrames(run).length; if (n) showFrame(n - 1); }
+    renderSteps();
+    syncRawSeg();
+    if (run.resultUrl) showFinal(); else { const n = visibleFrames(run).length; if (n) showFrame(n - 1); }
   });
 }
+// "Pasted result / Raw" is a view of the hidden #viewRaw checkbox
+function syncRawSeg() {
+  for (const b of $("rawSeg").children) b.setAttribute("aria-pressed", String((b.dataset.raw === "1") === $("viewRaw").checked));
+}
+$("rawSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-raw]");
+  if (!b || (b.dataset.raw === "1") === $("viewRaw").checked) return;
+  $("viewRaw").checked = b.dataset.raw === "1";
+  $("viewRaw").dispatchEvent(new Event("change"));
+});
+$("compareToggle").addEventListener("change", () => { if (state.run?.done) showFinal(); });
 
 function freeRunFrames(run) {
   if (!run || state.runs.some((r) => r === run)) return;
   for (const f of run.frames) if (f.url.startsWith("blob:")) URL.revokeObjectURL(f.url);
 }
+
+// ------------------------------------------------------------------ viewer + details for the selected run
+const runStatus = (run) => (state.jobs.has(run.id) ? run.status : run.status || "done");
+const runTask = (run) => run.task || run.params?.task || "edit";
+
+function relTime(sec) {
+  if (!sec) return "";
+  const d = Date.now() / 1000 - sec;
+  if (d < 60) return "just now";
+  if (d < 3600) return `${Math.floor(d / 60)} min ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)} h ago`;
+  return new Date(sec * 1000).toLocaleDateString();
+}
+
+function errorAdvice(msg) {
+  const m = String(msg || "");
+  if (/4096|token|gray/i.test(m)) return "Lower the megapixels or turn on Auto-fix size, then run again.";
+  if (/restarted/i.test(m)) return "Load the settings in Create and queue it again.";
+  return "Check the settings, then use Load settings in Create to try again.";
+}
+
+function renderViewer() {
+  const run = state.run;
+  const status = run ? runStatus(run) : "none";
+  const done = status === "done";
+  const n = run ? runNumber(run) : 0;
+  $("runTitle").textContent = run ? (n ? `Run ${n}` : "Run") : (state.runs.length ? "No run selected" : "No runs yet");
+  $("runStatus").textContent = { queued: "Waiting", running: "Running", done: `Finished ${relTime(run?.finished || run?.created)}`,
+    error: "Failed", cancelled: "Cancelled", none: "" }[status] ?? status;
+  $("runStatus").className = status === "running" || status === "error" ? "strong" : "hint";
+  $("runFile").textContent = run?.filename || "";
+  // toolbar above the image
+  $("rawSeg").hidden = !(run && hasRaw(run));
+  syncRawSeg();
+  $("compareRow").hidden = !(done && run.beforeUrl);
+  $("viewerTools").hidden = $("rawSeg").hidden && $("compareRow").hidden;
+  // image area by status
+  const msg = (text) => {
+    $("liveImg").hidden = true; $("compare").hidden = true;
+    $("resultEmpty").hidden = false; $("resultEmpty").textContent = text;
+  };
+  $("progressWrap").hidden = !(status === "queued" || status === "running");
+  renderSteps();
+  if (!run) {
+    $("resultEmpty").hidden = false;
+    $("resultEmpty").innerHTML = 'No runs yet. Add one in <a href="#create">Create</a>.';
+    $("liveImg").hidden = true; $("compare").hidden = true;
+  } else if (status === "queued") {
+    const ahead = [...state.jobs.values()].filter((j) => j.created < run.created).length;
+    msg(`Waiting. ${ahead ? `${ahead} run${ahead === 1 ? "" : "s"} ahead of this one.` : "Starts next."}`);
+  } else if (status === "running") {
+    const vis = visibleFrames(run);
+    if (vis.length) showFrame(run.shown ?? vis.length - 1);
+    else if (!showNewestFrame(run)) msg("Starting. The first preview appears after the first step.");
+  } else if (done) {
+    if (run.resultUrl) showFinal(); else msg("This run has no result image.");
+  } else if (status === "error") {
+    msg(`${run.error || "The run failed."} ${errorAdvice(run.error)}`);
+  } else {
+    msg("Cancelled.");
+  }
+  updateProgressText();
+  renderDetails(run, status);
+  renderQueue();
+  renderHistory();
+  syncRunHash();
+}
+
+function settingsRows(run) {
+  const p = run.params || {};
+  const task = p.task || run.task;   // unknown for jobs queued elsewhere
+  const area = !p.use_mask ? "whole image" : p.mode === "paste" ? "free edit + paste" : "inpaint";
+  const preset = presetById(p.preset);
+  const size = run.size || {};
+  const rows = [
+    ["Task", !task ? "" : task === "generate" ? "Generate" : p.mode || p.use_mask != null ? `Edit, ${area}` : "Edit"],
+    ["Model", preset ? `${preset.title}${p.quant ? ` · ${p.quant}` : ""}` : p.unet || ""],
+    ["Size", size.work_w ? `${size.work_w} × ${size.work_h}` : ""],
+    ["Steps", p.steps ?? run.steps ?? ""],
+    ["Seed", p.seed ?? run.seed ?? ""],
+    ["CFG", p.cfg ?? ""],
+  ];
+  if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
+  if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
+  const took = run.took || (run.finished && run.started ? run.finished - run.started : run.finished && run.created ? run.finished - run.created : null);
+  rows.push(["Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : ""]);
+  return rows.filter(([, v]) => v !== "" && v != null);
+}
+
+function renderDetails(run, status) {
+  $("detEmpty").hidden = !!run;
+  $("detBody").hidden = !run;
+  if (!run) return;
+  const done = status === "done";
+  $("detPrompt").textContent = run.prompt || run.params?.prompt || "";
+  const dl = $("detSettings");
+  dl.innerHTML = "";
+  for (const [k, v] of settingsRows(run)) {
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = String(v);
+    if (k === "Time") dd.dataset.k = "time";
+    dl.append(dt, dd);
+  }
+  $("loadSettings").disabled = !run.params;
+  $("loadSettings").title = run.params ? "Switch to Create with this run's settings (the image stays)"
+    : "The settings of this run are not known to this page (it was queued elsewhere)";
+  $("useResult").hidden = !(done && run.resultUrl);
+  $("alignBtn").hidden = !(done && run.serverId && run.rawUrl && run.maskUrl);
+  $("downloadBtn").hidden = !(done && run.resultUrl);
+  if (done && run.resultUrl) {
+    $("downloadBtn").href = run.aligned?.url || run.resultUrl;
+    $("downloadBtn").download = run.filename || "result.png";
+  }
+  $("downloadUpscaled").hidden = !(done && run.upscaledUrl);
+  if (done && run.upscaledUrl) {
+    $("downloadUpscaled").href = run.upscaledUrl;
+    $("downloadUpscaled").textContent = `Download upscaled (${run.upscale}×)`;
+    $("downloadUpscaled").download = (run.filename || "result.png").replace(/\.png$/, `_x${run.upscale}.png`);
+  }
+  $("downloadSteps").hidden = !visibleFrames(run).length;
+  $("cancelRun").hidden = status !== "running";
+  $("removeRun").hidden = status !== "queued";
+  $("deleteRun").hidden = !(done || status === "error");
+  $("matchInfo").textContent = run.match || "";
+}
+
+$("cancelRun").onclick = () => { if (state.run && state.jobs.has(state.run.id)) cancelJob(state.run); };
+$("removeRun").onclick = $("cancelRun").onclick;
+$("deleteRun").onclick = () => { if (state.run) deleteRun(state.run); };
+$("loadSettings").onclick = () => { if (state.run?.params) loadRunSettings(state.run); };
 
 // ------------------------------------------------------------------ persisted run history
 function runFromStored(r) {
@@ -877,7 +1157,8 @@ function runFromStored(r) {
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
     aligned: r.aligned || null, task: r.params?.task || "edit", preset: r.params?.preset || null,
-    value: r.params?.steps, max: r.params?.steps, created: r.created,
+    value: r.params?.steps, max: r.params?.steps, created: r.created, finished: r.finished || null,
+    status: r.status || "done", error: r.error || null, params: r.params || null, size: r.size || null,
   };
 }
 
@@ -889,42 +1170,26 @@ async function loadStoredRuns() {
   } catch (e) { showError(`Could not load run history: ${e.message}`); }
 }
 
+// the viewer falls back to the latest result (or the empty state)
+function showLatest() {
+  const run = state.runs.find((r) => r.status === "done") || state.runs[0];
+  if (run) showRun(run);
+  else { clearInterval(state.progressTimer); state.run = null; renderViewer(); }
+}
+
 async function deleteRun(run) {
+  if (!confirm(`Delete Run ${runNumber(run)} and its files?`)) return;
   try {
     if (run.serverId) await api(`/api/runs/${encodeURIComponent(run.serverId)}`, { method: "DELETE" });
     state.runs = state.runs.filter((r) => r !== run);
-    renderHistory();
+    if (state.run === run) { state.follow = false; showLatest(); } else renderHistory();
   } catch (e) { showError(e.message); }
 }
 
 $("cancelEdit").onclick = () => {
   const job = (state.run && state.jobs.get(state.run.id)) || [...state.jobs.values()].find((j) => j.status === "running");
-  if (job) cancelJob(job); else showError("No queued or running job.");
+  if (job) cancelJob(job); else showError("No queued or running run.");
 };
-
-function showRun(run) {
-  state.run = run;
-  $("resultEmpty").hidden = true;
-  $("resultActions").hidden = false;
-  $("downloadBtn").href = run.resultUrl;
-  $("downloadBtn").download = run.filename || "result.png";
-  $("downloadUpscaled").hidden = !run.upscaledUrl;
-  if (run.upscaledUrl) {
-    $("downloadUpscaled").href = run.upscaledUrl;
-    $("downloadUpscaled").textContent = `Download upscaled (${run.upscale}×)`;
-    $("downloadUpscaled").download = (run.filename || "result.png").replace(/\.png$/, `_x${run.upscale}.png`);
-  }
-  $("filmstrip").innerHTML = "";
-  renderFilmstrip();
-  showCompare();
-  renderHistory();
-  syncViewerOpts();
-  $("alignBtn").hidden = !(run.serverId && run.rawUrl && run.maskUrl);
-  $("alignPanel").hidden = true;
-  if (run.aligned) $("downloadBtn").href = run.aligned.url;
-  $("matchInfo").textContent = run.match || "";
-  if (run.rawUrl && run.maskUrl && !run.match) measureMatch(run);
-}
 
 function loadImg(url) {
   return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
@@ -944,32 +1209,11 @@ async function measureMatch(run) {
       n++;
     }
     const diff = n ? sum / n : 0;
-    const verdict = diff < 8 ? "very close" : diff < 16 ? "close" : diff < 28 ? "noticeably different" : "different – paste may not line up";
+    const verdict = diff < 8 ? "very close" : diff < 16 ? "close" : diff < 28 ? "noticeably different" : "different, paste may not line up";
     run.match = `Outside-mask difference: ${diff.toFixed(1)} / 255 (${verdict})`;
     if (state.run === run) $("matchInfo").textContent = run.match;
   } catch { /* measurement is optional */ }
 }
-
-function showCompare() {
-  const run = state.run;
-  if (!run || !run.resultUrl) return;
-  if (!run.beforeUrl) {   // generate runs have nothing to compare with: show the result itself
-    $("liveImg").src = run.resultUrl;
-    $("liveImg").hidden = false;
-    $("compare").hidden = true;
-    $("showCompare").hidden = true;
-    for (const img of $("filmstrip").children) img.classList.remove("active");
-    return;
-  }
-  $("cmpBefore").src = run.beforeUrl;
-  $("cmpAfter").src = $("viewRaw").checked && run.rawUrl ? run.rawUrl : (run.aligned?.url || run.resultUrl);
-  $("liveImg").hidden = true;
-  $("compare").hidden = false;
-  $("showCompare").hidden = true;
-  setDivider(50);
-  for (const img of $("filmstrip").children) img.classList.remove("active");
-}
-$("showCompare").onclick = showCompare;
 
 function setDivider(pct) {
   pct = Math.max(0, Math.min(100, pct));
@@ -988,29 +1232,43 @@ function setDivider(pct) {
   cmp.addEventListener("pointercancel", () => { drag = false; });
 }
 
+// Results: finished and failed runs as tiles, filtered by task
 function renderHistory() {
-  renderQueueLabel();
   const box = $("history");
   box.innerHTML = "";
-  if (!state.runs.length) { box.innerHTML = '<div class="hint">No runs yet.</div>'; return; }
-  for (const run of state.runs) {
+  const f = state.resultFilter;
+  const list = state.runs.filter((r) => f === "all" || runTask(r) === f);
+  $("resultCount").textContent = `${list.length} result${list.length === 1 ? "" : "s"}`;
+  if (!list.length) {
+    box.innerHTML = `<div class="hint">${state.runs.length ? "No results for this filter." : "No results yet."}</div>`;
+    return;
+  }
+  for (const run of list) {
     const b = document.createElement("button");
-    b.className = "hist-item" + (run === state.run ? " active" : "");
-    const img = document.createElement("img");
-    img.src = run.resultUrl; img.alt = "";
-    const d = document.createElement("div");
-    const t = document.createElement("div"); t.className = "t"; t.textContent = run.prompt;
-    const when = run.created ? new Date(run.created * 1000).toLocaleString() : "";
-    const s = document.createElement("div"); s.className = "s";
-    s.textContent = [when, `seed ${run.seed}`, `${run.steps ?? run.max} steps`].filter(Boolean).join(" · ");
-    d.append(t, s);
-    const del = document.createElement("span"); del.className = "hist-del"; del.textContent = "×"; del.title = "Delete from history";
-    del.onclick = (ev) => { ev.stopPropagation(); deleteRun(run); };
-    b.append(img, d, del);
-    b.onclick = () => { state.follow = false; clearInterval(state.progressTimer); setView("result"); showRun(run); $("progressWrap").hidden = true; };
+    b.className = "rtile" + (run === state.run ? " active" : "") + (run.status === "error" ? " failed" : "");
+    const n = runNumber(run);
+    b.setAttribute("aria-label", `Open Run ${n}`);
+    const pic = document.createElement("span"); pic.className = "rpic";
+    if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
+    if (run.resultUrl) { const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img); }
+    const meta = document.createElement("span"); meta.className = "rmeta";
+    const l = document.createElement("span"); l.textContent = `Run ${n}`;
+    const st = document.createElement("span"); st.className = run.status === "error" ? "strong" : "hint";
+    st.textContent = run.status === "error" ? "Failed" : relTime(run.finished || run.created);
+    meta.append(l, st);
+    b.append(pic, meta);
+    b.title = run.prompt;
+    b.onclick = () => selectRun(run);
     box.appendChild(b);
   }
 }
+$("resultFilter").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-filter]");
+  if (!b) return;
+  state.resultFilter = b.dataset.filter;
+  for (const x of $("resultFilter").children) x.setAttribute("aria-pressed", String(x === b));
+  renderHistory();
+});
 
 $("downloadSteps").onclick = async () => {
   const run = state.run;
@@ -1030,22 +1288,87 @@ $("useResult").onclick = async () => {
   const run = state.run;
   if (!run || !run.resultUrl) return;
   try {
-    const blob = await (await fetch(run.resultUrl)).blob();
+    const blob = await (await fetch(run.aligned?.url || run.resultUrl)).blob();
     if (!ensureEditTask()) return;
     await setImageFile(new File([blob], run.filename || "result.png", { type: blob.type || "image/png" }));
+    setView("create");
   } catch (e) { showError(e.message); }
 };
 
-// ------------------------------------------------------------------ view switching
-function setView(v) {
-  if (state.task === "generate" && v === "mask") v = "result";   // there is no image view in generate mode
-  state.view = v;
-  for (const b of $("viewTabs").children) b.classList.toggle("active", b.dataset.view === v);
-  $("maskView").hidden = v !== "mask";
-  $("resultView").hidden = v !== "result";
-  if (v === "mask") render();
+// "Load settings in Create": the run's parameters back into the form (the current image stays)
+function loadRunSettings(run) {
+  const p = run.params;
+  const task = p.task === "generate" ? "generate" : "edit";
+  if (task !== state.task) setTask(task);
+  const pick = `${p.preset}|${p.quant}`;
+  if (p.preset && [...$("modelSel").options].some((o) => o.value === pick)) {
+    $("modelSel").value = pick;
+    $("modelSel").dispatchEvent(new Event("change"));   // applies the preset defaults first
+  }
+  const fields = { prompt: p.prompt, negative: p.negative, steps: p.steps, denoise: p.denoise, cfg: p.cfg, feather: p.feather,
+    megapixels: p.megapixels, resolution: p.resolution, saveEvery: p.save_every, saveLast: p.save_last, seed: p.seed,
+    upscale: p.upscale != null ? String(p.upscale) : null };
+  for (const [id, v] of Object.entries(fields)) if (v != null) $(id).value = v;
+  for (const [id, v] of [["sampler", p.sampler], ["scheduler", p.scheduler]]) if (v) setSelectValue(id, v);
+  if (p.upscaler && [...$("upscaler").options].some((o) => o.value === p.upscaler)) $("upscaler").value = p.upscaler;
+  const checks = { keepIdentical: p.keep_identical, postColors: p.post_colors, postWarp: p.post_warp, postPoisson: p.post_poisson };
+  for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
+  $("randomSeed").checked = false;   // reproduce the run
+  if (task === "edit" && p.mode) {
+    $("mode").value = p.use_mask === false ? "none" : p.mode;
+    $("mode").dispatchEvent(new Event("change"));
+  }
+  if (task === "generate" && run.size?.work_w) {   // nearest aspect ratio tile
+    const r = run.size.work_w / run.size.work_h;
+    const off = (v) => { const [a, b] = v.split(":").map(Number); return Math.abs(Math.log(a / b / r)); };
+    const best = [...$("aspect").options].map((o) => o.value).sort((a, b) => off(a) - off(b))[0];
+    $("aspect").value = best;
+    $("aspect").dispatchEvent(new Event("change"));
+  }
+  for (const id of ["prompt", "upscale"]) $(id).dispatchEvent(new Event("change"));
+  $("prompt").dispatchEvent(new Event("input"));
+  syncTaskUi();
+  saveForm();
+  refreshSize();
+  setView("create");
+  showToast(`Settings of Run ${runNumber(run)} loaded.`);
 }
-$("viewTabs").addEventListener("click", (e) => { if (e.target.dataset.view) setView(e.target.dataset.view); });
+
+// ------------------------------------------------------------------ view switching (hash router)
+// #create, #runs, #runs/<run id>: reloads keep the view and the selected run
+function setView(v) {
+  state.view = v === "runs" ? "runs" : "create";
+  const runs = state.view === "runs";
+  $("createView").hidden = runs;
+  $("runsView").hidden = !runs;
+  $("navCreate").setAttribute("aria-current", runs ? "false" : "page");
+  $("navRuns").setAttribute("aria-current", runs ? "page" : "false");
+  if (!location.hash.startsWith(`#${state.view}`)) location.hash = state.view;
+  if (!runs) render();
+}
+// keeps the selected run in the hash without adding history entries
+function syncRunHash() {
+  if (state.view !== "runs") return;
+  const want = state.run?.serverId ? `#runs/${state.run.serverId}` : "#runs";
+  if (location.hash !== want) history.replaceState(null, "", want);
+}
+function route() {
+  const [v, id] = location.hash.slice(1).split("/");
+  setView(v);
+  if (state.view === "runs") {
+    state.wantRun = id ? decodeURIComponent(id) : null;
+    const run = state.wantRun && findRun(state.wantRun);
+    if (run) { state.wantRun = null; if (run !== state.run) selectRun(run); }
+    else if (!state.wantRun) syncRunHash();
+  }
+}
+window.addEventListener("hashchange", route);
+const findRun = (id) => state.jobs.get(id) || state.runs.find((r) => r.serverId === id) || null;
+function selectRun(run) {
+  if (state.jobs.has(run.id)) { state.follow = true; viewJob(run); return; }
+  state.follow = false;
+  showRun(run);
+}
 
 // ------------------------------------------------------------------ wiring
 function bindOutput(id, outId, fmt = (v) => v) {
@@ -1055,15 +1378,19 @@ function bindOutput(id, outId, fmt = (v) => v) {
 }
 
 function initApp() {
+  setView(location.hash.slice(1).split("/")[0]);
   loadForm();
+  syncAreaCards();
+  $("aspect").dispatchEvent(new Event("change"));
+  syncUpscaler();
   state.task = $("task").value === "generate" ? "generate" : "edit";
   initModelPicker();
   promptPresets = initPromptPresets({ getTask: () => state.task });
   syncTaskUi();
-  if (state.task === "generate") { setView("result"); refreshSize(); }
-  bindOutput("threshold", "thresholdOut");
-  bindOutput("brushSize", "brushSizeOut", (v) => `${v}px`);
-  bindOutput("opacity", "opacityOut", (v) => (+v).toFixed(2));
+  if (state.task === "generate") refreshSize();
+  bindOutput("threshold", "thresholdOut", (v) => (+v).toFixed(2));
+  bindOutput("brushSize", "brushSizeOut", (v) => `${v} px`);
+  bindOutput("opacity", "opacityOut", (v) => `${Math.round(v * 100)}%`);
   for (const id of PERSIST) $(id).addEventListener("change", saveForm);
   $("aspect").addEventListener("change", refreshSizeDebounced);
   for (const id of ["unet", "clip", "vae"]) $(id).addEventListener("change", updateOverrideHint);
@@ -1085,12 +1412,55 @@ function syncModeUi() {
   const notPaste = $("mode").value !== "paste";
   $("keepIdenticalRow").hidden = notPaste;
   $("postFixRow").hidden = notPaste;
-  const hints = { paste: "The model edits the whole image, then only the masked area is pasted into the original.",
-    inpaint: "Only the masked area is re-generated.", none: "The whole image is edited, no mask." };
-  $("modeHint").textContent = hints[$("mode").value] || "";
+  syncAreaCards();
   if (state.maskUiReady) applyMaskTexts();  // not during module init (applyMaskMode runs it later)
 }
 $("mode").addEventListener("change", syncModeUi);
+
+// "Area to change" cards are a view of the hidden #mode select
+function syncAreaCards() {
+  for (const b of $("areaCards").children) {
+    const opt = $("mode").querySelector(`[value="${b.dataset.mode}"]`);
+    b.setAttribute("aria-checked", String($("mode").value === b.dataset.mode));
+    b.disabled = !!opt?.disabled;
+  }
+}
+$("areaCards").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-mode]");
+  if (!b || b.disabled || $("mode").value === b.dataset.mode) return;
+  $("mode").value = b.dataset.mode;
+  $("mode").dispatchEvent(new Event("change"));
+});
+
+// aspect ratio tiles are a view of the hidden #aspect select
+function renderAspectTiles() {
+  const box = $("aspectTiles");
+  box.innerHTML = "";
+  for (const o of $("aspect").options) {
+    const [a, b] = o.value.split(":").map(Number);
+    const t = document.createElement("button");
+    t.setAttribute("role", "radio");
+    t.dataset.aspect = o.value;
+    t.setAttribute("aria-checked", String(o.value === $("aspect").value));
+    const icon = document.createElement("i");
+    icon.style.width = `${a >= b ? 22 : Math.round((22 * a) / b)}px`;
+    icon.style.height = `${b >= a ? 22 : Math.round((22 * b) / a)}px`;
+    const l = document.createElement("span"); l.textContent = o.value;
+    t.append(icon, l);
+    box.appendChild(t);
+  }
+}
+$("aspectTiles").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-aspect]");
+  if (!t) return;
+  $("aspect").value = t.dataset.aspect;
+  $("aspect").dispatchEvent(new Event("change"));
+});
+$("aspect").addEventListener("change", () => {
+  for (const t of $("aspectTiles").children) t.setAttribute("aria-checked", String(t.dataset.aspect === $("aspect").value));
+  syncGenFrame();
+});
+renderAspectTiles();
 syncModeUi();
 
 // ------------------------------------------------------------------ session restore (image + mask survive reloads)
@@ -1130,10 +1500,11 @@ async function restoreSession() {
     const im = await loadImage(inputViewUrl(sess.imageName));
     state.imgEl = im; state.imgUrl = null;
     state.imageName = sess.imageName; state.srcW = sess.srcW; state.srcH = sess.srcH;
+    state.imageLabel = sess.label || "image";
     $("imageInfo").textContent = `${sess.label || "image"} – original ${sess.srcW}×${sess.srcH} (restored)`;
-    $("dropText").textContent = "Drop another image or click to replace";
     resetMask();
     state.size = null;
+    renderBatch();
     await refreshSize();
     if (sess.maskName && state.maskAvailable) {
       try {
@@ -1150,10 +1521,11 @@ async function restoreSession() {
 }
 
 async function startSession() {
-  const [restored] = await Promise.all([restoreSession(), loadStoredRuns()]);
+  await Promise.all([restoreSession(), loadStoredRuns()]);
+  route();
   connectJobs();
-  // nothing to work on yet -> show the latest result instead of an empty page
-  if (!restored && state.runs.length) { setView("result"); showRun(state.runs[0]); $("progressWrap").hidden = true; }
+  // the viewer starts on the latest result
+  if (!state.run && !state.wantRun) showLatest();
 }
 
 // ------------------------------------------------------------------ advanced: post-hoc alignment
@@ -1200,7 +1572,7 @@ $("alignBtn").onclick = () => {
   $("alignInfo").textContent = "Try Auto-align and the fixes, then fine-tune with the arrows (Shift = 5 px).";
   schedulePreview();
 };
-$("alignClose").onclick = () => { $("alignPanel").hidden = true; showCompare(); };
+$("alignClose").onclick = () => { $("alignPanel").hidden = true; showFinal(); };
 $("alignAuto").onclick = () => alignRequest({ auto: true, save: false });
 $("alignReset").onclick = () => { setAlignValues({ dx: 0, dy: 0, scale: 1, colors: false, warp: false, poisson: false }); schedulePreview(); };
 $("alignSave").onclick = () => alignRequest({ ...alignValues(), save: true });
@@ -1225,12 +1597,13 @@ function openFiles(files) {
   if (!imgs.length) { showError("No images found."); return; }
   if (!ensureEditTask()) return;
   if (imgs.length === 1 && !state.batch.length) { setImageFile(imgs[0]); return; }
-  for (const it of state.batch) URL.revokeObjectURL(it.thumbUrl);
-  state.batch = imgs.map((file, i) => ({ id: i, file, label: file.name, thumbUrl: URL.createObjectURL(file),
+  const items = imgs.map((file) => ({ file, label: file.name, thumbUrl: URL.createObjectURL(file),
     name: null, srcW: 0, srcH: 0, status: "open", mask: null, maskMeta: null }));
-  state.batchIdx = -1;
+  const first = state.batch.length;   // an open batch grows
+  state.batch.push(...items);
+  if (!first) state.batchIdx = -1;
   renderBatch();
-  openBatchItem(0);
+  openBatchItem(first);
 }
 
 function currentBatchItem() {
@@ -1238,10 +1611,36 @@ function currentBatchItem() {
   return it && it.name === state.imageName ? it : null;
 }
 
+// "+" tile at the end of the image grid: opens the file picker
+function addTile() {
+  const add = document.createElement("label");
+  add.className = "batch-item add";
+  add.htmlFor = "fileInput";
+  // a batch grows, a single image is replaced (choosing several starts a batch)
+  const label = state.batch.length ? "Add images" : "Choose other images";
+  add.title = label;
+  add.setAttribute("aria-label", label);
+  add.textContent = "+";
+  return add;
+}
+
 function renderBatch() {
   $("batchWrap").hidden = !state.batch.length;
+  $("dropzone").hidden = !!(state.imgEl || state.batch.length);
   const grid = $("batchGrid");
+  grid.hidden = !$("dropzone").hidden;
   grid.innerHTML = "";
+  if (!state.batch.length) {   // a single image: one tile
+    if (state.imgEl) {
+      const b = document.createElement("button");
+      b.className = "batch-item active";
+      b.title = $("imageInfo").textContent;
+      const img = document.createElement("img"); img.src = state.imgEl.src; img.alt = "";
+      b.append(img);
+      grid.append(b, addTile());
+    }
+    return;
+  }
   const counts = { open: 0, masked: 0, queued: 0, nomask: 0, error: 0, skipped: 0 };
   state.batch.forEach((it, i) => {
     counts[it.status] = (counts[it.status] || 0) + 1;
@@ -1255,6 +1654,7 @@ function renderBatch() {
     b.onclick = () => openBatchItem(i);
     grid.appendChild(b);
   });
+  grid.appendChild(addTile());
   $("batchInfo").textContent = `${state.batch.length} images · ${counts.queued} queued · ${counts.open + counts.masked} open`
     + (counts.nomask ? ` · ${counts.nomask} without mask found` : "") + (counts.skipped ? ` · ${counts.skipped} skipped` : "")
     + (counts.error ? ` · ${counts.error} failed` : "");
@@ -1288,6 +1688,7 @@ async function openBatchItem(i) {
     const im = await loadImage(it.thumbUrl);
     state.imgEl = im; state.imgUrl = null;
     state.imageName = it.name; state.srcW = it.srcW; state.srcH = it.srcH;
+    state.imageLabel = it.label;
     state.batchIdx = i;
     $("imageInfo").textContent = `${it.label} – original ${it.srcW}×${it.srcH} (${i + 1} / ${state.batch.length})`;
     saveSession({ imageName: it.name, srcW: it.srcW, srcH: it.srcH, label: it.label, maskName: null, maskMeta: null });
@@ -1300,7 +1701,7 @@ async function openBatchItem(i) {
       state.hasMask = true; state.maskMeta = it.maskMeta;
       updateStale();
     }
-    setView("mask");
+    setView("create");
     render();
   } catch (e) {
     it.status = "error";
@@ -1502,12 +1903,14 @@ $("batchClear").onclick = () => {
   state.batch = []; state.batchIdx = -1;
   renderBatch();
 };
+$("batchMore").onclick = () => {
+  const open = $("batchMenu").hidden;
+  $("batchMenu").hidden = !open;
+  $("batchMore").setAttribute("aria-expanded", String(open));
+};
 
 // ------------------------------------------------------------------ setup page & no-mask mode
 const MASK_TEXTS = {
-  heading: ["Step 2 &ndash; Edit", "Edit"],
-  tab: ["Mask", "Image"],
-  keys: ["← → in the Mask view switch images.", "← → in the Image view switch images."],
   next: ["Queue the current image with its mask and open the next open one", "Queue the current image and open the next open one"],
   all: ["Submit all without mask", "Submit all"],
   allTitle: ["Queue every open image without a mask (whole image is edited)", "Queue every open image"],
@@ -1516,9 +1919,6 @@ const MASK_TEXTS = {
 // masks are used when SAM3 is installed and the mode is not "No mask"
 function maskOn() { return !!state.maskAvailable && $("mode").value !== "none"; }
 
-const syncHeading = () => {
-  $("editHeading").innerHTML = state.task === "generate" ? "Generate" : MASK_TEXTS.heading[maskOn() ? 0 : 1];
-};
 
 // Masking needs SAM3. Without it the UI hides everything about masks and never sends one.
 function applyMaskMode(available) {
@@ -1532,9 +1932,6 @@ function applyMaskMode(available) {
 function applyMaskTexts() {
   const i = maskOn() ? 0 : 1;
   document.body.classList.toggle("no-mask", !maskOn());
-  syncHeading();
-  $("maskTab").textContent = MASK_TEXTS.tab[i];
-  $("batchKeysHint").textContent = MASK_TEXTS.keys[i];
   $("batchSubmitNext").title = MASK_TEXTS.next[i];
   $("batchNoMaskAll").textContent = MASK_TEXTS.all[i];
   $("batchNoMaskAll").title = MASK_TEXTS.allTitle[i];
@@ -1546,7 +1943,7 @@ let appStarted = false;
 function showApp() {
   setup.close();
   $("appLayout").hidden = false;
-  $("modelBar").hidden = false;
+  $("viewSwitch").hidden = false;
   if (appStarted) return;
   appStarted = true;
   initApp();
@@ -1554,7 +1951,7 @@ function showApp() {
 }
 function showSetup(opts = {}) {
   $("appLayout").hidden = true;
-  $("modelBar").hidden = true;
+  $("viewSwitch").hidden = true;
   setup.open(opts instanceof Event ? {} : opts).catch((e) => showError(e.message));
 }
 
@@ -1590,6 +1987,13 @@ function renderUpscalers() {
   $("getUpscalers").hidden = !!ups.length;
 }
 $("getUpscalers").onclick = showSetup;
+// the upscaler only matters with Upscale on
+function syncUpscaler() {
+  const off = $("upscale").value === "0";
+  $("upscaler").disabled = off;
+  $("upscalerRow").classList.toggle("dim", off);
+}
+$("upscale").addEventListener("change", syncUpscaler);
 
 (async () => {
   pollStatus();
@@ -1694,6 +2098,7 @@ function renderModelSel(list) {
   sel.value = `${$("preset").value}|${$("quant").value}`;
   sel.disabled = !list.length;
   sel.title = sel.selectedOptions[0]?.textContent || "";
+  $("modelListHint").textContent = state.task === "generate" ? "Text-to-image models only" : "Edit models only";
 }
 function initModelPicker() {
   renderModelPicker({ applyDefaults: !storedForm().preset });
@@ -1727,6 +2132,7 @@ function syncTaskUi() {
   // Z-Image cannot do free edit + paste (it does not follow instructions)
   $("mode").querySelector('[value="paste"]').disabled = zedit;
   if (zedit && $("mode").value === "paste") { $("mode").value = "inpaint"; syncModeUi(); }
+  syncAreaCards();
   // turbo models: fixed 5-7 steps, no CFG; the server clamps and forces, the form just follows
   const turbo = fam === "qwen21_turbo";
   document.body.classList.toggle("fam-turbo", turbo);
@@ -1741,7 +2147,6 @@ function syncTaskUi() {
     : fam === "qwen_edit" ? "Experimental: 20B model, slow on 32 GB." : "";
   hint.textContent = text;
   hint.hidden = !text;
-  syncHeading();
   if (!state.submitting) $("runEdit").textContent = runLabel();
   promptPresets?.refresh();
 }
@@ -1759,12 +2164,10 @@ function setTask(task) {
   state.task = task;
   renderModelPicker();
   if (task === "generate") {
-    setView("result");
     refreshSize();
   } else {
-    setView(state.imgEl ? "mask" : state.view);
     if (state.imageName) refreshSize();
-    else $("sizeInfo").textContent = "Load an image to see the working size.";
+    else clearSizeInfo();
     render();
   }
   saveForm();

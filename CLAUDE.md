@@ -29,7 +29,11 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - `presets.py` – model presets (files, quants, sizes, defaults), components (encoders, VAEs,
   SAM3, upscalers, Viggle node) and the RAM-fit estimate. `installer.py` – setup/downloads and
   the headless ComfyUI process.
-- `web/` – vanilla HTML/JS/CSS, no build step.
+- `web/` – vanilla HTML/JS/CSS, no build step. Two views in one page: Create (`#createView`) and Runs
+  (`#runsView`), switched by a hash router (`#create`, `#runs/<id>`). Hidden `#mode`, `#aspect`, `#viewRaw`
+  stay the source of truth; the Area cards, aspect tiles and Pasted/Raw switch only write into them.
+  Design tokens (Ollama style, see `design/`) are CSS variables at the top of `styles.css`.
+- Dev preview: launch config `inpaint-studio-dev` (port 7381), since the installed app usually holds 7380.
 
 ## Rules
 - Gray-noise limit: on MPS the edit breaks at >= 4096 latent tokens for target or reference

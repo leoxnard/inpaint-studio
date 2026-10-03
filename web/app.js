@@ -642,6 +642,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
     refs: state.refs.slice(0, maxRefs()).map((r) => r.name),
     ref_takes: state.refs.slice(0, maxRefs()).map((r) => (r.take || "").trim()),
+    ref_crops: state.refs.slice(0, maxRefs()).map((r) => r.crop || null),
     // only an edited instruction is sent; otherwise the server uses its default (graphs.REF_NOTE)
     ref_note: isDefaultRefNote($("refNote").value) ? undefined : $("refNote").value,
     // explicit file overrides only; empty = taken from the preset by the server
@@ -1155,8 +1156,9 @@ function renderDetails(run, status) {
   $("detRefsSec").hidden = !refs.length;
   $("detRefs").replaceChildren(...refs.map((name, i) => {
     const row = document.createElement("div"); row.className = "ref-row";
-    const t = document.createElement("span"); t.className = "batch-item";
-    const img = document.createElement("img"); img.src = inputViewUrl(name); img.alt = "";
+    const crop = run.params?.ref_crops?.[i] || null;
+    const t = document.createElement("span"); t.className = "batch-item" + (crop ? " cropped" : "");
+    const img = document.createElement("img"); img.alt = ""; refThumb(img, name, crop);
     const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = String(runTask(run) === "generate" ? i + 1 : i + 2);
     t.append(img, tag);
     const take = document.createElement("span"); take.className = "ref-take";
@@ -1391,7 +1393,7 @@ function loadRunSettings(run) {
   $("randomSeed").checked = false;   // reproduce the run
   $("refNote").value = p.ref_note ?? defaultRefNote();
   state.refs = (p.refs || []).map((name, i) => ({ name, label: name.split("/").pop().replace(/^[0-9a-f]{8}_/, ""),
-    take: p.ref_takes?.[i] || "" }));
+    take: p.ref_takes?.[i] || "", crop: p.ref_crops?.[i] || null }));
   saveSession({ refs: state.refs });
   if (task === "edit" && p.mode) {
     $("mode").value = p.use_mask === false ? "none" : p.mode;
@@ -1607,7 +1609,8 @@ syncModeUi();
 // The edited image is image 1, references follow; when generating they start at image 1.
 const MAX_REFS = { qwen21: 3, qwen21_turbo: 3, qwen_edit: 2 };
 const maxRefs = () => MAX_REFS[currentFamily()] || 0;
-state.refs = [];   // [{name, label, take}] uploaded to ComfyUI's input folder; take = what to take from it
+state.refs = [];   // [{name, label, take, crop}] uploaded to ComfyUI's input folder; take = what to take from it,
+                   // crop = {x, y, w, h} in the image's pixels or null for the whole image
 
 // Free edit + paste instruction after the prompt, editable in Advanced. Mirrors graphs.KEEP_IDENTICAL.
 const KEEP_NOTE = "Keep everything else in the image exactly identical to the original: same framing, "
@@ -1653,7 +1656,7 @@ function renderRefs() {
   const first = state.task === "generate" ? 1 : 2;
   $("refsHint").textContent = (state.task === "generate"
     ? "Optional. Refer to them as image 1, 2 … in the prompt."
-    : "Optional. Your image is image 1 and stays the one that is edited (the model is told so). Say what to take from each reference, e.g. \u201cmuscular torso\u201d.")
+    : "Optional. Your image is image 1 and stays the one that is edited (the model is told so). Say what to take from each reference, e.g. \u201cface\u201d, and click it to crop that part.")
     + ` This model takes up to ${max}; each one makes the run a lot slower.`;
   const grid = $("refGrid");
   grid.innerHTML = "";
@@ -1662,9 +1665,13 @@ function renderRefs() {
     const unused = i >= max;
     row.className = "ref-row" + (unused ? " skipped" : "");
     const t = document.createElement("div");
-    t.className = "batch-item ref";
-    t.title = unused ? `${r.label}: not used by this model` : `${r.label}: image ${first + i}`;
-    const img = document.createElement("img"); img.src = inputViewUrl(r.name); img.alt = "";
+    t.className = "batch-item ref" + (r.crop ? " cropped" : "");
+    t.title = unused ? `${r.label}: not used by this model` : `${r.label}: image ${first + i}. Click to crop.`;
+    t.tabIndex = 0; t.setAttribute("role", "button");
+    t.setAttribute("aria-label", `Crop reference ${first + i}`);
+    t.onclick = () => openCrop(r);
+    t.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCrop(r); } };
+    const img = document.createElement("img"); img.alt = ""; refThumb(img, r.name, r.crop);
     const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = unused ? "unused" : String(first + i);
     t.append(img, tag);
     const take = document.createElement("input");
@@ -1688,6 +1695,68 @@ function renderRefs() {
     grid.appendChild(add);
   }
 }
+
+// Thumbnail of a reference: the crop when there is one (drawn on a canvas, works in every browser)
+function refThumb(img, name, crop) {
+  if (!crop) { img.src = inputViewUrl(name); return; }
+  const src = new Image();
+  src.onload = () => {
+    const c = document.createElement("canvas");
+    const s = Math.min(1, 240 / Math.max(crop.w, crop.h));
+    c.width = Math.max(1, Math.round(crop.w * s)); c.height = Math.max(1, Math.round(crop.h * s));
+    c.getContext("2d").drawImage(src, crop.x, crop.y, crop.w, crop.h, 0, 0, c.width, c.height);
+    img.src = c.toDataURL("image/jpeg", 0.85);
+  };
+  src.src = inputViewUrl(name);
+}
+
+// Crop dialog: drag a rectangle on the reference; stored in image pixels
+const cropUi = { ref: null, box: null, start: null };
+function openCrop(r) {
+  cropUi.ref = r; cropUi.box = r.crop ? { ...r.crop } : null;
+  $("cropImg").onload = drawCropRect;
+  $("cropImg").src = inputViewUrl(r.name);
+  $("cropModal").hidden = false;
+  drawCropRect();
+}
+function closeCrop() { $("cropModal").hidden = true; cropUi.ref = null; }
+function drawCropRect() {
+  const img = $("cropImg"), b = cropUi.box;
+  $("cropRect").hidden = !(b && img.naturalWidth);
+  $("cropSave").disabled = !b;
+  if (!b || !img.naturalWidth) return;
+  const W = img.naturalWidth, H = img.naturalHeight;
+  Object.assign($("cropRect").style, { left: `${(b.x / W) * 100}%`, top: `${(b.y / H) * 100}%`,
+    width: `${(b.w / W) * 100}%`, height: `${(b.h / H) * 100}%` });
+}
+function cropPoint(e) {   // pointer position in image pixels, clamped to the image
+  const img = $("cropImg"), r = img.getBoundingClientRect();
+  const fx = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  const fy = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  return { x: fx * img.naturalWidth, y: fy * img.naturalHeight };
+}
+$("cropStage").addEventListener("pointerdown", (e) => {
+  if (!$("cropImg").naturalWidth) return;
+  e.preventDefault();
+  cropUi.start = cropPoint(e);
+  try { $("cropStage").setPointerCapture(e.pointerId); } catch {}
+});
+$("cropStage").addEventListener("pointermove", (e) => {
+  if (!cropUi.start) return;
+  const p = cropPoint(e), s = cropUi.start;
+  const box = { x: Math.round(Math.min(s.x, p.x)), y: Math.round(Math.min(s.y, p.y)),
+    w: Math.round(Math.abs(p.x - s.x)), h: Math.round(Math.abs(p.y - s.y)) };
+  cropUi.box = box.w >= 16 && box.h >= 16 ? box : null;   // the server ignores smaller crops (graphs.crop_box)
+  drawCropRect();
+});
+const endCropDrag = () => { cropUi.start = null; };
+$("cropStage").addEventListener("pointerup", endCropDrag);
+$("cropStage").addEventListener("pointercancel", endCropDrag);
+$("cropSave").onclick = () => { if (cropUi.ref && cropUi.box) cropUi.ref.crop = cropUi.box; saveSession({ refs: state.refs }); closeCrop(); renderRefs(); };
+$("cropClear").onclick = () => { if (cropUi.ref) cropUi.ref.crop = null; saveSession({ refs: state.refs }); closeCrop(); renderRefs(); };
+$("cropCancel").onclick = closeCrop;
+$("cropModal").addEventListener("keydown", (e) => { if (e.key === "Escape") closeCrop(); });
+$("cropModal").addEventListener("click", (e) => { if (e.target === $("cropModal")) closeCrop(); });
 
 $("refInput").addEventListener("change", async (e) => {
   const files = [...e.target.files].filter((f) => f.type.startsWith("image/")).slice(0, Math.max(0, maxRefs() - state.refs.length));

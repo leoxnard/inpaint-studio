@@ -193,3 +193,18 @@ def test_custom_keep_note_replaces_or_turns_off_the_paste_instruction():
     assert graphs.edit_prompt({**p, "keep_note": " Same picture. "}) == "x\n\nSame picture."
     assert graphs.edit_prompt({**p, "keep_note": ""}) == "x"
     assert graphs.edit_prompt({"prompt": "x", "mode": "inpaint", "keep_note": "Same picture."}) == "x"
+
+
+def test_reference_crop_cuts_the_part_and_does_not_scale_it_up():
+    g = _ref_graph("qwen21")
+    assert "ref1_crop" not in g
+    p = dict(image="img.png", mask=None, use_mask=False, megapixels=0.95, resolution=1008, prompt="x",
+             negative="", steps=8, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=0,
+             work_w=1024, work_h=1024, prefix="P", unet="u.gguf", clip="c.safetensors", vae="v.safetensors",
+             family="qwen21", task="edit", refs=["a.png", "b.png"],
+             ref_crops=[{"x": 10, "y": 20, "w": 300, "h": 400}, None])
+    g = graphs.build_edit_graph(p)
+    assert g["ref1_crop"]["inputs"] == {"image": ["ref1_load", 0], "width": 300, "height": 400, "x": 10, "y": 20}
+    assert g["ref1_scale"]["inputs"]["image"] == ["ref1_crop", 0] and g["ref1_scale"]["inputs"]["megapixels"] == 0.12
+    assert "ref2_crop" not in g and g["ref2_scale"]["inputs"]["megapixels"] == 0.95
+    assert graphs.crop_box({"x": 0, "y": 0, "w": 8, "h": 100}) is None and graphs.crop_box("x") is None

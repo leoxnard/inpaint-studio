@@ -41,6 +41,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - Extra reference images (`refs` in a job): `graphs.MAX_REFS` per family (Qwen 2.1: 3, Edit 2511: 2), mirrored
   in `web/app.js` `MAX_REFS`. The edited image stays image 1 (its size sets the latent). `ref_takes` (one
   text per ref, turned into "Replace the X in <image1> with the X from <image2>." after the prompt) and `graphs.REF_NOTE` name the images the encoder's way (`<image2>` / "Picture 2").
+  `ref_crops` ({x,y,w,h} px per ref) → `ImageCrop`, scaled to at most its own size (fewer tokens).
 - Model, text encoder and VAE must match: the presets encode the pairs. fp8 text encoders
   (Qwen2.5-VL for 2511/2512) run on the CPU (`device: cpu`), MPS cannot do fp8.
 - Encoder resolution is matched to the working size by default (`graphs.matching_resolution`):

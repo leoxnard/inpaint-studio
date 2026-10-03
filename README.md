@@ -37,6 +37,8 @@ the t-shirt" ignored a torso reference, a "take only: face" line next to it did 
 pose too (a plain "replace the torso" order did the same: the reference torso came with its arms, so the
 note now forbids added body parts and the order keeps place and size), and a "never for pose" note blocked
 a "pose" take. You can change or empty the general instruction under **Advanced → Reference instruction**.
+Click a reference to crop it: drag a rectangle around the part to use (e.g. the face). Only that part
+goes to the model, and it is not scaled up, so a small crop also makes every step much faster.
 Every run also writes `config.json` next to its images (`output/InpaintStudio/<run>/`) with all
 settings, the exact text the encoder got and the ComfyUI graph. Each reference makes the run much slower: one extra image at 0.95 MP took the
 6-step Turbo edit from about 1 to about 7 minutes on a 32 GB Mac, without gray noise.

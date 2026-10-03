@@ -184,14 +184,35 @@ VIGGLE_NODES = {5: "1.0, 0.875, 0.75, 0.5, 0.25", 6: "1.0, 0.9375, 0.875, 0.75, 
                 7: "1.0, 0.9583, 0.9167, 0.875, 0.75, 0.5, 0.25"}
 
 
+def crop_box(c: Any) -> dict[str, int] | None:
+    """A valid {x, y, w, h} pixel crop (at least 16 px per side) or None for the whole image."""
+    if not isinstance(c, dict):
+        return None
+    try:
+        box = {k: int(round(float(c[k]))) for k in ("x", "y", "w", "h")}
+    except (KeyError, TypeError, ValueError):
+        return None
+    if box["x"] < 0 or box["y"] < 0 or box["w"] < 16 or box["h"] < 16:
+        return None
+    return box
+
+
 def reference_images(g: dict[str, Any], p: dict[str, Any], family: str) -> list[list]:
-    """Load and scale the extra reference images (p["refs"], input filenames) like the main image."""
+    """Load and scale the extra reference images (p["refs"], input filenames) like the main image.
+
+    p["ref_crops"][i] (optional): {x, y, w, h} in the reference's pixels. Only that part goes to the
+    encoder, at most at its own size (a small crop is not scaled up), which also makes every step faster."""
     links = []
+    crops = p.get("ref_crops") or []
     for i, name in enumerate((p.get("refs") or [])[:MAX_REFS.get(family, 0)], start=1):
         g[f"ref{i}_load"] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        src, mp = [f"ref{i}_load", 0], p["megapixels"]
+        if (c := crop_box(crops[i - 1] if i <= len(crops) else None)):
+            g[f"ref{i}_crop"] = {"class_type": "ImageCrop", "inputs": {
+                "image": src, "width": c["w"], "height": c["h"], "x": c["x"], "y": c["y"]}}
+            src, mp = [f"ref{i}_crop", 0], min(mp, round(c["w"] * c["h"] / 1e6, 3))
         g[f"ref{i}_scale"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
-            "image": [f"ref{i}_load", 0], "upscale_method": "lanczos", "megapixels": p["megapixels"],
-            "resolution_steps": SCALE_STEPS}}
+            "image": src, "upscale_method": "lanczos", "megapixels": mp, "resolution_steps": SCALE_STEPS}}
         links.append([f"ref{i}_scale", 0])
     return links
 

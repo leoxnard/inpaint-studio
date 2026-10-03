@@ -45,7 +45,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_note", "keep_note")
+                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "keep_note")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -642,6 +642,8 @@ async def create_job(params: dict):
     params["refs"] = refs[:graphs.MAX_REFS.get(params.get("family"), 0)]
     takes = params.get("ref_takes") or []   # "what to take from it", one short text per reference
     params["ref_takes"] = [str(t or "").strip() for t in takes[:len(params["refs"])]]
+    crops = params.get("ref_crops") or []   # optional {x, y, w, h} per reference
+    params["ref_crops"] = [graphs.crop_box(c) for c in crops[:len(params["refs"])]]
     up = presets.COMPONENTS.get(params.get("upscaler") or "")
     if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler":
         params.update(upscale_model=up["path"].rsplit("/", 1)[-1], upscale_native=up["scale"])

@@ -38,6 +38,7 @@
         <select id="modelSel" aria-label="Model and quantisation"></select>
         <select id="preset" hidden></select>
         <select id="quant" hidden></select>
+        <input type="hidden" id="upscaleModel" value=""><!-- component key while an upscaler is picked -->
         <div class="row between hint"><span id="modelListHint"></span><button id="moreModels" class="linkbtn" title="Open the download centre">Get more</button></div>
         <div class="hint" id="modelHint" hidden></div>
       </section>
@@ -182,6 +183,22 @@
     </main>
 
     <aside class="sidebar col-right" id="settingsCol" aria-label="Edit settings">
+
+      <section class="sec upscale-only" id="upscaleSec">
+        <h2 class="h">Upscale</h2>
+        <div class="grid2">
+          <label title="How much larger the result is (1–4). Upscalers with a fixed scale are resized to it.">Factor
+            <input type="number" id="upscaleFactor" min="1" max="4" step="0.5" value="2">
+          </label>
+          <label class="seedvr2-only" title="SeedVR2: how the colours of the result are matched to the original. lab is the most faithful, wavelet keeps more of the new detail, adain is fastest (global tint), none skips it.">Color correction
+            <select id="colorCorrection">
+              <option value="lab" selected>lab</option><option value="wavelet">wavelet</option>
+              <option value="adain">adain</option><option value="none">none</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint" id="upscaleHint"></p>
+      </section>
 
       <div class="sec">
         <label for="promptPreset">Preset</label>
@@ -398,10 +415,6 @@
           <button class="primary" id="loadSettings" title="Switch to Create with this run's settings (the image stays)">Load settings in Create</button>
           <button id="useResult">Use result as new input</button>
           <button id="alignBtn" title="Free edit + paste: align the generated image and fix colours, local warp and edges before pasting">Align to original</button>
-          <div class="row nowrap" id="upscaleRow" hidden title="Upscale this result (the adjusted one if saved) with the upscaler chosen in Create; saved as a new run">
-            <button data-factor="2">Upscale ×2</button>
-            <button data-factor="4">Upscale ×4</button>
-          </div>
           <a class="btn" id="downloadBtn" download>Download</a>
           <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
           <button id="downloadSteps">Download shown steps</button>

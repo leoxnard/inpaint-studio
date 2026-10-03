@@ -489,17 +489,41 @@ def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int, last:
     return latent
 
 
-def build_upscale_graph(image: str, model: str, native: int, factor: int, prefix: str) -> dict:
-    """Upscale a finished result afterwards (its own run): upscale model, fitted to `factor` when the
-    model's native scale differs, saved as the run's result."""
-    g: dict[str, Any] = {
-        "load": {"class_type": "LoadImage", "inputs": {"image": image}},
-        "up_model": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": model}},
-        "up": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["up_model", 0], "image": ["load", 0]}},
-    }
-    up = ["up", 0]
-    if native != factor:
-        g["up_fit"] = {"class_type": "ImageScaleBy", "inputs": {"image": up, "upscale_method": "lanczos", "scale_by": factor / native}}
-        up = ["up_fit", 0]
+SEEDVR2_COLORS = ("lab", "wavelet", "adain", "none")
+
+
+def build_upscale_graph(image: str, comp: dict[str, Any], files: dict[str, str], factor: float, prefix: str,
+                        color_correction: str = "lab", seed: int = 0) -> dict:
+    """Upscale an image as its own run. Classic upscalers (`UpscaleModelLoader`) are fitted to `factor`
+    when their native scale differs; SeedVR2 (`comp["engine"] == "seedvr2"`) follows ComfyUI's
+    utility_seedvr2 template: resize by the factor, one sampler step, tiled VAE, colour correction.
+    `files`: the model file names ("model", and "vae" for SeedVR2)."""
+    g: dict[str, Any] = {"load": {"class_type": "LoadImage", "inputs": {"image": image}}}
+    if comp.get("engine") == "seedvr2":
+        tiles = {"tile_size": 512, "overlap": 128, "temporal_size": 4096, "temporal_overlap": 8}
+        g.update({
+            "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": files["model"], "weight_dtype": "default"}},
+            "vae": {"class_type": "VAELoader", "inputs": {"vae_name": files["vae"]}},
+            "resize": {"class_type": "ImageScaleBy", "inputs": {"image": ["load", 0], "upscale_method": "lanczos", "scale_by": factor}},
+            "pre": {"class_type": "SeedVR2Preprocess", "inputs": {"resized_images": ["resize", 0]}},
+            "encode": {"class_type": "VAEEncodeTiled", "inputs": {"pixels": ["pre", 0], "vae": ["vae", 0], **tiles}},
+            "cond": {"class_type": "SeedVR2Conditioning", "inputs": {"model": ["unet", 0], "vae_conditioning": ["encode", 0]}},
+            "sampler": {"class_type": "KSampler", "inputs": {
+                "model": ["unet", 0], "positive": ["cond", 0], "negative": ["cond", 1], "latent_image": ["encode", 0],
+                "seed": seed, "steps": 1, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+            "decode": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["sampler", 0], "vae": ["vae", 0], **tiles}},
+            "post": {"class_type": "SeedVR2PostProcessing", "inputs": {
+                "images": ["decode", 0], "original_resized_images": ["resize", 0],
+                "color_correction_method": color_correction if color_correction in SEEDVR2_COLORS else "lab"}},
+        })
+        up = ["post", 0]
+    else:
+        g["up_model"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": files["model"]}}
+        g["up"] = {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["up_model", 0], "image": ["load", 0]}}
+        up = ["up", 0]
+        native = int(comp.get("scale") or factor)
+        if native != factor:
+            g["up_fit"] = {"class_type": "ImageScaleBy", "inputs": {"image": up, "upscale_method": "lanczos", "scale_by": factor / native}}
+            up = ["up_fit", 0]
     g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": up, "filename_prefix": prefix}}
     return g

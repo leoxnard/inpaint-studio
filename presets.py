@@ -36,6 +36,13 @@ COMPONENTS: dict[str, dict[str, Any]] = {
     "up_realesrgan_x2": {"title": "RealESRGAN 2x", "kind": "upscaler", "scale": 2, "repo": "ai-forever/Real-ESRGAN",
                          "path": "RealESRGAN_x2.pth", "folder": "upscale_models", "size": 67_061_725,
                          "description": "Optional upscaler: fast, natural-looking 2x upscale."},
+    "up_seedvr2_7b": {"title": "SeedVR2 7B (int8)", "kind": "upscaler", "engine": "seedvr2", "scale": 4, "repo": "Comfy-Org/SeedVR2",
+                      "path": "diffusion_models/seedvr2_7b_int8_convrot.safetensors", "folder": "diffusion_models",
+                      "size": 8_334_897_976, "needs": ["vae_seedvr2"],
+                      "description": "Optional upscaler: diffusion upscaler that restores real detail, any factor. Slow and large; needs the SeedVR2 VAE."},
+    "vae_seedvr2": {"title": "SeedVR2 VAE", "kind": "upscaler_vae", "repo": "Comfy-Org/SeedVR2",
+                    "path": "vae/seedvr2_ema_vae_fp16.safetensors", "folder": "vae", "size": 501_324_814,
+                    "description": "Needed by the SeedVR2 upscaler."},
     "sam3": {"title": "SAM3 (masking)", "repo": "Comfy-Org/sam3.1",
              "path": "checkpoints/sam3.1_multiplex_fp16.safetensors", "folder": "checkpoints", "size": 1_745_546_848},
 }

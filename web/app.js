@@ -11,6 +11,7 @@ const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays",
+  "upscaleModel", "upscaleFactor", "colorCorrection",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -688,7 +689,7 @@ function setSubmitting(on) {
   $("runEdit").textContent = on ? "Adding to queue..." : runLabel();
 }
 
-const runLabel = () => (state.task === "generate" ? "Add image to queue" : "Add edit to queue");
+const runLabel = () => (upscaling() ? "Add upscale to queue" : state.task === "generate" ? "Add image to queue" : "Add edit to queue");
 
 // "Run N": runs are numbered by creation time over everything this page knows (saved + queued)
 function runNumber(run) {
@@ -731,10 +732,21 @@ async function uploadMaskBlob(blob) {
   return (await api("/api/upload-mask", { method: "POST", body: fd })).name;
 }
 
+// Upscaler picked in the model selector: the image is upscaled as its own run (no prompt, no mask)
+async function runUpscale() {
+  setSubmitting(true);
+  try {
+    saveForm();
+    await submitJob({ image: state.imageName, upscaler: $("upscaleModel").value,
+      factor: parseFloat($("upscaleFactor").value) || 2, color_correction: $("colorCorrection").value }, "/api/upscale");
+  } catch (e) { showError(e.message); } finally { setSubmitting(false); }
+}
+
 async function runEdit({ thenNext = false } = {}) {
   if (state.submitting) return;
   const generate = state.task === "generate";
   if (!generate && !state.imageName) { showError("Load an image first."); return; }
+  if (upscaling()) { await runUpscale(); return; }
   if (!presetById($("preset").value)) { showError("No model installed. Open Downloads to get one."); return; }
   const useMask = !generate && maskOn();
   setSubmitting(true);
@@ -1317,7 +1329,6 @@ function renderDetails(run, status) {
     : "The settings of this run are not known to this page (it was queued elsewhere)";
   $("useResult").hidden = !(done && run.resultUrl);
   $("alignBtn").hidden = !(done && run.serverId && run.rawUrl && run.maskUrl);
-  $("upscaleRow").hidden = !(done && run.serverId && run.resultUrl);
   $("downloadBtn").hidden = !(done && run.resultUrl);
   if (done && run.resultUrl) {
     $("downloadBtn").href = run.aligned?.url || run.resultUrl;
@@ -1450,7 +1461,7 @@ function renderHistory() {
     const pic = document.createElement("span"); pic.className = "rpic";
     if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
     if (run.resultUrl) { const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img); }
-    if (run.params?.upscale_of) {   // an upscale of another run: ×2 / ×4 badge in the corner
+    if (run.params?.upscale_of || run.params?.task === "upscale") {   // an upscale of another run: ×2 / ×4 badge in the corner
       const badge = document.createElement("span"); badge.className = "rbadge";
       badge.textContent = `×${run.params.upscale}`;
       pic.append(badge);
@@ -2064,13 +2075,6 @@ function schedulePreview() {
   clearTimeout(alignTimer);
   alignTimer = setTimeout(() => alignRequest({ ...alignValues(), save: false }), 250);
 }
-$("upscaleRow").addEventListener("click", async (e) => {
-  const factor = parseInt(e.target.dataset.factor, 10);
-  if (!factor) return;
-  try {
-    await submitJob({ factor, upscaler: $("upscaler").value || null }, `/api/runs/${state.run.serverId}/upscale`);
-  } catch (err) { showError(err.message); }
-});
 $("alignBtn").onclick = () => {
   const run = state.run;
   $("alignPanel").hidden = false;
@@ -2423,7 +2427,7 @@ const MASK_TEXTS = {
 };
 
 // masks are used when SAM3 is installed and the mode is not "No mask"
-function maskOn() { return !!state.maskAvailable && $("mode").value !== "none"; }
+function maskOn() { return !!state.maskAvailable && $("mode").value !== "none" && !upscaling(); }
 
 
 // Masking needs SAM3. Without it the UI hides everything about masks and never sends one.
@@ -2484,7 +2488,7 @@ $("setupBtn").onclick = showSetup;
 // optional upscaler: lists the installed upscale models, links to the downloads page otherwise
 function renderUpscalers() {
   const sel = $("upscaler");
-  const ups = (state.setup?.components || []).filter((c) => c.kind === "upscaler" && c.installed);
+  const ups = (state.setup?.components || []).filter((c) => c.kind === "upscaler" && c.installed && !c.engine);
   const keep = sel.value || storedForm().upscaler;
   sel.innerHTML = "";
   for (const u of ups) sel.add(new Option(`${u.title}`, u.key));
@@ -2584,8 +2588,8 @@ function renderModelPicker({ applyDefaults = false } = {}) {
   fillQuant(want, true, storedForm().quant);
   if (applyDefaults && want) applyPresetDefaults(want);
   updateOverrideLabels();
-  syncTaskUi();
   renderModelSel(list);
+  syncTaskUi();
 }
 
 // single picker: one entry per installed preset + quant, grouped by model
@@ -2601,11 +2605,27 @@ function renderModelSel(list) {
     }
     sel.appendChild(grp);
   }
-  sel.value = `${$("preset").value}|${$("quant").value}`;
-  sel.disabled = !list.length;
+  const ups = state.task === "edit" ? installedUpscalers() : [];
+  if (ups.length) {
+    const grp = document.createElement("optgroup");
+    grp.label = "Upscaler";
+    for (const u of ups) grp.appendChild(new Option(u.title, `up|${u.key}`));
+    sel.appendChild(grp);
+  }
+  if (state.setup && state.task === "edit" && !ups.some((u) => u.key === $("upscaleModel").value)) $("upscaleModel").value = "";
+  sel.value = upscaling() ? `up|${$("upscaleModel").value}` : `${$("preset").value}|${$("quant").value}`;
+  sel.disabled = !list.length && !ups.length;
   sel.title = sel.selectedOptions[0]?.textContent || "";
   $("modelListHint").textContent = state.task === "generate" ? "Text-to-image models only" : "Edit models only";
 }
+// upscalers whose files (incl. the ones they need, e.g. the SeedVR2 VAE) are all installed
+function installedUpscalers() {
+  const comps = state.setup?.components || [];
+  const ok = (k) => comps.some((c) => c.key === k && c.installed);
+  return comps.filter((c) => c.kind === "upscaler" && c.installed && (c.needs || []).every(ok));
+}
+const upscaling = () => state.task === "edit" && !!$("upscaleModel").value;
+
 function initModelPicker() {
   renderModelPicker({ applyDefaults: !storedForm().preset });
   $("preset").addEventListener("change", () => {
@@ -2619,6 +2639,8 @@ function initModelPicker() {
   $("quant").addEventListener("change", () => { updateOverrideLabels(); saveForm(); });
   $("modelSel").addEventListener("change", () => {
     const [pid, q] = $("modelSel").value.split("|");
+    $("upscaleModel").value = pid === "up" ? q : "";
+    if (pid === "up") { syncTaskUi(); saveForm(); $("modelSel").title = $("modelSel").selectedOptions[0]?.textContent || ""; return; }
     if (pid !== $("preset").value) { $("preset").value = pid; $("preset").dispatchEvent(new Event("change")); }
     $("quant").value = q;
     $("quant").dispatchEvent(new Event("change"));
@@ -2630,6 +2652,16 @@ function initModelPicker() {
 function syncTaskUi() {
   const gen = state.task === "generate";
   $("task").value = state.task;
+  // an upscaler picked: only the image, the model picker and the upscale options stay visible
+  const up = upscaling() ? installedUpscalers().find((u) => u.key === $("upscaleModel").value) : null;
+  document.body.classList.toggle("mode-upscale", !!up);
+  document.body.classList.toggle("up-seedvr2", up?.engine === "seedvr2");
+  $("upscaleHint").textContent = up ? (up.engine === "seedvr2"
+    ? "SeedVR2 redraws fine detail in one step. Slow and memory-hungry at large sizes."
+    : `${up.title}: upscales ${up.scale}× natively, other factors are resized from that.`) : "";
+  setMode(state.mode);   // brush cursor only while the mask can be painted
+  if (state.maskUiReady) applyMaskTexts();
+  if (state.imgEl) render();   // the mask overlay hides while upscaling
   document.body.classList.toggle("task-generate", gen);
   for (const b of $("taskTabs").children) b.classList.toggle("active", b.dataset.task === state.task);
   const fam = currentFamily();
@@ -2649,7 +2681,7 @@ function syncTaskUi() {
     $("cfg").value = 1;
   }
   const hint = $("modelHint");
-  const text = turbo ? "Turbo: 6 steps, no CFG" : zedit ? "Z-Image edits = img2img: lower Denoise (e.g. 0.6) keeps more of the original. It does not follow instructions."
+  const text = up ? "" : turbo ? "Turbo: 6 steps, no CFG" : zedit ? "Z-Image edits = img2img: lower Denoise (e.g. 0.6) keeps more of the original. It does not follow instructions."
     : fam === "qwen_edit" ? "Experimental: 20B model, slow on 32 GB." : "";
   hint.textContent = text;
   hint.hidden = !text;

@@ -45,7 +45,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of")
+                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of", "color_correction")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -174,6 +174,7 @@ async def setup_status():
     base = [{"id": s, "title": t, "description": d, "installed": have[s]} for s, t, d in installer.BASE_STEPS]
     comps = [{"id": f"component:{cid}", "key": cid, "title": c["title"], "size": c["size"], "file": c["path"].rsplit("/", 1)[-1],
              "installed": have[f"component:{cid}"], "kind": c.get("kind"), "scale": c.get("scale"),
+             "engine": c.get("engine"), "needs": c.get("needs", []),
               "description": c.get("description", "")}
              for cid, c in presets.COMPONENTS.items()]
     ram = system_ram()
@@ -528,43 +529,44 @@ async def align_run(run_id: str, req: AlignReq):
 
 
 class UpscaleReq(BaseModel):
-    factor: int = 2
-    upscaler: str | None = None  # component key; default: the first installed upscaler
+    image: str                    # ComfyUI input name (as returned by /api/upload)
+    upscaler: str                 # component key of an installed upscaler
+    factor: float = 2
+    color_correction: str = "lab"  # SeedVR2 only
 
 
-@app.post("/api/runs/{run_id}/upscale")
-async def upscale_run(run_id: str, req: UpscaleReq):
-    """Upscale a finished result afterwards (the adjusted one if saved); queued as a new run."""
-    f = RUNS / run_id / "run.json"
-    if not f.is_file():
-        raise HTTPException(404, "run not found")
-    run = json.loads(f.read_text())
-    if run.get("status") != "done" or not run.get("result_url"):
-        raise HTTPException(400, "only finished runs with a result can be upscaled")
-    if req.factor not in (2, 4):
-        raise HTTPException(400, "factor must be 2 or 4")
-    have = installer.installed(installer.load_config())
-    ups = {k: c for k, c in presets.COMPONENTS.items() if c.get("kind") == "upscaler" and have[f"component:{k}"]}
-    if not ups:
-        raise HTTPException(400, "no upscaler installed (see Downloads)")
-    key = req.upscaler if req.upscaler in ups else next(iter(ups))
-    aligned = RUNS / run_id / "aligned.png"
-    src = Image.open(aligned) if run.get("aligned") and aligned.is_file() else await _fetch_view(run["result_url"])
-    buf = io.BytesIO()
-    src.convert("RGB").save(buf, "PNG")
-    image = await upload_to_comfy(buf.getvalue(), f"{uuid.uuid4().hex[:8]}_upscale_{run_id}.png", SUBFOLDER)
-    new_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
-    params = {**(run.get("params") or {}), "upscale": req.factor, "upscaler": key, "upscale_of": run_id,
-              "steps": 1, "save_every": 0, "save_last": 0, "refs": [], "post_colors": False,
-              "post_warp": False, "post_poisson": False, "use_mask": False, "mask": None}
-    size = {**(run.get("size") or {}), "work_w": src.width * req.factor, "work_h": src.height * req.factor}
-    graph = graphs.build_upscale_graph(image, ups[key]["path"].rsplit("/", 1)[-1], int(ups[key]["scale"]),
-                                       req.factor, f"InpaintStudio/{new_id}")
-    new = {"id": new_id, "created": time.time(), "status": "queued", "before_url": input_mask_url(image),
-           "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": size, "frames": []}  # before = the source
-    save_run(new)
-    job = {"run": new, "params": params, "graph": graph, "value": 0}
-    JOBS[new_id] = job
+@app.post("/api/upscale")
+async def upscale(req: UpscaleReq):
+    """Upscale an input image with an upscaler picked in the model selector; queued as its own run
+    (the source is its "before" image, so Runs can compare)."""
+    comp = presets.COMPONENTS.get(req.upscaler)
+    if not comp or comp.get("kind") != "upscaler":
+        raise HTTPException(400, "unknown upscaler")
+    cfg = installer.load_config()
+    have = installer.installed(cfg)
+    missing = [k for k in [req.upscaler, *comp.get("needs", [])] if not have[f"component:{k}"]]
+    if missing:
+        raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Downloads)")
+    if not 1 <= req.factor <= 4:
+        raise HTTPException(400, "factor must be between 1 and 4")
+    src = await _fetch_view(input_mask_url(req.image))
+    w, h = src.size
+    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    files = {"model": Path(comp["path"]).name}
+    if comp.get("engine") == "seedvr2":
+        files["vae"] = Path(presets.COMPONENTS[comp["needs"][0]]["path"]).name
+    seed = int.from_bytes(os.urandom(4), "big")
+    graph = graphs.build_upscale_graph(req.image, comp, files, req.factor, f"InpaintStudio/{run_id}",
+                                       req.color_correction, seed)
+    params = {"task": "upscale", "prompt": f"Upscale ×{req.factor:g} with {comp['title']}", "upscale": req.factor,
+              "upscaler": req.upscaler, "color_correction": req.color_correction if comp.get("engine") == "seedvr2" else None,
+              "seed": seed, "steps": 1, "save_every": 0, "save_last": 0, "refs": [], "use_mask": False, "mask": None}
+    size = {"work_w": round(w * req.factor), "work_h": round(h * req.factor)}
+    run = {"id": run_id, "created": time.time(), "status": "queued", "before_url": input_mask_url(req.image),
+           "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": size, "frames": []}
+    save_run(run)
+    job = {"run": run, "params": params, "graph": graph, "value": 0}
+    JOBS[run_id] = job
     job["task"] = asyncio.create_task(run_job(job))
     return job_summary(job)
 
@@ -744,7 +746,7 @@ async def create_job(params: dict):
     crops = params.get("ref_crops") or []   # optional {x, y, w, h} per reference
     params["ref_crops"] = [graphs.crop_box(c) for c in crops[:len(params["refs"])]]
     up = presets.COMPONENTS.get(params.get("upscaler") or "")
-    if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler":
+    if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler" and not up.get("engine"):
         params.update(upscale_model=up["path"].rsplit("/", 1)[-1], upscale_native=up["scale"])
     else:
         params["upscale"] = 0

@@ -231,8 +231,17 @@ def test_clean_overlays_adds_the_watermark_instruction():
 
 
 def test_upscale_graph_fits_the_factor():
-    g = graphs.build_upscale_graph("in.png", "up4.pth", native=4, factor=2, prefix="InpaintStudio/x")
+    g = graphs.build_upscale_graph("in.png", {"scale": 4}, {"model": "up4.pth"}, 2, "InpaintStudio/x")
     assert g["up_fit"]["inputs"]["scale_by"] == 0.5
     assert g["out_result"]["inputs"]["images"] == ["up_fit", 0]
-    g = graphs.build_upscale_graph("in.png", "up2.pth", native=2, factor=2, prefix="InpaintStudio/x")
+    g = graphs.build_upscale_graph("in.png", {"scale": 2}, {"model": "up2.pth"}, 2, "InpaintStudio/x")
     assert "up_fit" not in g and g["out_result"]["inputs"]["images"] == ["up", 0]
+
+
+def test_seedvr2_graph_follows_the_template():
+    g = graphs.build_upscale_graph("in.png", {"engine": "seedvr2"}, {"model": "s.safetensors", "vae": "v.safetensors"},
+                                   3, "InpaintStudio/x", color_correction="wavelet", seed=7)
+    assert g["resize"]["inputs"]["scale_by"] == 3
+    assert g["sampler"]["inputs"]["steps"] == 1 and g["sampler"]["inputs"]["seed"] == 7
+    assert g["post"]["inputs"]["color_correction_method"] == "wavelet"
+    assert g["out_result"]["inputs"]["images"] == ["post", 0]

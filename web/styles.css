@@ -633,3 +633,8 @@ button.busy::before {
 .pipeline li.done { color: var(--ink); }
 .pipeline li.now > span { color: var(--canvas); background: var(--ink); border-color: var(--ink); animation: pulse-text 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .pipeline li.now > span { animation: none; } }
+
+/* Upscaler picked in the model selector: everything but the image, model and upscale options hides */
+body:not(.mode-upscale) .upscale-only, body:not(.up-seedvr2) .seedvr2-only { display: none !important; }
+body.mode-upscale #refsSec, body.mode-upscale #sizeSec, body.mode-upscale #modeCard, body.mode-upscale .maskpanel,
+body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !important; }

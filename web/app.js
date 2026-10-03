@@ -705,6 +705,8 @@ function jobFromSummary(sum) {
   }
   job.status = sum.status || job.status;
   job.value = sum.value || job.value;
+  if (sum.phase) job.phase = sum.phase;
+  if (sum.decode_steps) job.decodeSteps = sum.decode_steps;
   if (sum.size) job.size = sum.size;
   if (sum.frames) job.frames = sum.frames.map((f) => ({ ...f }));
   if (job.status === "running" && !job.t0) job.t0 = performance.now();
@@ -802,9 +804,18 @@ function connectJobs() {
       case "progress": {
         const job = state.jobs.get(m.job_id);
         if (!job) break;
-        if (m.value > job.value) (job.stepTimes ||= []).push([m.value, performance.now()]);
+        noteProgress(job, m.value);
         job.value = m.value; job.max = m.max;
-        if (state.run === job) updateProgressText();
+        if (state.run === job) { renderPipeline(job); updateProgressText(); }
+        renderQueue();
+        break;
+      }
+      case "node": {   // the ComfyUI node that runs now (graphs.node_phase)
+        const job = state.jobs.get(m.job_id);
+        if (!job) break;
+        notePhase(job, m.phase);
+        job.phase = { phase: m.phase, detail: m.detail };
+        if (state.run === job) { renderPipeline(job); updateProgressText(); }
         renderQueue();
         break;
       }
@@ -815,11 +826,15 @@ function connectJobs() {
   ws.onclose = () => setTimeout(connectJobs, 2000); // server restart / sleep -> reconnect
 }
 
-// "Step 12 of 20, about 40 s left"
+// "Step 12 of 20, about 40 s left". ComfyUI reports a step when it is done, so while sampling
+// the step being computed is value + 1; the first sampler node also loads the diffusion model.
 function stepText(job) {
   if (job.status !== "running") return "Waiting";
-  if (!job.value) return "Starting (loading the model)…";
-  let txt = `Step ${job.value} of ${job.max}`;
+  const ph = job.phase;
+  if (!ph) return "Starting…";
+  if (ph.phase !== "sample") return PHASE_NAMES[ph.phase] + (ph.detail ? ` · ${ph.detail}` : "");
+  if (!job.value) return `Loading the model, then step 1 of ${job.max}`;
+  let txt = `Step ${Math.min(job.value + 1, job.max)} of ${job.max}`;
   const eta = stepEta(job);
   if (eta != null) txt += eta > 0 ? `, about ${fmtTime(eta)} left` : ", finishing…";
   return txt;
@@ -893,6 +908,28 @@ async function cancelJob(job) {
   }
 }
 
+// Workflow strip above the image: the current phase is marked, earlier ones are done
+const PHASES = ["load", "encode", "sample", "decode", "save"];
+const PHASE_NAMES = { load: "Load", encode: "Text encoder", sample: "Sampling", decode: "VAE decode", save: "Save" };
+// "Step 3 of 7" under the image. ComfyUI reports a step when it is done, so while sampling the step
+// being computed is value + 1; the first sampler node also loads the diffusion model.
+function stepCount(run) {
+  if (run.phase?.phase === "sample") {
+    return run.value ? `Step ${Math.min(run.value + 1, run.max)} of ${run.max}` : `Loading the model, then step 1 of ${run.max}`;
+  }
+  return run.value ? `Step ${run.value} of ${run.max}` : "";
+}
+function renderPipeline(run) {
+  const live = !!(run && !run.done && state.jobs.has(run.id) && run.status === "running");
+  $("pipeline").hidden = !live;
+  if (!live) return;
+  const cur = PHASES.indexOf(run.phase?.phase);
+  for (const li of $("pipeline").children) {
+    const i = PHASES.indexOf(li.dataset.phase);
+    li.className = i === cur ? "now" : i < cur ? "done" : "";
+  }
+}
+
 function updateProgressText() {
   const run = state.run;
   if (!run || run.done || !state.jobs.has(run.id)) return;
@@ -905,21 +942,44 @@ function updateProgressText() {
   const pct = run.max ? (run.value / run.max) * 100 : 0;
   $("progressBar").style.width = `${pct}%`;
   const el = (performance.now() - (run.t0 || performance.now())) / 1000;
-  $("progressText").textContent = `${stepText(run)} · ${fmtTime(el)} elapsed`;
+  // the strip above the image says which phase runs; here the step and the times
+  const eta = stepEta(run);
+  const steps = stepCount(run);
+  $("progressText").textContent = (steps ? `${steps} · ` : "") + `${fmtTime(el)} elapsed`
+    + (eta > 0 ? ` · about ${fmtTime(eta)} left` : "");
   $("detSettings").querySelector("[data-k=time]")?.replaceChildren(fmtTime(el));
 }
 
 // Remaining time from measured step durations (median of the last few steps), counting down
 // within the current step. Model loading and text encoding before step 1 are not part of it.
+// Time estimate from measured durations: pure sampling steps (from the sampler node start or the last
+// step report; the first chunk is skipped, it includes loading the model) and VAE decodes with saving
+// (from the decode node to the next sampler node). Remaining = steps left × median step + decodes left ×
+// median decode, minus what the current step or decode already took.
+function noteProgress(job, value) {
+  const now = performance.now();
+  if (value > job.value && job.markT != null) (job.stepDur ||= []).push((now - job.markT) / (value - job.value));
+  if (value > job.value) job.markT = now;
+}
+function notePhase(job, phase) {
+  const now = performance.now(), prev = job.phase?.phase;
+  if (phase === "decode" && prev !== "decode" && prev !== "save") job.decT0 = now;
+  if (phase === "sample" && prev !== "sample") {
+    if (job.decT0 != null) { (job.decDur ||= []).push(now - job.decT0); job.decT0 = null; }
+    job.markT = job.value ? now : null;   // value 0: this chunk loads the model first, not a step time
+  }
+}
+const median = (a) => { const s = [...a].slice(-6).sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
 function stepEta(run) {
-  const t = run.stepTimes || [];
-  if (t.length < 2 || run.value >= run.max) return null;
-  const per = [];
-  for (let i = Math.max(1, t.length - 5); i < t.length; i++) per.push((t[i][1] - t[i - 1][1]) / (t[i][0] - t[i - 1][0]));
-  per.sort((a, b) => a - b);
-  const step = per[Math.floor(per.length / 2)];
-  const sinceLast = performance.now() - t[t.length - 1][1];
-  return Math.max(0, ((run.max - run.value) * step - sinceLast) / 1000);
+  if (!run.stepDur?.length) return null;
+  const now = performance.now(), step = median(run.stepDur);
+  const decodes = (run.decodeSteps || [run.max]).filter((s) => s > run.value).length
+    + (run.phase?.phase === "decode" || run.phase?.phase === "save" ? 1 : 0);
+  const dec = run.decDur?.length ? median(run.decDur) : step / 2;   // until the first decode is measured
+  let ms = (run.max - run.value) * step + decodes * dec;
+  if (run.phase?.phase === "sample" && run.markT != null) ms -= Math.min(step, now - run.markT);
+  if (run.decT0 != null) ms -= Math.min(dec, now - run.decT0);
+  return Math.max(0, ms / 1000);
 }
 
 function frameAdded(run, frame) {
@@ -1099,6 +1159,7 @@ function renderViewer() {
     $("resultEmpty").hidden = false; $("resultEmpty").textContent = text;
   };
   $("progressWrap").hidden = !(status === "queued" || status === "running");
+  renderPipeline(run);
   renderSteps();
   if (!run) {
     $("resultEmpty").hidden = false;

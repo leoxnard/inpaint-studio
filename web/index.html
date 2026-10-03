@@ -299,6 +299,13 @@
         <input type="checkbox" id="viewRaw" hidden>
         <label class="check" id="compareRow"><input type="checkbox" id="compareToggle" checked> Compare with original</label>
       </div>
+      <ol class="pipeline" id="pipeline" hidden aria-label="Workflow progress">
+        <li data-phase="load"><span>Load</span></li>
+        <li data-phase="encode"><span>Text encoder</span></li>
+        <li data-phase="sample"><span>Sampling</span></li>
+        <li data-phase="decode"><span>VAE decode</span></li>
+        <li data-phase="save"><span>Save</span></li>
+      </ol>
       <div class="bigarea" id="bigArea">
         <div class="empty" id="resultEmpty">No runs yet. Add one in <a href="#create">Create</a>.</div>
         <img id="liveImg" alt="Run image" hidden>

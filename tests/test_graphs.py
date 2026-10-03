@@ -208,3 +208,15 @@ def test_reference_crop_cuts_the_part_and_does_not_scale_it_up():
     assert g["ref1_scale"]["inputs"]["image"] == ["ref1_crop", 0] and g["ref1_scale"]["inputs"]["megapixels"] == 0.12
     assert "ref2_crop" not in g and g["ref2_scale"]["inputs"]["megapixels"] == 0.95
     assert graphs.crop_box({"x": 0, "y": 0, "w": 8, "h": 100}) is None and graphs.crop_box("x") is None
+
+
+def test_node_phase_maps_nodes_to_the_workflow_strip():
+    chunks = graphs.step_chunks(12, 1)
+    assert graphs.node_phase("encode", "TextEncodeQwenImage21", n_refs=2) == {"phase": "encode", "detail": "+ 2 refs"}
+    assert graphs.node_phase("chunk_3", "SamplerCustomAdvanced", chunks)["phase"] == "sample"
+    assert graphs.node_phase("chunk_dec_3", "VAEDecode", chunks)["detail"] == "step 4"
+    assert graphs.node_phase("chunk_dec_11", "VAEDecode", chunks)["detail"] == "result"
+    assert graphs.node_phase("stepsave_4", "SaveImage")["phase"] == "save"
+    assert graphs.node_phase("ref1_crop", "ImageCrop")["phase"] == "load"
+    assert graphs.node_phase("unet", "UnetLoaderGGUF")["phase"] == "load"
+    assert graphs.node_phase("upto_1", "SplitSigmas") is None and graphs.node_phase("noise", "RandomNoise") is None

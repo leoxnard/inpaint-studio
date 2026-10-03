@@ -610,3 +610,13 @@ button.busy::before {
 .crop-stage { overflow: hidden; border-radius: var(--r-img); }
 .batch-item.ref { cursor: pointer; }
 .batch-item.cropped { border: 2px dashed var(--body); }
+
+/* workflow strip above the image while a run is running: which ComfyUI phase is active */
+.pipeline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.pipeline[hidden] { display: none; }
+.pipeline li { display: inline-flex; align-items: center; color: var(--body); }
+.pipeline li + li::before { content: "→"; margin: 0 8px; color: var(--hairline-strong); }
+.pipeline li > span { padding: 3px 10px; border-radius: var(--r-pill); border: 1px solid var(--hairline); }
+.pipeline li.done { color: var(--ink); }
+.pipeline li.now > span { color: var(--canvas); background: var(--ink); border-color: var(--ink); animation: pulse-text 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pipeline li.now > span { animation: none; } }

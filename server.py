@@ -504,11 +504,19 @@ async def broadcast(event: dict) -> None:
         SUBSCRIBERS.discard(sub)
 
 
+def decode_steps(params: dict) -> list[int]:
+    """Steps after which the VAE decodes an image (saved steps and the result), for the time estimate."""
+    steps = int(params.get("steps") or 0)
+    every, last = int(params.get("save_every") or 0), int(params.get("save_last") or 0)
+    return [b for _, b in graphs.step_chunks(steps, every, last)] if every > 0 or last > 0 else [steps]
+
+
 def job_summary(job: dict) -> dict:
     run = job["run"]
     return {"job_id": run["id"], "status": run["status"], "prompt": run["params"].get("prompt", ""),
             "seed": run["params"].get("seed"), "steps": run["params"].get("steps"), "value": job.get("value", 0),
-            "created": run["created"], "size": run.get("size"), "frames": run["frames"], "error": run.get("error")}
+            "created": run["created"], "size": run.get("size"), "frames": run["frames"], "error": run.get("error"),
+            "phase": job.get("phase"), "decode_steps": decode_steps(job["params"])}
 
 
 async def finish_job(job: dict, status: str, **extra) -> None:
@@ -550,7 +558,13 @@ async def run_job(job: dict) -> None:
                 if data.get("prompt_id") not in (None, pid):
                     continue
                 node = str(data.get("node") or "")
-                if kind == "execution_start":
+                if kind == "executing" and node in job["graph"]:
+                    # which workflow node runs now, for the strip above the image in Runs
+                    n_refs = min(len(params.get("refs") or []), graphs.MAX_REFS.get(params.get("family"), 0))
+                    if ph := graphs.node_phase(node, job["graph"][node]["class_type"], chunks, n_refs):
+                        job["phase"] = ph
+                        await broadcast({"type": "node", "job_id": run_id, **ph})
+                elif kind == "execution_start":
                     run["status"] = "running"
                     save_run(run)
                     await broadcast({"type": "running", "job_id": run_id})

@@ -405,6 +405,35 @@ def step_chunks(steps: int, every: int, last: int = 0) -> list[tuple[int, int]]:
     return list(zip([0] + ends[:-1], ends))
 
 
+PHASES = ("load", "encode", "sample", "decode", "save")
+
+
+def node_phase(node: str, class_type: str, chunks: list[tuple[int, int]] | None = None,
+               n_refs: int = 0) -> dict | None:
+    """Which part of the workflow a ComfyUI node belongs to, for the live workflow strip in Runs:
+    {"phase", "detail"}, or None for helper nodes (sigmas, noise, guider …) that should not move it.
+    ComfyUI loads models lazily: the text encoder inside the encode node, the diffusion model in the
+    first sampler node, so those phases include the loading."""
+    if class_type.startswith(("TextEncode", "CLIPTextEncode")):
+        return {"phase": "encode", "detail": f"+ {n_refs} ref{'s' if n_refs > 1 else ''}" if n_refs else ""}
+    if class_type.startswith("VAEEncode"):
+        return {"phase": "encode", "detail": "image"}
+    if class_type.startswith(("SamplerCustom", "KSampler")):
+        return {"phase": "sample", "detail": ""}
+    if class_type.startswith("VAEDecode"):
+        if node.startswith("chunk_dec_") and chunks:
+            k = int(node.rsplit("_", 1)[1])
+            if k < len(chunks) - 1:
+                return {"phase": "decode", "detail": f"step {chunks[k][1]}"}
+        return {"phase": "decode", "detail": "result"}
+    if class_type in ("SaveImage", "PreviewImage") or class_type.startswith(("ImageComposite", "ImageUpscale", "Upscale")):
+        return {"phase": "save", "detail": "upscaling" if "Upscale" in class_type else ""}
+    if class_type.startswith(("LoadImage", "ImageScale", "ImageCrop")) or class_type.endswith("Loader") \
+            or "Loader" in class_type:
+        return {"phase": "load", "detail": ""}
+    return None
+
+
 def step_name(step: int, steps: int) -> str:
     return f"{step:0{len(str(steps))}d}_{steps}"
 

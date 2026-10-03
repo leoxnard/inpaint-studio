@@ -39,14 +39,15 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - Gray-noise limit: on MPS the edit breaks at >= 4096 latent tokens for target or reference
   (pixels/16 per side). `graphs.TOKEN_LIMIT`; the UI auto-fixes size by default.
 - Extra reference images (`refs` in a job): `graphs.MAX_REFS` per family (Qwen 2.1: 3, Edit 2511: 2), mirrored
-  in `web/app.js` `MAX_REFS`. The edited image stays image 1 (its size sets the latent).
+  in `web/app.js` `MAX_REFS`. The edited image stays image 1 (its size sets the latent). `ref_takes` (one
+  text per ref, turned into "Replace the X in <image1> with the X from <image2>." after the prompt) and `graphs.REF_NOTE` name the images the encoder's way (`<image2>` / "Picture 2").
 - Model, text encoder and VAE must match: the presets encode the pairs. fp8 text encoders
   (Qwen2.5-VL for 2511/2512) run on the CPU (`device: cpu`), MPS cannot do fp8.
 - Encoder resolution is matched to the working size by default (`graphs.matching_resolution`):
   a different reference size shifts/scales the free edit.
 - Uploads go to ComfyUI `input/inpaint-studio/`. Results: `output/InpaintStudio/<run>.png`,
   `<run>_raw.png`, `<run>_fixed.png`, `<run>_x2.png`; `<run>/before.png` and
-  `<run>/step_NN_TOTAL.png` (+ `raw_step_…`). The server strips ComfyUI's `_00001_` counter.
+  `<run>/step_NN_TOTAL.png` (+ `raw_step_…`), `<run>/config.json` (all params, encoder prompt, graph). The server strips ComfyUI's `_00001_` counter.
 - Run history: `~/Library/Application Support/Inpaint Studio/runs/<id>/run.json` + live preview
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by
   `GET /api/runs`, removed by `DELETE /api/runs/{id}`.

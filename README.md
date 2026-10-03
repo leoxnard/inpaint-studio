@@ -24,9 +24,20 @@ Qwen-Image 2.1 (UC, official, Viggle Turbo) takes up to 3 extra images, Qwen-Ima
 Add them under **Reference images** in Create and refer to them in the prompt: when you edit, your
 image is image 1 and the references are image 2, 3 …; when you generate, they start at image 1
 ("Place the red apple from image 2 on the sand"). They are scaled like the main image and saved
-with the run. When you edit, the model also gets a hidden instruction that image 1 is the image to
-edit and the others are only references; without it, a vague prompt ("Show this dog in a meadow")
-made the result take over the reference's framing. You can change or empty this instruction under **Advanced → Reference instruction**. Each reference makes the run much slower: one extra image at 0.95 MP took the
+with the run. Next to each reference, write in a few words what to take from it ("face");
+after your prompt the model then gets "Replace the face in <image1> with the face from <image3>, in the place
+and at the size of the face in <image1>.", so
+this part is replaced even when the prompt does not mention it. When you edit, it also gets a hidden
+instruction that image 1 is the image to edit (framing and the rest stay) and that only what the
+instruction asks for comes from the references. Qwen 2.1 names the images `<image1>`, `<image2>` …, Edit 2511
+"Picture 1", "Picture 2", and the instruction uses these names. Without it, a vague prompt ("Show this
+dog in a meadow") made the result take over the reference's framing; without the take text, "remove
+the t-shirt" ignored a torso reference, a "take only: face" line next to it did not replace the face, a broad "copy its shape" note copied the reference's arm
+pose too (a plain "replace the torso" order did the same: the reference torso came with its arms, so the
+note now forbids added body parts and the order keeps place and size), and a "never for pose" note blocked
+a "pose" take. You can change or empty the general instruction under **Advanced → Reference instruction**.
+Every run also writes `config.json` next to its images (`output/InpaintStudio/<run>/`) with all
+settings, the exact text the encoder got and the ComfyUI graph. Each reference makes the run much slower: one extra image at 0.95 MP took the
 6-step Turbo edit from about 1 to about 7 minutes on a 32 GB Mac, without gray noise.
 
 ## Batch (folder)

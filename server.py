@@ -45,7 +45,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_note", "keep_note")
+                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_note", "keep_note")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -608,6 +608,21 @@ async def run_job(job: dict) -> None:
         await finish_job(job, "error", error=repr(e))
 
 
+def save_run_config(run_id: str, run: dict, params: dict, graph: dict) -> None:
+    """Writes <output>/InpaintStudio/<run>/config.json next to the run's images: every setting of the run,
+    the prompt text the encoder gets (with the hidden notes) and the ComfyUI graph, so a run on disk explains itself."""
+    out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
+    prompt = params["prompt"] if params.get("task") == "generate" else graphs.edit_prompt(params)
+    config = {"id": run_id, "created": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(run["created"])),
+              "params": params, "size": run["size"], "encoder_prompt": prompt, "graph": graph}
+    try:
+        d = out_dir / "InpaintStudio" / run_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.json").write_text(json.dumps(config, indent=2, default=str))
+    except OSError:
+        pass
+
+
 @app.post("/api/jobs")
 async def create_job(params: dict):
     if params.get("preset"):
@@ -625,6 +640,8 @@ async def create_job(params: dict):
     # extra reference images: only as many as the model's text encoder takes
     refs = [r for r in (params.get("refs") or []) if isinstance(r, str) and r]
     params["refs"] = refs[:graphs.MAX_REFS.get(params.get("family"), 0)]
+    takes = params.get("ref_takes") or []   # "what to take from it", one short text per reference
+    params["ref_takes"] = [str(t or "").strip() for t in takes[:len(params["refs"])]]
     up = presets.COMPONENTS.get(params.get("upscaler") or "")
     if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler":
         params.update(upscale_model=up["path"].rsplit("/", 1)[-1], upscale_native=up["scale"])
@@ -640,6 +657,7 @@ async def create_job(params: dict):
     run = {"id": run_id, "created": time.time(), "status": "queued",
            "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": rep, "frames": []}
     save_run(run)
+    save_run_config(run_id, run, params, graph)
     job = {"run": run, "params": params, "graph": graph, "value": 0}
     JOBS[run_id] = job
     job["task"] = asyncio.create_task(run_job(job))

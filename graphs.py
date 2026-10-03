@@ -112,28 +112,51 @@ KEEP_IDENTICAL = ("Keep everything else in the image exactly identical to the or
 MAX_REFS = {"qwen21": 3, "qwen21_turbo": 3, "qwen_edit": 2}
 
 
-REF_NOTE = ("Edit {main}. The result keeps the framing, composition, camera angle and perspective of {main} "
-            "and everything in it that the instruction does not change. The other images are only references "
-            "for what the instruction takes from them.")
+REF_NOTE = ("{main} is the image to edit. Keep its framing, composition, camera angle, perspective and "
+            "everything the instruction does not change. Take from {refs} only what the instruction asks for. "
+            "Add no body parts, people or objects that the instruction does not ask for.")
+
+
+def ref_labels(family: str, n: int) -> tuple[str, list[str]]:
+    """The encoder's own names for the edited image and the references: Qwen 2.1 tags them <image1>, <image2>
+    (TextEncodeQwenImage21), Edit 2511 "Picture 1", "Picture 2" (TextEncodeQwenImageEditPlus)."""
+    name = (lambda i: f"Picture {i}") if family == "qwen_edit" else (lambda i: f"<image{i}>")
+    return name(1), [name(i) for i in range(2, n + 2)]
 
 
 def reference_note(p: dict[str, Any]) -> str:
     """Hidden instruction for edits with extra reference images: without it the model sometimes takes
     a reference as the image to edit (its framing and all) when the prompt does not say which is which.
-    Uses the encoder's own name for the image (Qwen 2.1: <image1>, Edit 2511: "Picture 1").
     p["ref_note"] overrides it (Advanced in the UI); an empty string turns it off."""
     family = p.get("family", "qwen21")
-    if not min(len(p.get("refs") or []), MAX_REFS.get(family, 0)) or p.get("task") == "generate":
+    n = min(len(p.get("refs") or []), MAX_REFS.get(family, 0))
+    if not n or p.get("task") == "generate":
         return ""
     if p.get("ref_note") is not None:
         return str(p["ref_note"]).strip()
-    return REF_NOTE.format(main="Picture 1" if family == "qwen_edit" else "image 1")
+    main, refs = ref_labels(family, n)
+    return REF_NOTE.format(main=main, refs=refs[0] if n == 1 else ", ".join(refs[:-1]) + " and " + refs[-1])
+
+
+def reference_takes(p: dict[str, Any]) -> str:
+    """p["ref_takes"]: one short text per reference ("face"). Each becomes an explicit replacement order after
+    the prompt, so it counts as part of the instruction even when the prompt does not mention it."""
+    family = p.get("family", "qwen21")
+    n = min(len(p.get("refs") or []), MAX_REFS.get(family, 0))
+    if not n or p.get("task") == "generate":
+        return ""
+    main, refs = ref_labels(family, n)
+    takes = [str(t).strip().rstrip(".") for t in (p.get("ref_takes") or [])[:n]]
+    return " ".join(f"Replace the {t} in {main} with the {t} from {ref}, in the place and at the size of the {t} in {main}."
+                    for ref, t in zip(refs, takes) if t)
 
 
 def edit_prompt(p: dict[str, Any]) -> str:
-    prompt = p["prompt"]
+    prompt = p["prompt"].strip()
     if note := reference_note(p):
-        prompt = f"{note}\n\n{prompt.strip()}"
+        prompt = f"{note}\n\n{prompt}"
+    if takes := reference_takes(p):
+        prompt = f"{prompt}\n\n{takes}"
     if p.get("mode") == "paste":
         # p["keep_note"] replaces the default (Advanced in the UI), empty turns it off;
         # keep_identical=False is the older way to turn it off

@@ -641,6 +641,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
     refs: state.refs.slice(0, maxRefs()).map((r) => r.name),
+    ref_takes: state.refs.slice(0, maxRefs()).map((r) => (r.take || "").trim()),
     // only an edited instruction is sent; otherwise the server uses its default (graphs.REF_NOTE)
     ref_note: isDefaultRefNote($("refNote").value) ? undefined : $("refNote").value,
     // explicit file overrides only; empty = taken from the preset by the server
@@ -1138,11 +1139,15 @@ function renderDetails(run, status) {
   const refs = run.params?.refs || [];
   $("detRefsSec").hidden = !refs.length;
   $("detRefs").replaceChildren(...refs.map((name, i) => {
+    const row = document.createElement("div"); row.className = "ref-row";
     const t = document.createElement("span"); t.className = "batch-item";
     const img = document.createElement("img"); img.src = inputViewUrl(name); img.alt = "";
     const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = String(runTask(run) === "generate" ? i + 1 : i + 2);
     t.append(img, tag);
-    return t;
+    const take = document.createElement("span"); take.className = "ref-take";
+    take.textContent = run.params?.ref_takes?.[i] ? `Take: ${run.params.ref_takes[i]}` : "";
+    row.append(t, take);
+    return row;
   }));
   const dl = $("detSettings");
   dl.innerHTML = "";
@@ -1364,7 +1369,8 @@ function loadRunSettings(run) {
   for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
   $("randomSeed").checked = false;   // reproduce the run
   $("refNote").value = p.ref_note ?? defaultRefNote();
-  state.refs = (p.refs || []).map((name) => ({ name, label: name.split("/").pop().replace(/^[0-9a-f]{8}_/, "") }));
+  state.refs = (p.refs || []).map((name, i) => ({ name, label: name.split("/").pop().replace(/^[0-9a-f]{8}_/, ""),
+    take: p.ref_takes?.[i] || "" }));
   saveSession({ refs: state.refs });
   if (task === "edit" && p.mode) {
     $("mode").value = p.use_mask === false ? "none" : p.mode;
@@ -1580,7 +1586,7 @@ syncModeUi();
 // The edited image is image 1, references follow; when generating they start at image 1.
 const MAX_REFS = { qwen21: 3, qwen21_turbo: 3, qwen_edit: 2 };
 const maxRefs = () => MAX_REFS[currentFamily()] || 0;
-state.refs = [];   // [{name, label}] uploaded to ComfyUI's input folder
+state.refs = [];   // [{name, label, take}] uploaded to ComfyUI's input folder; take = what to take from it
 
 // Free edit + paste instruction after the prompt, editable in Advanced. Mirrors graphs.KEEP_IDENTICAL.
 const KEEP_NOTE = "Keep everything else in the image exactly identical to the original: same framing, "
@@ -1589,14 +1595,33 @@ const KEEP_NOTE = "Keep everything else in the image exactly identical to the or
 $("keepNote").value = KEEP_NOTE;   // before loadForm: a stored text wins
 $("keepNoteReset").onclick = () => { $("keepNote").value = KEEP_NOTE; $("keepNote").dispatchEvent(new Event("change")); };
 
-// Hidden instruction for edits with references, editable in Advanced. Mirrors graphs.REF_NOTE;
-// as long as it is unchanged it follows the model's naming (Edit 2511 says "Picture 1").
-const REF_NOTE = "Edit {main}. The result keeps the framing, composition, camera angle and perspective of {main} "
+// Hidden instruction for edits with references, editable in Advanced. Mirrors graphs.REF_NOTE / ref_labels;
+// as long as it is unchanged it follows the model's names for the images (Qwen 2.1 <image1>, Edit 2511 "Picture 1").
+// The "Take from it" text per reference is added by the server after the prompt, as an order:
+// "Replace the face in <image1> with the face from <image3>." (graphs.reference_takes)
+const REF_NOTE = "{main} is the image to edit. Keep its framing, composition, camera angle, perspective and "
+  + "everything the instruction does not change. Take from {refs} only what the instruction asks for. "
+  + "Add no body parts, people or objects that the instruction does not ask for.";
+const refNoteFor = (family, n, template = REF_NOTE) => {
+  const name = (i) => family === "qwen_edit" ? `Picture ${i}` : `<image${i}>`;
+  const refs = Array.from({ length: Math.max(1, n) }, (_, i) => name(i + 2));
+  return template.replaceAll("{main}", name(1))
+    .replaceAll("{refs}", refs.length === 1 ? refs[0] : refs.slice(0, -1).join(", ") + " and " + refs.at(-1));
+};
+const defaultRefNote = () => refNoteFor(currentFamily(), Math.min(state.refs.length, maxRefs()));
+// earlier defaults count as unchanged too, so a stored copy follows the current one
+const OLD_REF_NOTE = (m) => `Edit ${m}. The result keeps the framing, composition, camera angle and perspective of ${m} `
   + "and everything in it that the instruction does not change. The other images are only references "
   + "for what the instruction takes from them.";
-const defaultRefNote = () => REF_NOTE.replaceAll("{main}", currentFamily() === "qwen_edit" ? "Picture 1" : "image 1");
-const isDefaultRefNote = (v) => ["image 1", "Picture 1"].some((m) => v === REF_NOTE.replaceAll("{main}", m));
-$("refNote").value = REF_NOTE.replaceAll("{main}", "image 1");   // before loadForm: a stored text wins
+const OLD_REF_NOTE_3 = "{main} is the image to edit. Keep its framing, composition, camera angle, perspective and "
+  + "everything the instruction does not change. Take from {refs} only what the instruction asks for.";
+const OLD_REF_NOTE_2 = "{main} is the image to edit. Keep its framing, composition, camera angle, perspective, poses and "
+  + "everything the instruction does not change. Use {refs} only as reference for how the changed parts "
+  + "should look, never for pose or composition.";
+const isDefaultRefNote = (v) => ["qwen21", "qwen_edit"].some((f) => [1, 2, 3].some((n) =>
+  [REF_NOTE, OLD_REF_NOTE_2, OLD_REF_NOTE_3].some((t) => v === refNoteFor(f, n, t))))
+  || ["image 1", "Picture 1"].some((m) => v === OLD_REF_NOTE(m));
+$("refNote").value = refNoteFor("qwen21", 1);   // before loadForm: a stored text wins
 $("refNoteReset").onclick = () => { $("refNote").value = defaultRefNote(); $("refNote").dispatchEvent(new Event("change")); };
 
 function renderRefs() {
@@ -1607,22 +1632,30 @@ function renderRefs() {
   const first = state.task === "generate" ? 1 : 2;
   $("refsHint").textContent = (state.task === "generate"
     ? "Optional. Refer to them as image 1, 2 … in the prompt."
-    : "Optional. Your image is image 1 and stays the one that is edited (the model is told so); refer to these as image 2, 3 … in the prompt.")
+    : "Optional. Your image is image 1 and stays the one that is edited (the model is told so). Say what to take from each reference, e.g. \u201cmuscular torso\u201d.")
     + ` This model takes up to ${max}; each one makes the run a lot slower.`;
   const grid = $("refGrid");
   grid.innerHTML = "";
   state.refs.forEach((r, i) => {
-    const t = document.createElement("div");
+    const row = document.createElement("div");
     const unused = i >= max;
-    t.className = "batch-item ref" + (unused ? " skipped" : "");
+    row.className = "ref-row" + (unused ? " skipped" : "");
+    const t = document.createElement("div");
+    t.className = "batch-item ref";
     t.title = unused ? `${r.label}: not used by this model` : `${r.label}: image ${first + i}`;
     const img = document.createElement("img"); img.src = inputViewUrl(r.name); img.alt = "";
     const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = unused ? "unused" : String(first + i);
+    t.append(img, tag);
+    const take = document.createElement("input");
+    take.type = "text"; take.value = r.take || ""; take.disabled = unused || state.task === "generate";
+    take.placeholder = state.task === "generate" ? "" : "Take from it, e.g. muscular torso";
+    take.setAttribute("aria-label", `What to take from reference ${first + i}`);
+    take.oninput = () => { r.take = take.value; saveSession({ refs: state.refs }); };
     const x = document.createElement("button");
     x.className = "ref-del"; x.textContent = "×"; x.setAttribute("aria-label", `Remove reference ${r.label}`);
     x.onclick = () => { state.refs.splice(i, 1); saveSession({ refs: state.refs }); renderRefs(); };
-    t.append(img, tag, x);
-    grid.appendChild(t);
+    row.append(t, take, x);
+    grid.appendChild(row);
   });
   if (state.refs.length < max) {
     const add = document.createElement("label");

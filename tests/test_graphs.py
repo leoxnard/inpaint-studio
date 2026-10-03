@@ -159,13 +159,26 @@ def test_no_refs_keeps_the_single_image_graph():
 
 def test_edit_with_refs_gets_the_hidden_instruction():
     enc = _ref_graph("qwen21")["encode"]["inputs"]["prompt"]
-    assert enc.startswith("Edit image 1.") and "The other images are only references" in enc and enc.endswith("x")
+    assert enc.startswith("<image1> is the image to edit.") and "Take from <image2> and <image3> only what the instruction asks for." in enc
+    assert enc.endswith("x")
 
 
 def test_hidden_instruction_uses_picture_for_edit_2511_and_skips_generate_and_no_refs():
-    assert _ref_graph("qwen_edit", refs=("a.png",))["encode_raw"]["inputs"]["prompt"].startswith("Edit Picture 1.")
+    assert _ref_graph("qwen_edit", refs=("a.png",))["encode_raw"]["inputs"]["prompt"].startswith("Picture 1 is the image to edit.")
     assert _ref_graph("qwen21", task="generate")["encode"]["inputs"]["prompt"] == "x"
     assert _ref_graph("qwen21", refs=())["encode"]["inputs"]["prompt"] == "x"
+
+
+def test_reference_takes_become_replacement_orders_after_the_prompt():
+    p = dict(prompt="remove the tshirt", family="qwen21", task="edit", refs=["a.png", "b.png"],
+             ref_takes=["", "face. "])
+    enc = graphs.edit_prompt(p)
+    assert enc.endswith("remove the tshirt\n\nReplace the face in <image1> with the face from <image3>, "
+                        "in the place and at the size of the face in <image1>.")
+    assert "<image2> take" not in enc and "Replace the  in" not in enc
+    assert graphs.edit_prompt({**p, "ref_note": ""}).startswith("remove the tshirt\n\nReplace the face in <image1>")
+    assert "with the face from Picture 3, in the place" in graphs.edit_prompt({**p, "family": "qwen_edit"})
+    assert graphs.edit_prompt({**p, "task": "generate"}) == "remove the tshirt"
 
 
 def test_custom_reference_note_replaces_or_turns_off_the_default():

@@ -183,7 +183,7 @@ button.primary:disabled { background: var(--surface); border-color: var(--hairli
 .seg { display: inline-flex; border: 1px solid var(--hairline-strong); border-radius: var(--r-pill); overflow: hidden; }
 .seg button { border: 0; border-radius: 0; background: transparent; color: var(--body); min-height: 36px; padding: 0 14px; }
 .seg button + button { border-left: 1px solid var(--hairline-strong); }
-.seg button:hover:not(:disabled) { color: var(--ink); }
+.seg button:hover:not(:disabled) { color: var(--ink); border-color: var(--hairline-strong); }   /* text only: the divider lines keep their colour */
 .seg button.active, .seg button[aria-pressed="true"] { background: var(--selected); color: var(--ink); }
 
 .hint { font-size: 13px; color: var(--body); }

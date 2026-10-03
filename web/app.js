@@ -9,8 +9,8 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepIdentical", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
-  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect",
+  "brushSize", "opacity", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
+  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -66,17 +66,31 @@ let dash = { k: 0, pattern: null };
 
 // ------------------------------------------------------------------ helpers
 let toastTimer = 0;
+// Info toasts ("Queued as Run 3") slide in at the top centre, errors stay at the bottom right
 function showToast(msg, { error = false, runsLink = false, ms = 6000 } = {}) {
+  const t = $("toast");
   $("toastText").textContent = String(msg);
-  $("toast").classList.toggle("error", error);
+  t.classList.toggle("error", error);
+  t.classList.toggle("top", !error);
   $("toastLink").hidden = !runsLink;
-  $("toast").hidden = false;
+  t.classList.remove("enter", "leave");
+  t.hidden = false;
+  void t.offsetWidth;   // restart the animation when a toast replaces another one
+  t.classList.add("enter");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $("toast").hidden = true; }, ms);
+  toastTimer = setTimeout(hideToast, ms);
+}
+function hideToast() {
+  const t = $("toast");
+  clearTimeout(toastTimer);
+  if (t.hidden) return;
+  t.classList.remove("enter");
+  t.classList.add("leave");
+  toastTimer = setTimeout(() => { t.hidden = true; t.classList.remove("leave"); }, 200);
 }
 const showError = (msg) => showToast(msg, { error: true, ms: 15000 });
-$("toastLink").onclick = () => { $("toast").hidden = true; };
-$("toastClose").onclick = () => { $("toast").hidden = true; };
+$("toastLink").onclick = hideToast;
+$("toastClose").onclick = hideToast;
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -620,11 +634,15 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     prompt: $("prompt").value, negative: $("negative").value,
     steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
     sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: maskOn() && currentFamily() !== "zimage" ? $("mode").value : "inpaint",
-    keep_identical: maskOn() && currentFamily() !== "zimage" && $("keepIdentical").checked, save_every: parseInt($("saveEvery").value, 10) || 0,
+    // only an edited instruction is sent; otherwise the server adds its default (graphs.KEEP_IDENTICAL)
+    keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
+    refs: state.refs.slice(0, maxRefs()).map((r) => r.name),
+    // only an edited instruction is sent; otherwise the server uses its default (graphs.REF_NOTE)
+    ref_note: isDefaultRefNote($("refNote").value) ? undefined : $("refNote").value,
     // explicit file overrides only; empty = taken from the preset by the server
     ...Object.fromEntries(["unet", "clip", "vae"].filter((id) => $(id).value).map((id) => [id, $(id).value])),
   };
@@ -805,11 +823,7 @@ function stepText(job) {
   return txt;
 }
 
-const jobThumb = (job) => {
-  const vis = job.frames.filter((f) => f.kind === "saved" || f.kind === "live");
-  if (vis.length) return vis[vis.length - 1].url;
-  return job.params?.image ? inputViewUrl(job.params.image) : null;
-};
+const jobThumb = (job) => followFrame(job)?.url || (job.params?.image ? inputViewUrl(job.params.image) : null);
 
 function renderQueue() {
   const box = $("queue");
@@ -900,24 +914,36 @@ function frameAdded(run, frame) {
   const vis = visibleFrames(run);
   const idx = vis.indexOf(frame);
   renderSteps();
-  if (idx >= 0 && !run.done) showFrame(idx);
-  else if (!run.done && !vis.length) showNewestFrame(run);
+  if (!run.done && frame === followFrame(run)) showFollowFrame(run);
 }
 
-// a running job always shows its newest frame, even with "Live previews" off
-function showNewestFrame(run) {
-  const f = run.frames[run.frames.length - 1];
+// What a running job shows: live previews only until the first saved step exists, then the newest
+// saved step until the next one arrives (live previews in between are only in the steps strip)
+function followFrame(run) {
+  const wantRaw = $("viewRaw").checked;
+  const saved = run.frames.filter((f) => f.kind === "saved" && (f.variant === "raw") === (wantRaw && hasRaw(run)));
+  const pool = saved.length ? saved : run.frames.some((f) => f.kind === "saved") ? run.frames.filter((f) => f.kind === "saved")
+    : run.frames.filter((f) => f.kind === "live");
+  return pool.reduce((a, f) => (!a || f.step >= a.step ? f : a), null);
+}
+function showFollowFrame(run) {
+  const f = followFrame(run);
   if (!f) return false;
+  const i = visibleFrames(run).indexOf(f);
+  if (i >= 0) { showFrame(i); return true; }
   $("liveImg").src = f.url;
   $("liveImg").hidden = false;
   $("compare").hidden = true;
   $("resultEmpty").hidden = true;
+  run.shown = null;
+  for (const img of $("filmstrip").children) img.classList.remove("active");
   return true;
 }
 
-// viewer filters (default off): live previews and raw full images are only shown on demand
+// The steps strip: saved steps only (raw ones with "Raw" on). Live previews never appear here,
+// the viewer shows them only until the first saved step exists (see followFrame).
 function visibleFrames(run) {
-  const wantLive = $("viewLive").checked, wantRaw = $("viewRaw").checked;
+  const wantRaw = $("viewRaw").checked;
   const byStep = new Map();
   for (const f of run.frames) {
     const slot = byStep.get(f.step) || {};
@@ -929,7 +955,7 @@ function visibleFrames(run) {
   const out = [];
   for (const step of [...byStep.keys()].sort((a, b) => a - b)) {
     const s = byStep.get(step);
-    const pick = (wantRaw && s.raw) || s.result || (wantLive && s.live) || null;
+    const pick = (wantRaw && s.raw) || s.result || null;
     if (pick) out.push(pick);
   }
   return out;
@@ -976,14 +1002,12 @@ function renderSteps() {
   fs.innerHTML = "";
   const run = state.run;
   const frames = run ? visibleFrames(run) : [];
-  $("stepsBar").hidden = !(run && run.frames.length);
-  $("stepsTitle").textContent = $("viewLive").checked ? "Live previews" : "Saved steps";
+  $("stepsBar").hidden = !frames.length;
   frames.forEach((f, i) => {
     const img = document.createElement("img");
     img.src = f.url;
     img.alt = `Step ${f.step}`;
-    img.title = f.kind === "live" ? `Step ${f.step}, live preview`
-      : f.variant === "raw" ? `Step ${f.step}, raw full image (saved)` : `Step ${f.step}, full quality (saved)`;
+    img.title = f.variant === "raw" ? `Step ${f.step}, raw full image` : `Step ${f.step}`;
     if (f.kind === "saved") img.classList.add("saved");
     if (f.variant === "raw") img.classList.add("raw");
     img.onclick = () => showFrame(i);
@@ -993,15 +1017,13 @@ function renderSteps() {
   if (run && !run.done) fs.scrollLeft = fs.scrollWidth;
 }
 
-for (const id of ["viewLive", "viewRaw"]) {
-  $(id).addEventListener("change", () => {
-    const run = state.run;
-    if (!run) return;
-    renderSteps();
-    syncRawSeg();
-    if (run.resultUrl) showFinal(); else { const n = visibleFrames(run).length; if (n) showFrame(n - 1); }
-  });
-}
+$("viewRaw").addEventListener("change", () => {
+  const run = state.run;
+  if (!run) return;
+  renderSteps();
+  syncRawSeg();
+  if (run.resultUrl) showFinal(); else showFollowFrame(run);
+});
 // "Pasted result / Raw" is a view of the hidden #viewRaw checkbox
 function syncRawSeg() {
   for (const b of $("rawSeg").children) b.setAttribute("aria-pressed", String((b.dataset.raw === "1") === $("viewRaw").checked));
@@ -1069,9 +1091,8 @@ function renderViewer() {
     const ahead = [...state.jobs.values()].filter((j) => j.created < run.created).length;
     msg(`Waiting. ${ahead ? `${ahead} run${ahead === 1 ? "" : "s"} ahead of this one.` : "Starts next."}`);
   } else if (status === "running") {
-    const vis = visibleFrames(run);
-    if (vis.length) showFrame(run.shown ?? vis.length - 1);
-    else if (!showNewestFrame(run)) msg("Starting. The first preview appears after the first step.");
+    if (run.shown != null && visibleFrames(run)[run.shown]) showFrame(run.shown);
+    else if (!showFollowFrame(run)) msg("Starting. The first preview appears after the first step.");
   } else if (done) {
     if (run.resultUrl) showFinal(); else msg("This run has no result image.");
   } else if (status === "error") {
@@ -1093,6 +1114,7 @@ function settingsRows(run) {
   const preset = presetById(p.preset);
   const size = run.size || {};
   const rows = [
+    ["Run ID", run.serverId || run.id],   // the folder name in the data dir, e.g. to point Claude at a run
     ["Task", !task ? "" : task === "generate" ? "Generate" : p.mode || p.use_mask != null ? `Edit, ${area}` : "Edit"],
     ["Model", preset ? `${preset.title}${p.quant ? ` · ${p.quant}` : ""}` : p.unet || ""],
     ["Size", size.work_w ? `${size.work_w} × ${size.work_h}` : ""],
@@ -1113,12 +1135,22 @@ function renderDetails(run, status) {
   if (!run) return;
   const done = status === "done";
   $("detPrompt").textContent = run.prompt || run.params?.prompt || "";
+  const refs = run.params?.refs || [];
+  $("detRefsSec").hidden = !refs.length;
+  $("detRefs").replaceChildren(...refs.map((name, i) => {
+    const t = document.createElement("span"); t.className = "batch-item";
+    const img = document.createElement("img"); img.src = inputViewUrl(name); img.alt = "";
+    const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = String(runTask(run) === "generate" ? i + 1 : i + 2);
+    t.append(img, tag);
+    return t;
+  }));
   const dl = $("detSettings");
   dl.innerHTML = "";
   for (const [k, v] of settingsRows(run)) {
     const dt = document.createElement("dt"); dt.textContent = k;
     const dd = document.createElement("dd"); dd.textContent = String(v);
     if (k === "Time") dd.dataset.k = "time";
+    if (k === "Run ID") dd.className = "runid";
     dl.append(dt, dd);
   }
   $("loadSettings").disabled = !run.params;
@@ -1259,9 +1291,25 @@ function renderHistory() {
     b.append(pic, meta);
     b.title = run.prompt;
     b.onclick = () => selectRun(run);
-    box.appendChild(b);
+    // × removes the run from the history only; its files stay (a sibling: buttons cannot nest)
+    const x = document.createElement("button");
+    x.className = "rtile-x"; x.textContent = "×";
+    x.title = "Remove from history (files are kept)";
+    x.setAttribute("aria-label", `Remove Run ${n} from history`);
+    x.onclick = () => hideRun(run);
+    const wrap = document.createElement("div"); wrap.className = "rwrap";
+    wrap.append(b, x);
+    box.appendChild(wrap);
   }
 }
+async function hideRun(run) {
+  try {
+    await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/hide`, {});
+    state.runs = state.runs.filter((r) => r !== run);
+    if (state.run === run) { state.follow = false; showLatest(); } else renderHistory();
+  } catch (e) { showError(e.message); }
+}
+
 $("resultFilter").addEventListener("click", (e) => {
   const b = e.target.closest("[data-filter]");
   if (!b) return;
@@ -1311,9 +1359,13 @@ function loadRunSettings(run) {
   for (const [id, v] of Object.entries(fields)) if (v != null) $(id).value = v;
   for (const [id, v] of [["sampler", p.sampler], ["scheduler", p.scheduler]]) if (v) setSelectValue(id, v);
   if (p.upscaler && [...$("upscaler").options].some((o) => o.value === p.upscaler)) $("upscaler").value = p.upscaler;
-  const checks = { keepIdentical: p.keep_identical, postColors: p.post_colors, postWarp: p.post_warp, postPoisson: p.post_poisson };
+  $("keepNote").value = p.keep_note ?? (p.keep_identical === false ? "" : KEEP_NOTE);
+  const checks = { postColors: p.post_colors, postWarp: p.post_warp, postPoisson: p.post_poisson };
   for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
   $("randomSeed").checked = false;   // reproduce the run
+  $("refNote").value = p.ref_note ?? defaultRefNote();
+  state.refs = (p.refs || []).map((name) => ({ name, label: name.split("/").pop().replace(/^[0-9a-f]{8}_/, "") }));
+  saveSession({ refs: state.refs });
   if (task === "edit" && p.mode) {
     $("mode").value = p.use_mask === false ? "none" : p.mode;
     $("mode").dispatchEvent(new Event("change"));
@@ -1344,6 +1396,7 @@ function setView(v) {
   $("navCreate").setAttribute("aria-current", runs ? "false" : "page");
   $("navRuns").setAttribute("aria-current", runs ? "page" : "false");
   if (!location.hash.startsWith(`#${state.view}`)) location.hash = state.view;
+  applyCols();
   if (!runs) render();
 }
 // keeps the selected run in the hash without adding history entries
@@ -1370,6 +1423,64 @@ function selectRun(run) {
   showRun(run);
 }
 
+// ------------------------------------------------------------------ resizable columns
+// Drag the handle between columns; widths are kept per view. Double-click resets.
+const COLS_KEY = "inpaint-studio-cols-v1";
+const COL_MIN = { left: 260, right: 280 }, COL_MAX = 640, CENTER_MIN = 420;
+const COL_DEFAULT = { createView: { left: 300, right: 340 }, runsView: { left: 300, right: 320 } };
+
+function readCols() { try { return JSON.parse(localStorage.getItem(COLS_KEY) || "{}"); } catch { return {}; } }
+function colLimit(view, side, w) {
+  const other = side === "left" ? "right" : "left";
+  const otherW = parseFloat(getComputedStyle(view).getPropertyValue(`--${other}-w`)) || COL_DEFAULT[view.id][other];
+  const max = Math.min(COL_MAX, view.clientWidth - otherW - CENTER_MIN);
+  return Math.round(Math.max(COL_MIN[side], Math.min(max, w)));
+}
+function setColWidth(view, side, w, save = true) {
+  view.style.setProperty(`--${side}-w`, `${colLimit(view, side, w)}px`);
+  if (!save) return;
+  const all = readCols();
+  all[view.id] = { ...all[view.id], [side]: parseFloat(view.style.getPropertyValue(`--${side}-w`)) };
+  try { localStorage.setItem(COLS_KEY, JSON.stringify(all)); } catch { /* widths are a convenience */ }
+}
+function applyCols() {
+  const all = readCols();
+  for (const view of [$("createView"), $("runsView")]) {
+    if (view.hidden || !view.clientWidth) continue;   // re-applied when the view is shown
+    for (const side of ["left", "right"]) {
+      const w = all[view.id]?.[side] ?? COL_DEFAULT[view.id][side];
+      setColWidth(view, side, w, false);
+    }
+  }
+}
+for (const h of document.querySelectorAll(".col-resizer")) {
+  const view = h.parentElement, side = h.dataset.side;
+  h.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { h.setPointerCapture(e.pointerId); } catch { /* moves still arrive while over the handle */ }
+    h.classList.add("dragging");
+    document.body.classList.add("resizing");
+  });
+  h.addEventListener("pointermove", (e) => {
+    if (!h.classList.contains("dragging")) return;
+    const r = view.getBoundingClientRect();
+    setColWidth(view, side, side === "left" ? e.clientX - r.left : r.right - e.clientX, false);
+  });
+  const end = (e) => {
+    if (!h.classList.contains("dragging")) return;
+    h.classList.remove("dragging");
+    document.body.classList.remove("resizing");
+    try { h.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+    setColWidth(view, side, parseFloat(view.style.getPropertyValue(`--${side}-w`)));
+    render();   // the stage changed size: redraw the mask outline at the new scale
+  };
+  h.addEventListener("pointerup", end);
+  h.addEventListener("pointercancel", end);
+  h.addEventListener("dblclick", () => { setColWidth(view, side, COL_DEFAULT[view.id][side]); render(); });
+}
+window.addEventListener("resize", debounce(applyCols, 150));
+
 // ------------------------------------------------------------------ wiring
 function bindOutput(id, outId, fmt = (v) => v) {
   const upd = () => { $(outId).textContent = fmt($(id).value); };
@@ -1379,8 +1490,9 @@ function bindOutput(id, outId, fmt = (v) => v) {
 
 function initApp() {
   setView(location.hash.slice(1).split("/")[0]);
+  state.refs = readSession()?.refs || [];
   loadForm();
-  syncAreaCards();
+  syncModeUi();   // the stored mode decides which paste-only fields show
   $("aspect").dispatchEvent(new Event("change"));
   syncUpscaler();
   state.task = $("task").value === "generate" ? "generate" : "edit";
@@ -1410,7 +1522,7 @@ function initApp() {
 
 function syncModeUi() {
   const notPaste = $("mode").value !== "paste";
-  $("keepIdenticalRow").hidden = notPaste;
+  $("keepNoteRow").hidden = notPaste;
   $("postFixRow").hidden = notPaste;
   syncAreaCards();
   if (state.maskUiReady) applyMaskTexts();  // not during module init (applyMaskMode runs it later)
@@ -1462,6 +1574,81 @@ $("aspect").addEventListener("change", () => {
 });
 renderAspectTiles();
 syncModeUi();
+
+// ------------------------------------------------------------------ extra reference images
+// The text encoder of some models takes more images than the edited one (see graphs.MAX_REFS).
+// The edited image is image 1, references follow; when generating they start at image 1.
+const MAX_REFS = { qwen21: 3, qwen21_turbo: 3, qwen_edit: 2 };
+const maxRefs = () => MAX_REFS[currentFamily()] || 0;
+state.refs = [];   // [{name, label}] uploaded to ComfyUI's input folder
+
+// Free edit + paste instruction after the prompt, editable in Advanced. Mirrors graphs.KEEP_IDENTICAL.
+const KEEP_NOTE = "Keep everything else in the image exactly identical to the original: same framing, "
+  + "perspective, positions, people, objects, colors, lighting and fine details. "
+  + "Only change what is described above.";
+$("keepNote").value = KEEP_NOTE;   // before loadForm: a stored text wins
+$("keepNoteReset").onclick = () => { $("keepNote").value = KEEP_NOTE; $("keepNote").dispatchEvent(new Event("change")); };
+
+// Hidden instruction for edits with references, editable in Advanced. Mirrors graphs.REF_NOTE;
+// as long as it is unchanged it follows the model's naming (Edit 2511 says "Picture 1").
+const REF_NOTE = "Edit {main}. The result keeps the framing, composition, camera angle and perspective of {main} "
+  + "and everything in it that the instruction does not change. The other images are only references "
+  + "for what the instruction takes from them.";
+const defaultRefNote = () => REF_NOTE.replaceAll("{main}", currentFamily() === "qwen_edit" ? "Picture 1" : "image 1");
+const isDefaultRefNote = (v) => ["image 1", "Picture 1"].some((m) => v === REF_NOTE.replaceAll("{main}", m));
+$("refNote").value = REF_NOTE.replaceAll("{main}", "image 1");   // before loadForm: a stored text wins
+$("refNoteReset").onclick = () => { $("refNote").value = defaultRefNote(); $("refNote").dispatchEvent(new Event("change")); };
+
+function renderRefs() {
+  const max = maxRefs();
+  $("refNoteRow").hidden = !(max && state.task === "edit" && state.refs.length);   // only with a reference image
+  if (isDefaultRefNote($("refNote").value)) $("refNote").value = defaultRefNote();
+  $("refsSec").hidden = !max;
+  const first = state.task === "generate" ? 1 : 2;
+  $("refsHint").textContent = (state.task === "generate"
+    ? "Optional. Refer to them as image 1, 2 … in the prompt."
+    : "Optional. Your image is image 1 and stays the one that is edited (the model is told so); refer to these as image 2, 3 … in the prompt.")
+    + ` This model takes up to ${max}; each one makes the run a lot slower.`;
+  const grid = $("refGrid");
+  grid.innerHTML = "";
+  state.refs.forEach((r, i) => {
+    const t = document.createElement("div");
+    const unused = i >= max;
+    t.className = "batch-item ref" + (unused ? " skipped" : "");
+    t.title = unused ? `${r.label}: not used by this model` : `${r.label}: image ${first + i}`;
+    const img = document.createElement("img"); img.src = inputViewUrl(r.name); img.alt = "";
+    const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = unused ? "unused" : String(first + i);
+    const x = document.createElement("button");
+    x.className = "ref-del"; x.textContent = "×"; x.setAttribute("aria-label", `Remove reference ${r.label}`);
+    x.onclick = () => { state.refs.splice(i, 1); saveSession({ refs: state.refs }); renderRefs(); };
+    t.append(img, tag, x);
+    grid.appendChild(t);
+  });
+  if (state.refs.length < max) {
+    const add = document.createElement("label");
+    add.className = "batch-item add";
+    add.htmlFor = "refInput";
+    add.title = "Add reference images";
+    add.setAttribute("aria-label", "Add reference images");
+    add.textContent = "+";
+    grid.appendChild(add);
+  }
+}
+
+$("refInput").addEventListener("change", async (e) => {
+  const files = [...e.target.files].filter((f) => f.type.startsWith("image/")).slice(0, Math.max(0, maxRefs() - state.refs.length));
+  e.target.value = "";
+  for (const file of files) {
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name || "reference.png");
+      const up = await api("/api/upload", { method: "POST", body: fd });
+      state.refs.push({ name: up.name, label: file.name || "reference" });
+    } catch (err) { showError(err.message); }
+  }
+  saveSession({ refs: state.refs });
+  renderRefs();
+});
 
 // ------------------------------------------------------------------ session restore (image + mask survive reloads)
 const SESSION_KEY = "inpaint-studio-session-v1";
@@ -2148,6 +2335,7 @@ function syncTaskUi() {
   hint.textContent = text;
   hint.hidden = !text;
   if (!state.submitting) $("runEdit").textContent = runLabel();
+  renderRefs();
   promptPresets?.refresh();
 }
 

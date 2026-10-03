@@ -116,3 +116,66 @@ def test_matching_resolution_gives_reference_of_working_size():
         r = graphs.matching_resolution(w, h)
         assert graphs.reference_size(w, h, r) == (w, h), (w, h, r, graphs.reference_size(w, h, r))
     assert graphs.matching_resolution(1344, 736) == 992
+
+
+# ------------------------------------------------------------------ extra reference images
+def _ref_graph(family, task="edit", refs=("a_ref.png", "b_ref.png")):
+    p = dict(image="img.png", mask=None, use_mask=False, megapixels=0.95, resolution=1008, prompt="x",
+             negative="", steps=8, denoise=1.0, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=0,
+             work_w=1024, work_h=1024, prefix="P", unet="u.gguf", clip="c.safetensors", vae="v.safetensors",
+             family=family, task=task, refs=list(refs))
+    return graphs.build_edit_graph(p)
+
+
+def test_qwen21_edit_refs_follow_the_edited_image():
+    enc = _ref_graph("qwen21")["encode"]["inputs"]
+    assert enc["images.image_1"] == ["scale", 0]
+    assert enc["images.image_2"] == ["ref1_scale", 0] and enc["images.image_3"] == ["ref2_scale", 0]
+
+
+def test_qwen21_generate_refs_start_at_image_1():
+    g = _ref_graph("qwen21_turbo", task="generate")
+    enc = g["encode"]["inputs"]
+    assert enc["images.image_1"] == ["ref1_scale", 0] and "images.image_3" not in enc
+    assert g["ref1_load"]["inputs"]["image"] == "a_ref.png" and "load" not in g
+
+
+def test_qwen_edit_refs_use_image2_and_image3_only():
+    g = _ref_graph("qwen_edit", refs=("1.png", "2.png", "3.png"))
+    enc = g["encode_raw"]["inputs"]
+    assert enc["image2"] == ["ref1_scale", 0] and enc["image3"] == ["ref2_scale", 0] and "image4" not in enc
+    assert "ref3_load" not in g
+
+
+def test_families_without_reference_slots_ignore_refs():
+    g = _ref_graph("zimage")
+    assert not any(k.startswith("ref") for k in g)
+
+
+def test_no_refs_keeps_the_single_image_graph():
+    enc = _ref_graph("qwen21", refs=())["encode"]["inputs"]
+    assert [k for k in enc if k.startswith("images.")] == ["images.image_1"]
+
+
+def test_edit_with_refs_gets_the_hidden_instruction():
+    enc = _ref_graph("qwen21")["encode"]["inputs"]["prompt"]
+    assert enc.startswith("Edit image 1.") and "The other images are only references" in enc and enc.endswith("x")
+
+
+def test_hidden_instruction_uses_picture_for_edit_2511_and_skips_generate_and_no_refs():
+    assert _ref_graph("qwen_edit", refs=("a.png",))["encode_raw"]["inputs"]["prompt"].startswith("Edit Picture 1.")
+    assert _ref_graph("qwen21", task="generate")["encode"]["inputs"]["prompt"] == "x"
+    assert _ref_graph("qwen21", refs=())["encode"]["inputs"]["prompt"] == "x"
+
+
+def test_custom_reference_note_replaces_or_turns_off_the_default():
+    p = dict(prompt="x", family="qwen21", task="edit", refs=["a.png"])
+    assert graphs.edit_prompt({**p, "ref_note": "  Keep image 1.  "}) == "Keep image 1.\n\nx"
+    assert graphs.edit_prompt({**p, "ref_note": ""}) == "x"
+
+
+def test_custom_keep_note_replaces_or_turns_off_the_paste_instruction():
+    p = {"prompt": "x", "mode": "paste"}
+    assert graphs.edit_prompt({**p, "keep_note": " Same picture. "}) == "x\n\nSame picture."
+    assert graphs.edit_prompt({**p, "keep_note": ""}) == "x"
+    assert graphs.edit_prompt({"prompt": "x", "mode": "inpaint", "keep_note": "Same picture."}) == "x"

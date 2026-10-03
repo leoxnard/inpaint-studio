@@ -45,7 +45,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson")
+                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_note", "keep_note")
 
 app = FastAPI(title="Inpaint Studio")
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
@@ -368,7 +368,7 @@ async def list_runs():
             runs.append(json.loads(f.read_text()))
         except (OSError, json.JSONDecodeError):
             continue
-    runs = [r for r in runs if r.get("status") == "done"]
+    runs = [r for r in runs if r.get("status") == "done" and not r.get("hidden")]
     return sorted(runs, key=lambda r: r.get("created", 0), reverse=True)
 
 
@@ -381,6 +381,18 @@ async def delete_run(run_id: str):
         f.unlink()
     d.rmdir()
     return {"deleted": run_id}
+
+
+@app.post("/api/runs/{run_id}/hide")
+async def hide_run(run_id: str):
+    """Removes a run from the history without deleting any file (run.json gets hidden: true)."""
+    f = (RUNS / run_id / "run.json").resolve()
+    if f.parent.parent != RUNS.resolve() or not f.is_file():
+        raise HTTPException(404, "run not found")
+    run = json.loads(f.read_text())
+    run["hidden"] = True
+    save_run(run)
+    return {"hidden": run_id}
 
 
 # ---------------------------------------------------------------- live edit over websocket
@@ -610,6 +622,9 @@ async def create_job(params: dict):
         params.update({k: params.get(k) or v for k, v in resolved.items()})
     if params.get("task") == "generate":
         params.update(use_mask=False, mask=None, image=None, denoise=1.0)
+    # extra reference images: only as many as the model's text encoder takes
+    refs = [r for r in (params.get("refs") or []) if isinstance(r, str) and r]
+    params["refs"] = refs[:graphs.MAX_REFS.get(params.get("family"), 0)]
     up = presets.COMPONENTS.get(params.get("upscaler") or "")
     if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler":
         params.update(upscale_model=up["path"].rsplit("/", 1)[-1], upscale_native=up["scale"])

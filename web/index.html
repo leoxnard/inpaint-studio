@@ -72,6 +72,13 @@
         </div>
       </section>
 
+      <section class="sec" id="refsSec" hidden>
+        <h2 class="h">Reference images</h2>
+        <p class="hint" id="refsHint"></p>
+        <div class="batch-grid" id="refGrid"></div>
+        <input type="file" id="refInput" accept="image/*" multiple hidden>
+      </section>
+
       <section class="sec" id="sizeSec">
         <h2 class="h">Size</h2>
         <div class="aspect-tiles gen-only" id="aspectTiles" role="radiogroup" aria-label="Aspect ratio"></div>
@@ -180,7 +187,6 @@
         <label>Prompt
           <textarea id="prompt" rows="4">Replace the person with a walking dog. Keep everything else unchanged.</textarea>
         </label>
-        <label class="check needs-mask paste-only edit-only" id="keepIdenticalRow" title="Free edit + paste only: appends an instruction to keep everything except the described change identical to the original, so the pasted area lines up."><input type="checkbox" id="keepIdentical" checked> Keep everything else identical</label>
       </div>
 
       <div class="sec">
@@ -241,6 +247,18 @@
           <label>Sampler <select id="sampler"></select></label>
           <label>Scheduler <select id="scheduler"></select></label>
         </div>
+        <div class="stack needs-mask paste-only edit-only" id="keepNoteRow">
+          <label title="Free edit + paste: added after your prompt so everything outside the change stays where it is and the pasted area lines up. Empty = no instruction.">Keep-identical instruction
+            <textarea id="keepNote" rows="4"></textarea>
+          </label>
+          <button type="button" class="linkbtn" id="keepNoteReset">Reset to default</button>
+        </div>
+        <div class="stack" id="refNoteRow" hidden>
+          <label title="Sent in front of your prompt when you edit with reference images, so the model keeps image 1 as the image to edit. Empty = no instruction.">Reference instruction
+            <textarea id="refNote" rows="5"></textarea>
+          </label>
+          <button type="button" class="linkbtn" id="refNoteReset">Reset to default</button>
+        </div>
         <label>UNet <select id="unet"></select></label>
         <label>CLIP <select id="clip"></select></label>
         <label>VAE <select id="vae"></select></label>
@@ -254,6 +272,8 @@
       </div>
     </aside>
 
+    <div class="col-resizer" data-side="left" role="separator" aria-orientation="vertical" aria-label="Resize left column" title="Drag to resize, double-click to reset"></div>
+    <div class="col-resizer" data-side="right" role="separator" aria-orientation="vertical" aria-label="Resize right column" title="Drag to resize, double-click to reset"></div>
   </div>
 
   <div class="layout runs" id="runsView" hidden>
@@ -323,7 +343,6 @@
       <div class="steps" id="stepsBar" hidden>
         <div class="row wrap">
           <span class="hint" id="stepsTitle">Saved steps</span>
-          <label class="check"><input type="checkbox" id="viewLive"> Live previews</label>
         </div>
         <div class="filmstrip" id="filmstrip"></div>
       </div>
@@ -349,6 +368,10 @@
           <h2 class="h">Prompt</h2>
           <p class="det-prompt" id="detPrompt"></p>
         </section>
+        <section class="sec" id="detRefsSec" hidden>
+          <h2 class="h">Reference images</h2>
+          <div class="batch-grid" id="detRefs"></div>
+        </section>
         <section class="sec">
           <h2 class="h">Settings</h2>
           <dl class="dl" id="detSettings"></dl>
@@ -368,6 +391,8 @@
         </section>
       </div>
     </aside>
+    <div class="col-resizer" data-side="left" role="separator" aria-orientation="vertical" aria-label="Resize left column" title="Drag to resize, double-click to reset"></div>
+    <div class="col-resizer" data-side="right" role="separator" aria-orientation="vertical" aria-label="Resize right column" title="Drag to resize, double-click to reset"></div>
   </div>
   </div>
 

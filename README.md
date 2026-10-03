@@ -19,6 +19,16 @@ The UI has two views, switched in the header (the address keeps the view, e.g. `
 The app predicts the working size and warns (or auto-fixes) when it would exceed ~4096 latent
 tokens, the point where the edit turns into gray noise on Apple Silicon.
 
+## Reference images
+Qwen-Image 2.1 (UC, official, Viggle Turbo) takes up to 3 extra images, Qwen-Image-Edit 2511 up to 2.
+Add them under **Reference images** in Create and refer to them in the prompt: when you edit, your
+image is image 1 and the references are image 2, 3 …; when you generate, they start at image 1
+("Place the red apple from image 2 on the sand"). They are scaled like the main image and saved
+with the run. When you edit, the model also gets a hidden instruction that image 1 is the image to
+edit and the others are only references; without it, a vague prompt ("Show this dog in a meadow")
+made the result take over the reference's framing. You can change or empty this instruction under **Advanced → Reference instruction**. Each reference makes the run much slower: one extra image at 0.95 MP took the
+6-step Turbo edit from about 1 to about 7 minutes on a 32 GB Mac, without gray noise.
+
 ## Batch (folder)
 Open a folder or drop several images: they appear as a thumbnail grid and nothing starts on its
 own. Go through them one by one (mask, refine, **Submit and next**; each image keeps its own mask),
@@ -42,7 +52,7 @@ page is reloaded or closed. The backend cannot reorder or pause the queue.
 ## Run history
 Every finished run is stored in `~/Library/Application Support/Inpaint Studio/runs/` (override with
 `INPAINT_STUDIO_DATA`) and listed again after a reload, including its step frames, before/after
-and the raw edit. Failed runs show up in the results only until the page is reloaded. Deleting a
+and the raw edit. Failed runs show up in the results only until the page is reloaded. The × on a result removes it from the history without deleting any file (its run.json gets `hidden: true`); **Delete run** removes its run folder. Deleting a
 run keeps the images in the ComfyUI output folder. Runs are numbered by creation time ("Run 3"),
 so the numbers shift when you delete an older run.
 
@@ -103,7 +113,7 @@ Chosen under **Area to change** in Create.
 - **Whole image** – no mask, the prompt can change everything.
 - **Masked area, inpaint** – only the masked area is re-generated.
 - **Masked area, free edit + paste** – the whole image is edited, then only the masked area is pasted into
-  the original (starting from the original latent, so it stays aligned). Optionally tells the
-  model to keep everything else identical; the UI shows the raw edit and how much it differs
+  the original (starting from the original latent, so it stays aligned). By default it tells the
+  model to keep everything else identical (editable or off under Advanced → Keep-identical instruction); the UI shows the raw edit and how much it differs
   from the original outside the mask. Try this when the model keeps redrawing the old content
   or the inpainted background looks out of context.

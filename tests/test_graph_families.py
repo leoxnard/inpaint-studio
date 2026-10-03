@@ -21,13 +21,15 @@ CASES = [(pid, task, use_mask, mode, every)
          for use_mask in ([False] if task == "generate" else [False, True])
          for mode in (["inpaint"] if task == "generate" else ["inpaint", "paste"])
          for every in (0, 2)]
+# with extra reference images (every second case), so their nodes are validated too
+CASES = [(*c, ["r1.png", "r2.png", "r3.png", "r4.png"] if i % 2 else []) for i, c in enumerate(CASES)]
 
 
 @pytest.mark.skipif(OBJECT_INFO is None, reason="ComfyUI not running")
-@pytest.mark.parametrize("pid,task,use_mask,mode,every", CASES)
-def test_graph_matches_comfy_nodes(pid, task, use_mask, mode, every):
+@pytest.mark.parametrize("pid,task,use_mask,mode,every,refs", CASES)
+def test_graph_matches_comfy_nodes(pid, task, use_mask, mode, every, refs):
     files = presets.resolve(pid, None)
-    g = graphs.build_edit_graph(dict(BASE, **files, task=task, use_mask=use_mask, mode=mode, save_every=every,
+    g = graphs.build_edit_graph(dict(BASE, **files, task=task, use_mask=use_mask, mode=mode, save_every=every, refs=refs,
                                      upscale=2 if every else 0, upscale_model="4x.safetensors", upscale_native=4))
     for nid, node in g.items():
         info = OBJECT_INFO.get(node["class_type"])

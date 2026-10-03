@@ -107,10 +107,42 @@ KEEP_IDENTICAL = ("Keep everything else in the image exactly identical to the or
                   "Only change what is described above.")
 
 
+# extra reference images (besides the edited image) the text encoder of each family takes:
+# TextEncodeQwenImage21 has up to 16 slots, TextEncodeQwenImageEditPlus 3 in total (image1 = edited image)
+MAX_REFS = {"qwen21": 3, "qwen21_turbo": 3, "qwen_edit": 2}
+
+
+REF_NOTE = ("Edit {main}. The result keeps the framing, composition, camera angle and perspective of {main} "
+            "and everything in it that the instruction does not change. The other images are only references "
+            "for what the instruction takes from them.")
+
+
+def reference_note(p: dict[str, Any]) -> str:
+    """Hidden instruction for edits with extra reference images: without it the model sometimes takes
+    a reference as the image to edit (its framing and all) when the prompt does not say which is which.
+    Uses the encoder's own name for the image (Qwen 2.1: <image1>, Edit 2511: "Picture 1").
+    p["ref_note"] overrides it (Advanced in the UI); an empty string turns it off."""
+    family = p.get("family", "qwen21")
+    if not min(len(p.get("refs") or []), MAX_REFS.get(family, 0)) or p.get("task") == "generate":
+        return ""
+    if p.get("ref_note") is not None:
+        return str(p["ref_note"]).strip()
+    return REF_NOTE.format(main="Picture 1" if family == "qwen_edit" else "image 1")
+
+
 def edit_prompt(p: dict[str, Any]) -> str:
-    if p.get("mode") == "paste" and p.get("keep_identical", True):
-        return f"{p['prompt'].strip()}\n\n{KEEP_IDENTICAL}"
-    return p["prompt"]
+    prompt = p["prompt"]
+    if note := reference_note(p):
+        prompt = f"{note}\n\n{prompt.strip()}"
+    if p.get("mode") == "paste":
+        # p["keep_note"] replaces the default (Advanced in the UI), empty turns it off;
+        # keep_identical=False is the older way to turn it off
+        keep = KEEP_IDENTICAL if p.get("keep_identical", True) else ""
+        if p.get("keep_note") is not None:
+            keep = str(p["keep_note"]).strip()
+        if keep:
+            return f"{prompt.strip()}\n\n{keep}"
+    return prompt
 
 
 CLIP_TYPES = {"qwen21": "qwen_image", "qwen21_turbo": "qwen_image", "qwen_edit": "qwen_image", "qwen": "qwen_image",
@@ -121,6 +153,18 @@ VIGGLE_NODES = {5: "1.0, 0.875, 0.75, 0.5, 0.25", 6: "1.0, 0.9375, 0.875, 0.75, 
                 7: "1.0, 0.9583, 0.9167, 0.875, 0.75, 0.5, 0.25"}
 
 
+def reference_images(g: dict[str, Any], p: dict[str, Any], family: str) -> list[list]:
+    """Load and scale the extra reference images (p["refs"], input filenames) like the main image."""
+    links = []
+    for i, name in enumerate((p.get("refs") or [])[:MAX_REFS.get(family, 0)], start=1):
+        g[f"ref{i}_load"] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        g[f"ref{i}_scale"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+            "image": [f"ref{i}_load", 0], "upscale_method": "lanczos", "megapixels": p["megapixels"],
+            "resolution_steps": SCALE_STEPS}}
+        links.append([f"ref{i}_scale", 0])
+    return links
+
+
 def turbo_steps(steps: int) -> int:
     return min(7, max(5, int(steps)))
 
@@ -128,7 +172,8 @@ def turbo_steps(steps: int) -> int:
 def build_edit_graph(p: dict[str, Any]) -> dict:
     """Step 2: edit an input image (task "edit") or generate from text (task "generate").
 
-    Expected keys: image, mask (input filename or None), use_mask, megapixels, resolution,
+    Expected keys: image, mask (input filename or None), refs (extra reference images, optional),
+    use_mask, megapixels, resolution,
     prompt, negative, steps, denoise, seed, cfg, sampler, scheduler, feather,
     unet, clip, vae, prefix, mode, family, task.
 
@@ -158,13 +203,17 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
         g["unet"] = {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}}
 
     prompt, negative = edit_prompt(p), p.get("negative", "")
+    refs = reference_images(g, p, family)
     ref_latent = None
     if family in ("qwen21", "qwen21_turbo"):
         g["model"] = {"class_type": "QwenImage21Cache", "inputs": {"model": ["unet", 0], "device": "auto", "dtype": "default"}}
         g["encode"] = {"class_type": "TextEncodeQwenImage21", "inputs": {
             "clip": ["clip", 0], "vae": ["vae", 0], "prompt": prompt, "negative_prompt": negative, "resolution": p["resolution"]}}
+        # the edited image is image 1 (its size sets the latent), extra references follow
+        images = refs if generate else [["scale", 0], *refs]
+        for i, link in enumerate(images, start=1):
+            g["encode"]["inputs"][f"images.image_{i}"] = link
         if not generate:
-            g["encode"]["inputs"]["images.image_1"] = ["scale", 0]
             ref_latent = ["encode", 2]
         pos, neg = ["encode", 0], ["encode", 1]
     elif family == "qwen_edit":
@@ -172,7 +221,8 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
         g["model"] = {"class_type": "CFGNorm", "inputs": {"model": ["model_shift", 0], "strength": 1.0}}
         for key, text in (("encode", prompt), ("encode_neg", negative)):
             g[f"{key}_raw"] = {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {
-                "clip": ["clip", 0], "prompt": text, "vae": ["vae", 0], "image1": ["scale", 0]}}
+                "clip": ["clip", 0], "prompt": text, "vae": ["vae", 0], "image1": ["scale", 0],
+                **{f"image{i}": link for i, link in enumerate(refs, start=2)}}}
             g[key] = {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {
                 "conditioning": [f"{key}_raw", 0], "reference_latents_method": "index_timestep_zero"}}
         pos, neg = ["encode", 0], ["encode_neg", 0]

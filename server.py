@@ -554,11 +554,14 @@ async def adjust_run(run: dict, req: AlignReq) -> dict:
     original, raw, mask = _align_cache[run_id]
     feather = int(run.get("params", {}).get("feather") or 0)
     outpaint = bool(run.get("params", {}).get("outpaint"))
-    if outpaint:   # extend canvas: wide fade into the old image, colour gain instead of a seam cut
+    if outpaint:   # extend canvas: old image moved to where the model put it, wide fade, colour gain, no seam cut
         mask = align.outpaint_paste_mask(mask.resize(raw.size), 0.09 * max(raw.size))
+        original, mask, moved = await asyncio.to_thread(align.outpaint_align, original, raw, mask)
     elif feather > 0 and "type=input" in run["mask_url"]:  # newer runs keep only the uploaded hard mask
         mask = mask.convert("L").filter(ImageFilter.GaussianBlur(max(1.0, feather / 3)))
     result: dict[str, Any] = {}
+    if outpaint and moved.get("moved"):
+        result["reframed"] = {k: round(moved[k], 3) for k in ("dx", "dy", "scale")}
     dx, dy, scale = req.dx, req.dy, req.scale
     if req.auto:
         est = await asyncio.to_thread(align.estimate, original, raw, mask)

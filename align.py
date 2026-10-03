@@ -248,6 +248,21 @@ def outpaint_paste_mask(mask: Image.Image, width: float) -> Image.Image:
     return Image.fromarray((w * 255).astype(np.uint8))
 
 
+def outpaint_align(original: Image.Image, raw: Image.Image, mask: Image.Image) -> tuple[Image.Image, Image.Image, dict]:
+    """Outpainting (paste method): with a lot of new area the model often re-frames the whole picture
+    (the old part shifted, a little smaller). Instead of moving the model's picture back (which uncovers its
+    edges), the old image and the mask are moved to where the model put them, so its whole layout stays.
+    mask: the paste mask (white = generated). Returns the moved original, the moved mask and the estimate."""
+    est = estimate(original, raw.resize(original.size, Image.BICUBIC), mask.resize(original.size))
+    dx, dy, s = est["dx"], est["dy"], est["scale"]
+    if abs(dx) < 0.5 and abs(dy) < 0.5 and abs(s - 1) < 0.002 or not 0.8 <= s <= 1.25 or max(abs(dx), abs(dy)) > 0.25 * max(original.size):
+        return original, mask, {**est, "moved": False}
+    inv = (-dx / s, -dy / s, 1 / s)   # the inverse of `transform`: the original onto the model's grid
+    moved = transform(original.convert("RGB"), *inv)
+    moved_mask = transform(mask.convert("L").resize(original.size), *inv, fill=255)   # uncovered = generated
+    return moved, moved_mask, {**est, "moved": True}
+
+
 def compose(original: Image.Image, raw: Image.Image, mask: Image.Image,
             dx: float, dy: float, scale: float,
             colors: bool = False, warp: bool = False, poisson: bool = False,

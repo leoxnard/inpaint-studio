@@ -80,3 +80,21 @@ def test_outpaint_paste_mask_fades_only_into_the_old_image():
     out = np.asarray(align.outpaint_paste_mask(Image.fromarray(m), 40))
     assert (out[:, :100] == 255).all()     # the new area stays fully generated
     assert out[50, 110] > 128 > out[50, 130] and (out[:, 145:] == 0).all()
+
+
+def test_outpaint_align_moves_the_original_to_where_the_model_put_it():
+    import numpy as np
+    from PIL import Image
+
+    import align
+    rng = np.random.default_rng(1)
+    big = Image.fromarray(rng.integers(0, 255, (300, 400, 3), dtype=np.uint8)).resize((800, 600), Image.BICUBIC)
+    original = big.crop((0, 0, 800, 600))
+    raw = align.transform(original, 0, -30, 1.0)          # the model drew everything 30 px higher
+    m = np.zeros((600, 800), np.uint8)
+    m[:, :200] = 255                                       # new area on the left
+    moved, moved_mask, est = align.outpaint_align(original, raw, Image.fromarray(m))
+    assert est["moved"] and abs(est["dy"] - 30) < 2       # the shift that maps the model image back onto the original
+    a, b = np.asarray(moved, float)[100:500, 300:700], np.asarray(raw, float)[100:500, 300:700]
+    assert np.abs(a - b).mean() < 6                        # the moved original now lines up with the model's image
+    assert (np.asarray(moved_mask)[-20:, 300:700] == 255).all()   # uncovered bottom counts as generated

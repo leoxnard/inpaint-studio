@@ -502,6 +502,99 @@ function moveCursor(e) {
   cur.style.top = `${e.clientY}px`;
 }
 
+// ------------------------------------------------------------------ zoom and pan
+// The canvas keeps its fit-to-stage layout; zoom/pan are a CSS transform (origin 0 0) on top, so
+// getBoundingClientRect() in canvasPoint()/moveCursor() stays correct.
+const stageEl = $("stage"), zoomBadge = $("zoomBadge");
+const zoomView = { z: 1, tx: 0, ty: 0 }, ZOOM_MAX = 8;
+let spaceDown = false;
+function applyZoom() {
+  const v = zoomView;
+  if (v.z <= 1.001) { v.z = 1; v.tx = v.ty = 0; }
+  else {   // keep at least a margin of the image inside the stage
+    const sw = stageEl.clientWidth, sh = stageEl.clientHeight, w = display.offsetWidth * v.z, h = display.offsetHeight * v.z;
+    const ox = display.offsetLeft, oy = display.offsetTop, m = Math.min(80, sw / 3, sh / 3);
+    v.tx = Math.min(sw - m - ox, Math.max(m - w - ox, v.tx));
+    v.ty = Math.min(sh - m - oy, Math.max(m - h - oy, v.ty));
+  }
+  display.style.transformOrigin = "0 0";
+  display.style.transform = v.z === 1 ? "" : `translate(${v.tx}px, ${v.ty}px) scale(${v.z})`;
+  zoomBadge.hidden = v.z === 1;
+  zoomBadge.textContent = `${Math.round(v.z * 100)} %`;
+}
+function resetZoom() { zoomView.z = 1; zoomView.tx = zoomView.ty = 0; applyZoom(); }
+// zoom to nz keeping the stage point (cx, cy) (client coordinates) fixed
+function zoomAt(nz, cx, cy) {
+  const v = zoomView, sr = stageEl.getBoundingClientRect();
+  nz = Math.min(ZOOM_MAX, Math.max(1, nz));
+  const px = cx - sr.left - display.offsetLeft, py = cy - sr.top - display.offsetTop;   // point in unscaled canvas space + translation
+  const k = nz / v.z;
+  v.tx = px - (px - v.tx) * k; v.ty = py - (py - v.ty) * k; v.z = nz;
+  applyZoom();
+}
+function zoomCenter(f) { const r = stageEl.getBoundingClientRect(); zoomAt(zoomView.z * f, r.left + r.width / 2, r.top + r.height / 2); }
+zoomBadge.onclick = resetZoom;
+stageEl.addEventListener("wheel", (e) => {
+  if (!state.imgEl) return;
+  if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomAt(zoomView.z * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.01)), e.clientX, e.clientY); }
+  else if (zoomView.z > 1) { e.preventDefault(); zoomView.tx -= e.deltaX; zoomView.ty -= e.deltaY; applyZoom(); }
+}, { passive: false });
+// pointers: space/middle-button drag pans, two touches pinch (+ pan)
+const zptrs = new Map();   // active touch pointers on the stage
+let zdrag = null, zpinch = null;
+function pinchState() { const [a, b] = [...zptrs.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 }; }
+stageEl.addEventListener("pointerdown", (e) => {
+  if (!state.imgEl || e.target === zoomBadge) return;
+  if (e.pointerType === "touch") {
+    zptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (zptrs.size === 2) {
+      if (stroking) { stroking = false; last = null; undo(); }   // the first finger only started a dot
+      zpinch = pinchState(); zpinch.z = zoomView.z;
+    }
+    if (zptrs.size >= 2) e.stopPropagation();
+    return;
+  }
+  if (e.button === 1 || (e.button === 0 && spaceDown)) {
+    e.preventDefault(); e.stopPropagation();
+    zdrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    stageEl.setPointerCapture(e.pointerId);
+    stageEl.classList.add("panning");
+  }
+}, true);
+stageEl.addEventListener("pointermove", (e) => {
+  if (zdrag && e.pointerId === zdrag.id) {
+    e.stopPropagation();
+    zoomView.tx += e.clientX - zdrag.x; zoomView.ty += e.clientY - zdrag.y;
+    zdrag.x = e.clientX; zdrag.y = e.clientY; applyZoom();
+  } else if (zptrs.has(e.pointerId)) {
+    zptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (zptrs.size >= 2 && zpinch) {
+      e.stopPropagation();
+      const n = pinchState(), v = zoomView;
+      v.tx += n.cx - zpinch.cx; v.ty += n.cy - zpinch.cy;   // two-finger pan
+      zoomAt(zpinch.z * n.d / zpinch.d, n.cx, n.cy);
+      zpinch.cx = n.cx; zpinch.cy = n.cy;
+    }
+  }
+}, true);
+const zEnd = (e) => {
+  if (zdrag && e.pointerId === zdrag.id) { zdrag = null; stageEl.classList.remove("panning"); }
+  if (zptrs.delete(e.pointerId) && zptrs.size < 2) zpinch = null;
+};
+stageEl.addEventListener("pointerup", zEnd, true);
+stageEl.addEventListener("pointercancel", zEnd, true);
+document.addEventListener("keydown", (e) => {
+  if (state.view !== "create" || !state.imgEl || e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = document.activeElement;
+  if (/INPUT|TEXTAREA|SELECT|BUTTON/.test(t.tagName) || t.isContentEditable) return;
+  if (e.key === " ") { e.preventDefault(); spaceDown = true; stageEl.classList.add("pannable"); }
+  else if (e.key === "0") resetZoom();
+  else if (e.key === "+" || e.key === "=") zoomCenter(1.5);
+  else if (e.key === "-") zoomCenter(1 / 1.5);
+});
+document.addEventListener("keyup", (e) => { if (e.key === " ") { spaceDown = false; stageEl.classList.remove("pannable"); } });
+window.addEventListener("blur", () => { spaceDown = false; stageEl.classList.remove("pannable"); });
+
 function setMode(mode) {
   state.mode = mode;
   for (const b of $("brushMode").children) b.classList.toggle("active", b.dataset.mode === mode);
@@ -569,7 +662,7 @@ async function setImageFile(file) {
     const url = URL.createObjectURL(file);
     const im = await loadImage(url);
     if (state.imgUrl) URL.revokeObjectURL(state.imgUrl);
-    state.imgUrl = url; state.imgEl = im;
+    state.imgUrl = url; state.imgEl = im; resetZoom();
     state.imageName = up.name; state.srcW = up.width; state.srcH = up.height;
     state.imageLabel = file.name || "image";
     $("imageInfo").textContent = `${file.name || "image"} – original ${up.width}×${up.height}`;
@@ -809,6 +902,7 @@ function jobFromSummary(sum) {
   job.status = sum.status || job.status;
   job.value = sum.value || job.value;
   if (sum.phase) job.phase = sum.phase;
+  if (sum.reattached) job.reattached = true;
   if (sum.decode_steps) job.decodeSteps = sum.decode_steps;
   if (sum.size) job.size = sum.size;
   if (sum.frames) job.frames = sum.frames.map((f) => ({ ...f }));
@@ -934,6 +1028,8 @@ function connectJobs() {
 // the step being computed is value + 1; the first sampler node also loads the diffusion model.
 function stepText(job) {
   if (job.status !== "running") return "Waiting";
+  // followed again after a server restart: ComfyUI only reports progress to the original connection
+  if (job.reattached) return "Reattached after a restart, no live progress";
   const ph = job.phase;
   if (!ph) return "Starting…";
   if (ph.phase !== "sample") return PHASE_NAMES[ph.phase] + (ph.detail ? ` · ${ph.detail}` : "");
@@ -1369,12 +1465,25 @@ function renderDetails(run, status) {
   $("cancelRun").textContent = run.cancelling ? "Cancelling…" : "Cancel run";
   $("removeRun").textContent = run.cancelling ? "Removing…" : "Remove from queue";
   $("deleteRun").hidden = !(done || status === "error");
+  $("retryRun").hidden = status !== "error";
   $("matchInfo").textContent = run.match || "";
 }
 
 $("cancelRun").onclick = () => { if (state.run && state.jobs.has(state.run.id)) cancelJob(state.run); };
 $("removeRun").onclick = $("cancelRun").onclick;
 $("deleteRun").onclick = () => { if (state.run) deleteRun(state.run); };
+$("retryRun").onclick = async () => {
+  const run = state.run;
+  if (!run?.serverId) return;
+  try {
+    const sum = await api(`/api/runs/${encodeURIComponent(run.serverId)}/retry`, { method: "POST" });
+    const job = jobFromSummary(sum);
+    renderQueue();
+    state.follow = true;
+    viewJob(job);
+    showToast("Queued again");
+  } catch (e) { showError(e.message); }
+};
 $("loadSettings").onclick = () => { if (state.run?.params) loadRunSettings(state.run); };
 
 // ------------------------------------------------------------------ persisted run history
@@ -2028,7 +2137,7 @@ async function restoreSession() {
   if (!sess || !sess.imageName) return false;
   try {
     const im = await loadImage(inputViewUrl(sess.imageName));
-    state.imgEl = im; state.imgUrl = null;
+    state.imgEl = im; state.imgUrl = null; resetZoom();
     state.imageName = sess.imageName; state.srcW = sess.srcW; state.srcH = sess.srcH;
     state.imageLabel = sess.label || "image";
     $("imageInfo").textContent = `${sess.label || "image"} – original ${sess.srcW}×${sess.srcH} (restored)`;
@@ -2216,7 +2325,7 @@ async function openBatchItem(i) {
   try {
     await ensureUploaded(it);
     const im = await loadImage(it.thumbUrl);
-    state.imgEl = im; state.imgUrl = null;
+    state.imgEl = im; state.imgUrl = null; resetZoom();
     state.imageName = it.name; state.srcW = it.srcW; state.srcH = it.srcH;
     state.imageLabel = it.label;
     state.batchIdx = i;

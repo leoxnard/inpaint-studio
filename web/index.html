@@ -122,6 +122,7 @@
       <div class="stagebar"><span class="spacer"></span><span class="hint" id="stageInfo"></span></div>
       <div class="stage edit-only" id="stage">
         <canvas id="display"></canvas>
+        <button type="button" class="zoom-badge" id="zoomBadge" hidden title="Reset zoom (0)">100 %</button>
         <div class="empty" id="stageEmpty">Load an image to start: drop it anywhere or use Image on the left.</div>
         <div class="spinner-wrap" id="maskSpinner" hidden><div class="spinner"></div><span>Computing mask...</span></div>
       </div>
@@ -421,6 +422,7 @@
           <button id="downloadSteps">Download shown steps</button>
           <button id="cancelRun">Cancel run</button>
           <button id="removeRun">Remove from queue</button>
+          <button id="retryRun" class="primary" hidden title="Queue this run again with the same settings">Retry</button>
           <button id="deleteRun" class="danger">Delete run</button>
           <span class="hint" id="matchInfo"></span>
         </section>

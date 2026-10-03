@@ -53,7 +53,8 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 20px; border-bottom: 1px solid var(--hairline); background: var(--canvas);
 }
-.topbar h1 { font: 600 20px/1.2 var(--font-head); margin: 0; }
+.topbar h1 { font: 600 20px/1.2 var(--font-head); margin: 0; display: flex; align-items: center; gap: 10px; }
+.topbar h1 img { display: block; flex: none; }
 h1, h2 { font-family: var(--font-head); }
 .topbar .spacer { flex: 1; }
 .viewswitch { display: flex; gap: 4px; border: 1px solid var(--hairline-strong); border-radius: var(--r-pill); padding: 3px; }

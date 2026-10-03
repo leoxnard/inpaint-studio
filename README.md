@@ -1,3 +1,5 @@
+<img src="design/app-icon.svg" alt="" width="96" height="96">
+
 # Inpaint Studio
 
 A small local web app for mask-based image editing with **Qwen-Image 2.1** through a running

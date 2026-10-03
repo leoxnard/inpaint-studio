@@ -9,6 +9,7 @@ OUT="${1:-$HOME/Applications/Inpaint Studio.app}"
 BUILD="$(mktemp -d)/Inpaint Studio.app"
 C="$BUILD/Contents"
 mkdir -p "$C/MacOS" "$C/Resources/app"
+cp macos/AppIcon.icns "$C/Resources/"  # made from design/app-icon.svg
 swiftc -O -target "$(uname -m)-apple-macos12" -o "$C/MacOS/InpaintStudio" macos/InpaintStudio.swift
 cat > "$C/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -18,6 +19,7 @@ cat > "$C/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Inpaint Studio</string>
   <key>CFBundleIdentifier</key><string>de.leonardsima.inpaintstudio</string>
   <key>CFBundleExecutable</key><string>InpaintStudio</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>

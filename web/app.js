@@ -333,6 +333,7 @@ function undo() {
 // ------------------------------------------------------------------ rendering
 let raf = 0;
 function render() {
+  if (upscaling()) updateUpscaleSizes();
   if (raf) return;
   raf = requestAnimationFrame(() => { raf = 0; draw(); });
 }
@@ -3012,7 +3013,7 @@ function installedUpscalers() {
   const ok = (k) => comps.some((c) => c.key === k && c.installed);
   return comps.filter((c) => c.kind === "upscaler" && c.installed && (c.needs || []).every(ok));
 }
-const upscaling = () => state.task === "edit" && !!$("upscaleModel").value;
+function upscaling() { return state.task === "edit" && !!$("upscaleModel").value; }
 
 function initModelPicker() {
   renderModelPicker({ applyDefaults: !storedForm().preset });
@@ -3032,11 +3033,27 @@ function initModelPicker() {
     if (pid !== $("preset").value) { $("preset").value = pid; $("preset").dispatchEvent(new Event("change")); }
     $("quant").value = q;
     $("quant").dispatchEvent(new Event("change"));
+    syncTaskUi();   // leaves upscale mode also when the same model is picked again
     $("modelSel").title = $("modelSel").selectedOptions[0]?.textContent || "";
   });
 }
 
 // UI parts that depend on the task and the selected model family
+// what ×2 / ×4 (and the chosen factor) mean in pixels, for the loaded image or an example size
+function updateUpscaleSizes() {
+  if (!upscaling()) return;
+  const [w, h] = state.srcW ? [state.srcW, state.srcH] : [1024, 1024];
+  const f = parseFloat($("upscaleFactor").value) || 2;
+  const line = (k) => {
+    const W = Math.round(w * k), H = Math.round(h * k);
+    const t = `×${k} → ${W} × ${H} px (${(W * H / 1e6).toFixed(1)} MP)`;
+    return k === f ? `<b>${t}</b>` : t;
+  };
+  const factors = [...new Set([2, 4, f])].sort((a, b) => a - b);
+  $("upscaleSizes").innerHTML = `${state.srcW ? "Now" : "Example"}: ${w} × ${h} px<br>${factors.map(line).join("<br>")}`;
+}
+$("upscaleFactor").addEventListener("input", updateUpscaleSizes);
+
 function syncTaskUi() {
   const gen = state.task === "generate";
   $("task").value = state.task;
@@ -3047,6 +3064,7 @@ function syncTaskUi() {
   $("upscaleHint").textContent = up ? (up.engine === "seedvr2"
     ? "SeedVR2 redraws fine detail in one step. Slow and memory-hungry at large sizes."
     : `${up.title}: upscales ${up.scale}× natively, other factors are resized from that.`) : "";
+  updateUpscaleSizes();
   setMode(state.mode);   // brush cursor only while the mask can be painted
   if (state.maskUiReady) applyMaskTexts();
   if (state.imgEl) render();   // the mask overlay hides while upscaling

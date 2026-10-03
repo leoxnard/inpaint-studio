@@ -1240,7 +1240,8 @@ function jobFromSummary(sum) {
   let job = state.jobs.get(sum.job_id);
   if (!job) {
     job = { id: sum.job_id, serverId: sum.job_id, prompt: sum.prompt, seed: sum.seed, steps: sum.steps,
-      max: sum.steps, value: 0, frames: [], done: false, status: "queued", started: null, created: sum.created };
+      max: sum.steps, value: 0, frames: [], done: false, status: "queued", started: null, created: sum.created,
+      task: sum.task, params: { upscaler: sum.upscaler } };
     state.jobs.set(sum.job_id, job);
   }
   job.status = sum.status || job.status;
@@ -1387,7 +1388,7 @@ function stepText(job) {
   if (job.reattached) return "Reattached after a restart, no live progress";
   const ph = job.phase;
   if (!ph) return "Starting…";
-  if (ph.phase !== "sample") return PHASE_NAMES[ph.phase] + (ph.detail ? ` · ${ph.detail}` : "");
+  if (ph.phase !== "sample") return phaseInfo(job).names[ph.phase] + (ph.detail ? ` · ${ph.detail}` : "");
   if (!job.value) return `Loading the model, then step 1 of ${job.max}`;
   let txt = `Step ${Math.min(job.value + 1, job.max)} of ${job.max}`;
   const eta = stepEta(job);
@@ -1467,6 +1468,13 @@ async function cancelJob(job) {
 // Workflow strip above the image: the current phase is marked, earlier ones are done
 const PHASES = ["load", "encode", "sample", "decode", "save"];
 const PHASE_NAMES = { load: "Load", encode: "Text encoder", sample: "Sampling", decode: "VAE decode", save: "Save" };
+// Upscale runs have no text encoder: SeedVR2 encodes the image with the VAE, a classic upscaler only loads and upscales
+function phaseInfo(run) {
+  if (runTask(run) !== "upscale") return { list: PHASES, names: PHASE_NAMES };
+  const comp = (state.setup?.components || []).find((c) => c.key === run.params?.upscaler);
+  if (comp?.engine === "seedvr2") return { list: PHASES, names: { ...PHASE_NAMES, encode: "VAE encode" } };
+  return { list: ["load", "save"], names: { load: "Load", save: "Upscale" } };
+}
 // "Step 3 of 7" under the image. ComfyUI reports a step when it is done, so while sampling the step
 // being computed is value + 1; the first sampler node also loads the diffusion model.
 function stepCount(run) {
@@ -1479,9 +1487,20 @@ function renderPipeline(run) {
   const live = !!(run && !run.done && state.jobs.has(run.id) && run.status === "running");
   $("pipeline").hidden = !live;
   if (!live) return;
-  const cur = PHASES.indexOf(run.phase?.phase);
-  for (const li of $("pipeline").children) {
-    const i = PHASES.indexOf(li.dataset.phase);
+  const { list, names } = phaseInfo(run);
+  const strip = $("pipeline");
+  if (strip.dataset.kind !== list.join()) {   // rebuild only when the run type changes
+    strip.dataset.kind = list.join();
+    strip.replaceChildren(...list.map((ph) => {
+      const li = document.createElement("li"), span = document.createElement("span");
+      li.dataset.phase = ph; span.textContent = names[ph]; li.appendChild(span);
+      return li;
+    }));
+  }
+  for (const li of strip.querySelectorAll("li")) li.firstChild.textContent = names[li.dataset.phase];
+  const cur = list.indexOf(run.phase?.phase);
+  for (const li of strip.children) {
+    const i = list.indexOf(li.dataset.phase);
     li.className = i === cur ? "now" : i < cur ? "done" : "";
   }
 }

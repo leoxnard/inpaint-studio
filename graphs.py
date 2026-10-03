@@ -464,6 +464,8 @@ def node_phase(node: str, class_type: str, chunks: list[tuple[int, int]] | None 
         return {"phase": "decode", "detail": "result"}
     if class_type in ("SaveImage", "PreviewImage") or class_type.startswith(("ImageComposite", "ImageUpscale", "Upscale")):
         return {"phase": "save", "detail": "upscaling" if "Upscale" in class_type else ""}
+    if node == "up_fit":   # fits a classic upscaler's output to the wanted factor
+        return {"phase": "save", "detail": "upscaling"}
     if class_type.startswith(("LoadImage", "ImageScale", "ImageCrop")) or class_type.endswith("Loader") \
             or "Loader" in class_type:
         return {"phase": "load", "detail": ""}

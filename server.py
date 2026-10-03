@@ -668,6 +668,7 @@ def job_summary(job: dict) -> dict:
     run = job["run"]
     return {"job_id": run["id"], "status": run["status"], "prompt": run["params"].get("prompt", ""),
             "seed": run["params"].get("seed"), "steps": run["params"].get("steps"), "value": job.get("value", 0),
+            "task": run["params"].get("task"), "upscaler": run["params"].get("upscaler"),
             "created": run["created"], "started": run.get("started"), "size": run.get("size"), "frames": run["frames"],
             "error": run.get("error"),
             "phase": job.get("phase"), "decode_steps": decode_steps(job["params"]), "reattached": job.get("reattached", False)}

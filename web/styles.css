@@ -219,12 +219,21 @@ body.dragging::after {
 }
 #genShape.tall { width: auto; height: min(80%, 640px); }
 /* mask panel under the stage: Find mask | Touch up */
+/* Find mask | Touch up; the line between them is dragged (--mp-split = width of Find mask), stacked when narrow */
 .maskpanel {
-  display: flex; flex-wrap: wrap; gap: 14px 24px; background: var(--surface); border: 1px solid var(--hairline);
+  --mp-split: 40%;
+  display: grid; grid-template-columns: minmax(260px, var(--mp-split)) 17px minmax(240px, 1fr); gap: 14px 6px;
+  background: var(--surface); border: 1px solid var(--hairline);
   border-radius: var(--r-card); padding: 14px 16px; flex: none;
 }
-.mp-find { flex: 3 1 340px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.mp-touch { flex: 2 1 240px; display: flex; flex-direction: column; gap: 10px; border-left: 1px solid var(--hairline); padding-left: 24px; min-width: 0; }
+.mp-find { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mp-touch { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding-left: 10px; }
+.mp-split { cursor: col-resize; touch-action: none; border-radius: 4px; outline-offset: -2px;
+  background: linear-gradient(var(--hairline), var(--hairline)) center / 1px 100% no-repeat; }
+.mp-split:hover, .mp-split.dragging, .mp-split:focus-visible { background-size: 3px 100%; background-image: linear-gradient(var(--hairline-strong), var(--hairline-strong)); }
+.maskpanel.stacked { grid-template-columns: minmax(0, 1fr); }
+.maskpanel.stacked .mp-split { display: none; }
+.maskpanel.stacked .mp-touch { padding-left: 0; border-top: 1px solid var(--hairline); padding-top: 14px; }
 .mp-find .row input { flex: 1; min-width: 0; }
 .mp-find .row button { flex: none; }
 .mp-params { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
@@ -310,7 +319,6 @@ label .lbl { display: flex; justify-content: space-between; gap: 8px; }
   .create-center { overflow: visible; padding: 16px; }
   .create-center .stage { flex: none; height: 60vh; min-height: 0; }
   .genframe { flex: none; min-height: 320px; }
-  .mp-touch { border-left: 0; padding-left: 0; border-top: 1px solid var(--hairline); padding-top: 14px; }
 }
 
 [hidden] { display: none !important; }

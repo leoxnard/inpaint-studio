@@ -2093,6 +2093,48 @@ for (const h of document.querySelectorAll(".col-resizer")) {
 }
 window.addEventListener("resize", debounce(applyCols, 150));
 
+// The line between Find mask and Touch up: dragged (or arrow keys), kept in this browser, double-click resets.
+// Below ~640 px the two parts stack.
+const MP_SPLIT_KEY = "inpaint-studio-mpsplit-v1", MP_SPLIT_DEFAULT = 40;
+{
+  const panel = document.querySelector(".maskpanel"), split = $("mpSplit");
+  const setSplit = (pct, save = true) => {
+    pct = Math.round(Math.min(70, Math.max(25, pct)) * 10) / 10;
+    panel.style.setProperty("--mp-split", `${pct}%`);
+    split.setAttribute("aria-valuenow", String(Math.round(pct)));
+    if (save) try { localStorage.setItem(MP_SPLIT_KEY, String(pct)); } catch { /* a convenience */ }
+  };
+  try { setSplit(parseFloat(localStorage.getItem(MP_SPLIT_KEY)) || MP_SPLIT_DEFAULT, false); } catch { setSplit(MP_SPLIT_DEFAULT, false); }
+  const pctAt = (x) => {
+    const r = panel.getBoundingClientRect(), pad = parseFloat(getComputedStyle(panel).paddingLeft) || 0;
+    return ((x - 14.5 - r.left - pad) / (r.width - 2 * pad)) * 100;   // the line is 6 px gap + half its 17 px right of Find mask
+  };
+  split.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { split.setPointerCapture(e.pointerId); } catch { /* moves still arrive over the handle */ }
+    split.classList.add("dragging");
+    document.body.classList.add("resizing");
+  });
+  split.addEventListener("pointermove", (e) => { if (split.classList.contains("dragging")) setSplit(pctAt(e.clientX), false); });
+  const end = () => {
+    if (!split.classList.contains("dragging")) return;
+    split.classList.remove("dragging");
+    document.body.classList.remove("resizing");
+    setSplit(parseFloat(panel.style.getPropertyValue("--mp-split")));
+  };
+  split.addEventListener("pointerup", end);
+  split.addEventListener("pointercancel", end);
+  split.addEventListener("dblclick", () => setSplit(MP_SPLIT_DEFAULT));
+  split.addEventListener("keydown", (e) => {
+    const step = e.key === "ArrowLeft" ? -2 : e.key === "ArrowRight" ? 2 : 0;
+    if (!step) return;
+    e.preventDefault();
+    setSplit(parseFloat(panel.style.getPropertyValue("--mp-split")) + step);
+  });
+  new ResizeObserver(() => panel.classList.toggle("stacked", panel.clientWidth < 640)).observe(panel);
+}
+
 // ------------------------------------------------------------------ wiring
 function bindOutput(id, outId, fmt = (v) => v) {
   const upd = () => { $(outId).textContent = fmt($(id).value); };

@@ -2,15 +2,15 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "inpaint-studio",
-      "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "uvicorn", "server:app", "--port", "7380"],
-      "port": 7380
-    },
-    {
       "name": "inpaint-studio-dev",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "uvicorn", "server:app", "--port", "7381"],
+      "runtimeArgs": [
+        "run",
+        "uvicorn",
+        "server:app",
+        "--port",
+        "7381"
+      ],
       "port": 7381
     }
   ]

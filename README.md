@@ -66,19 +66,30 @@ the original. The aligned result is saved next to the run; the original result s
 "Add edit to queue" puts a job into a server-side queue, so you can keep preparing the next
 edit. The Runs view shows each job (running with step x of y and the time left, waiting with its
 position); the Runs switch in the header shows how many are active. Jobs keep running when the
-page is reloaded or closed. The backend cannot reorder or pause the queue.
+page is reloaded or closed, and the elapsed time keeps counting. The backend cannot reorder or pause the queue.
+Runs have no numbers: a run is labelled with what it is doing ("Running · 1m 23s", "Waiting") or how long it took.
+
+The ×1 … ×8 menu next to the queue button adds **variations**: the same run several times, each with its
+own seed (random, or seed, seed + 1, …). In Runs the variations of one batch show as a strip under the
+image. **Compare with…** (Runs → Actions) puts two results into the before/after slider and lists the
+settings that differ.
+
+If the server restarts while ComfyUI keeps running (e.g. Comfy Desktop), unfinished runs are followed
+again (without live progress, ComfyUI only reports that to the original connection). A run that crashed
+can be queued again with **Retry**; every run keeps a `job.json` (all parameters and the graph) for that.
 
 ## Run history
 Every finished run is stored in `~/Library/Application Support/Inpaint Studio/runs/` (override with
 `INPAINT_STUDIO_DATA`) and listed again after a reload, including its step frames, before/after
-and the raw edit. Failed runs show up in the results only until the page is reloaded. The × on a result removes it from the history without deleting any file (its run.json gets `hidden: true`); **Delete run** removes its run folder. Deleting a
-run keeps the images in the ComfyUI output folder. Runs are numbered by creation time ("Run 3"),
-so the numbers shift when you delete an older run.
+and the raw edit. Runs that crashed (OOM, ComfyUI error, server restart) stay listed (filter **Failed**);
+runs you cancel are not kept. The × on a result removes it from the history without deleting any file (its run.json gets `hidden: true`); **Delete run** removes its run folder. Deleting a
+run keeps the images in the ComfyUI output folder.
 
 ## Output files
 Per run in the ComfyUI output folder (`InpaintStudio/`):
 - `<run>.png` – result, `<run>_raw.png` – raw edit before pasting (masked runs)
 - `<run>/before.png`, `<run>/step_17_20.png`, `<run>/raw_step_17_20.png` (free edit + paste)
+- `<run>_full.png` – crop & stitch: the edited crop pasted into the full-size original (`<run>.png` is the crop)
 
 Steps are saved every N steps and/or for the last N steps, always including the final step.
 ComfyUI's `_00001_` counter is removed by the server (output folder from the setup config, or
@@ -139,3 +150,17 @@ Chosen under **Area to change** in Create.
   model to keep everything else identical (editable or off under Advanced → Keep-identical instruction); the UI shows the raw edit and how much it differs
   from the original outside the mask. Try this when the model keeps redrawing the old content
   or the inpainted background looks out of context.
+- **Extend canvas** – outpainting: pick the new shape with the aspect tiles under Size and drag the image
+  to where it should sit. The new area is filled with stretched, blurred edge colours and inpainted
+  (with a small overlap into the old image so the border blends).
+
+**Edit around the mask only** (under the area cards, for masked modes) is crop & stitch: only a crop around
+the mask goes to the model, scaled to the full working size, and the result is pasted back into the
+original at its full resolution. Outside the mask the original pixels stay exactly the same. Use it for
+small changes in large photos: a 20 MP photo otherwise comes back at ~1 MP. **Context** sets how much
+around the mask goes along (more context = better fit, less detail). The stage shows the crop as a dashed box.
+
+The mask canvas zooms with ⌘/Ctrl + scroll or a pinch (1–8×); scroll or Space + drag pans, `0` resets.
+
+**LoRAs** (Advanced): up to 3 LoRA files from ComfyUI's `models/loras`, each with a strength; they are
+applied to the diffusion model in this order.

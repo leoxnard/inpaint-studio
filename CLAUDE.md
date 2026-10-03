@@ -21,7 +21,12 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   Edits are server-side jobs (`POST /api/jobs`): each job is submitted to ComfyUI at once and
   followed by a background task on its own ComfyUI ws (progress + binary latent previews via
   `extra_data.preview_method`). Browsers subscribe to `/ws/jobs`; jobs survive page reloads.
-  Jobs live in memory: a server restart marks unfinished runs as errors.
+  Each run keeps `job.json` (params + graph): after a restart, runs ComfyUI still has are followed again by
+  polling (`reattach_runs`), the rest become errors; `POST /api/runs/{id}/retry` queues one again.
+  `/api/*`, `/data/*` and `/ws/jobs` only accept local Host/Origin (`local_origin`, extra hosts via
+  `INPAINT_STUDIO_ALLOWED_HOSTS`).
+- `prepare.py` – crop & stitch (crop around the mask before the run, `stitch` back into the original after
+  it → `<run>_full.png`) and outpaint padding (`pad`). Pure functions, unit-tested; used by `create_job`.
 - `align.py` – post-processing of a paste-mode free edit: shift/scale alignment (phase
   correlation), local warp fix (DIS optical flow), colour/exposure match (Lab offset field) and
   seamless edges (graph-cut seam in a band around the mask edge), all measured outside the mask. `POST /api/runs/{id}/align`; also run
@@ -33,7 +38,9 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   (`#runsView`), switched by a hash router (`#create`, `#runs/<id>`). Hidden `#mode`, `#aspect`, `#viewRaw`
   stay the source of truth; the Area cards, aspect tiles and Pasted/Raw switch only write into them.
   Design tokens (Ollama style, see `design/`) are CSS variables at the top of `styles.css`.
-- Dev preview: launch config `inpaint-studio-dev` (port 7381), since the installed app usually holds 7380.
+- Testing vs. using: Claude tests changes in the Browser pane against the dev server (launch config
+  `inpaint-studio-dev`, port 7381, code from the repo); Leonard uses the installed app (7380, bundled code).
+  Never test in or quit the app; only rebuild it at the end (`GET :7380/api/jobs` empty first).
 
 ## Rules
 - Gray-noise limit: on MPS the edit breaks at >= 4096 latent tokens for target or reference
@@ -47,7 +54,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - Encoder resolution is matched to the working size by default (`graphs.matching_resolution`):
   a different reference size shifts/scales the free edit.
 - Uploads go to ComfyUI `input/inpaint-studio/`. Results: `output/InpaintStudio/<run>.png`,
-  `<run>_raw.png`, `<run>_fixed.png`, `<run>_x2.png`; `<run>/before.png` and
+  `<run>_raw.png`, `<run>_fixed.png`, `<run>_x2.png`, `<run>_full.png` (crop & stitch); `<run>/before.png` and
   `<run>/step_NN_TOTAL.png` (+ `raw_step_…`), `<run>/config.json` (all params, encoder prompt, graph). The server strips ComfyUI's `_00001_` counter.
 - Run history: `~/Library/Application Support/Inpaint Studio/runs/<id>/run.json` + live preview
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by

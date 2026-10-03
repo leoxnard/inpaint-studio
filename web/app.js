@@ -67,7 +67,7 @@ let dash = { k: 0, pattern: null };
 
 // ------------------------------------------------------------------ helpers
 let toastTimer = 0;
-// Info toasts ("Queued as Run 3") slide in at the top centre, errors stay at the bottom right
+// Info toasts ("Added to the queue") slide in at the top centre, errors stay at the bottom right
 function showToast(msg, { error = false, runsLink = false, ms = 6000 } = {}) {
   const t = $("toast");
   $("toastText").textContent = String(msg);
@@ -318,7 +318,7 @@ function pushHistory() {
   const c = state.mask;
   if (!c) return;
   state.history.push(c.getContext("2d").getImageData(0, 0, c.width, c.height));
-  if (state.history.length > 20) state.history.shift();
+  if (state.history.length > 5) state.history.shift();
 }
 function undo() {
   const snap = state.history.pop();
@@ -691,11 +691,27 @@ function setSubmitting(on) {
 
 const runLabel = () => (upscaling() ? "Add upscale to queue" : state.task === "generate" ? "Add image to queue" : "Add edit to queue");
 
-// "Run N": runs are numbered by creation time over everything this page knows (saved + queued)
-function runNumber(run) {
-  const all = [...state.runs, ...state.jobs.values()].sort((a, b) => (a.created || 0) - (b.created || 0));
-  return all.indexOf(run) + 1;
+// Runs have no numbers; their label is what they are doing or how long they took.
+// Times come from the server (started/took), so a page reload does not reset them.
+const runElapsed = (run) => (run.started ? Math.max(0, Date.now() / 1000 - run.started) : 0);
+function runHeadline(run) {
+  const status = runStatus(run);
+  if (status === "running") return `Running · ${fmtTime(runElapsed(run))}`;
+  if (status === "queued") return "Waiting";
+  if (status === "cancelled") return "Cancelled";
+  const took = runTook(run);
+  if (status === "error") return took ? `Failed after ${fmtTime(took)}` : "Failed";
+  return took ? fmtTime(took) : "Done";
 }
+const runTook = (run) => run.took || (run.finished && run.started ? run.finished - run.started
+  : run.finished && run.created ? run.finished - run.created : null);
+// running labels (queue cards, viewer title) tick every second
+setInterval(() => {
+  for (const el of document.querySelectorAll("[data-live-run]")) {
+    const run = state.jobs.get(el.dataset.liveRun);
+    if (run && run.status === "running") el.textContent = runHeadline(run);
+  }
+}, 1000);
 const currentFamily = () => presetById($("preset").value)?.family || "";
 
 // edit parameters from the form for one image (seed is drawn per job when "Random" is on)
@@ -787,7 +803,7 @@ function jobFromSummary(sum) {
   let job = state.jobs.get(sum.job_id);
   if (!job) {
     job = { id: sum.job_id, serverId: sum.job_id, prompt: sum.prompt, seed: sum.seed, steps: sum.steps,
-      max: sum.steps, value: 0, frames: [], done: false, status: "queued", t0: null, created: sum.created };
+      max: sum.steps, value: 0, frames: [], done: false, status: "queued", started: null, created: sum.created };
     state.jobs.set(sum.job_id, job);
   }
   job.status = sum.status || job.status;
@@ -796,7 +812,7 @@ function jobFromSummary(sum) {
   if (sum.decode_steps) job.decodeSteps = sum.decode_steps;
   if (sum.size) job.size = sum.size;
   if (sum.frames) job.frames = sum.frames.map((f) => ({ ...f }));
-  if (job.status === "running" && !job.t0) job.t0 = performance.now();
+  if (sum.started) job.started = sum.started;
   return job;
 }
 
@@ -805,7 +821,7 @@ async function submitJob(params, url = "/api/jobs") {
   const job = jobFromSummary(sum);
   if (url === "/api/jobs") job.params = params;   // known only to the page that queued it ("Load settings in Create")
   renderQueue();
-  showToast(`Queued as Run ${runNumber(job)}`, { runsLink: true });
+  showToast("Added to the queue", { runsLink: true });
   // show it right away if nothing else is running, otherwise it just waits in the queue
   if (state.follow && ![...state.jobs.values()].some((j) => j !== job && j.status === "running")) viewJob(job);
 }
@@ -846,7 +862,7 @@ function jobFinished(m) {
     const run = runFromStored(m.run);
     if (job?.params) run.params = { ...job.params, ...run.params };
     if (!state.runs.some((r) => r.serverId === run.serverId)) state.runs.unshift(run);
-    if (viewing) { if (job.t0) run.took = (performance.now() - job.t0) / 1000; showRun(run); }
+    if (viewing) showRun(run);
   } else if (viewing) {
     job.status = "cancelled"; job.done = true;
     clearInterval(state.progressTimer);
@@ -874,6 +890,7 @@ function connectJobs() {
         const wanted = state.wantRun && findRun(state.wantRun);
         if (wanted) { state.wantRun = null; selectRun(wanted); }
         else if (running && state.follow) viewJob(running);
+        else if (state.wantRun) { state.wantRun = null; showLatest(); }   // the address names a run that is gone (cancelled, deleted)
         else if (state.run && !state.run.done && !state.jobs.has(state.run.id)) showLatest();  // finished while offline
         break;
       }
@@ -881,7 +898,7 @@ function connectJobs() {
       case "running": {
         const job = state.jobs.get(m.job_id);
         if (!job) break;
-        job.status = "running"; job.t0 = performance.now();
+        job.status = "running"; job.started = m.started || Date.now() / 1000;
         renderQueue();
         const viewingFinished = !state.run || state.run.done || !state.jobs.has(state.run.id);
         if (state.follow && (state.run === job || viewingFinished)) viewJob(job);
@@ -945,7 +962,8 @@ function renderQueue() {
     const src = jobThumb(job);
     if (src) { const img = document.createElement("img"); img.src = src; img.alt = ""; thumb.append(img); }
     const txt = document.createElement("span"); txt.className = "qtext";
-    const t = document.createElement("b"); t.textContent = `Run ${runNumber(job)}`;
+    const t = document.createElement("b"); t.textContent = runHeadline(job);
+    if (job.status === "running") t.dataset.liveRun = job.id;
     const pr = document.createElement("span"); pr.className = "qprompt"; pr.textContent = job.prompt;
     txt.append(t, pr);
     main.append(thumb, txt);
@@ -963,7 +981,7 @@ function renderQueue() {
       const p = document.createElement("span"); p.className = "hint grow"; p.textContent = `Position ${++pos}`;
       const rm = document.createElement("button"); rm.className = "small" + (job.cancelling ? " busy" : "");
       rm.textContent = job.cancelling ? "Removing…" : "Remove"; rm.disabled = !!job.cancelling;
-      rm.setAttribute("aria-label", `Remove Run ${runNumber(job)} from queue`);
+      rm.setAttribute("aria-label", "Remove this run from the queue");
       rm.onclick = () => cancelJob(job);
       row.append(p, rm);
       card.append(row);
@@ -1028,7 +1046,7 @@ function updateProgressText() {
   }
   const pct = run.max ? (run.value / run.max) * 100 : 0;
   $("progressBar").style.width = `${pct}%`;
-  const el = (performance.now() - (run.t0 || performance.now())) / 1000;
+  const el = runElapsed(run);
   // the strip above the image says which phase runs; here the step and the times
   const eta = stepEta(run);
   const steps = stepCount(run);
@@ -1226,11 +1244,12 @@ function renderViewer() {
   const run = state.run;
   const status = run ? runStatus(run) : "none";
   const done = status === "done";
-  const n = run ? runNumber(run) : 0;
-  $("runTitle").textContent = run ? (n ? `Run ${n}` : "Run") : (state.runs.length ? "No run selected" : "No runs yet");
-  $("runStatus").textContent = { queued: "Waiting", running: "Running", done: `Finished ${relTime(run?.finished || run?.created)}`,
-    error: "Failed", cancelled: "Cancelled", none: "" }[status] ?? status;
-  $("runStatus").className = status === "running" || status === "error" ? "strong" : "hint";
+  $("runTitle").textContent = run ? runHeadline(run) : (state.runs.length ? "No run selected" : "No runs yet");
+  if (run && status === "running") $("runTitle").dataset.liveRun = run.id; else delete $("runTitle").dataset.liveRun;
+  // the title already says waiting / running / failed; the line next to it says when
+  $("runStatus").textContent = { queued: "", running: "", cancelled: "", none: "",
+    done: `Finished ${relTime(run?.finished || run?.created)}`, error: relTime(run?.finished || run?.created) }[status] ?? status;
+  $("runStatus").className = "hint";
   const cancelling = !!(run?.cancelling && (status === "running" || status === "queued"));
   if (cancelling) { $("runStatus").textContent = "Cancelling…"; $("runStatus").className = "strong cancelling-text"; }
   $("bigArea").classList.toggle("cancelling", cancelling);
@@ -1290,7 +1309,7 @@ function settingsRows(run) {
   if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
   if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
   if (p.clean_overlays) rows.push(["Watermarks", "Removed"]);
-  const took = run.took || (run.finished && run.started ? run.finished - run.started : run.finished && run.created ? run.finished - run.created : null);
+  const took = runTook(run);
   rows.push(["Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : ""]);
   return rows.filter(([, v]) => v !== "" && v != null);
 }
@@ -1367,6 +1386,7 @@ function runFromStored(r) {
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
     aligned: r.aligned || null, task: r.params?.task || "edit", preset: r.params?.preset || null,
     value: r.params?.steps, max: r.params?.steps, created: r.created, finished: r.finished || null,
+    started: r.started || null, took: r.took || null,
     status: r.status || "done", error: r.error || null, params: r.params || null, size: r.size || null,
   };
 }
@@ -1387,7 +1407,7 @@ function showLatest() {
 }
 
 async function deleteRun(run) {
-  if (!confirm(`Delete Run ${runNumber(run)} and its files?`)) return;
+  if (!confirm("Delete this run and its files?")) return;
   try {
     if (run.serverId) await api(`/api/runs/${encodeURIComponent(run.serverId)}`, { method: "DELETE" });
     state.runs = state.runs.filter((r) => r !== run);
@@ -1447,7 +1467,7 @@ function renderHistory() {
   box.innerHTML = "";
   const f = state.resultFilter;
   if (f === "removed") { renderRemoved(box); return; }
-  const list = state.runs.filter((r) => f === "all" || runTask(r) === f);
+  const list = state.runs.filter((r) => f === "all" || (f === "failed" ? r.status === "error" : runTask(r) === f));
   $("resultCount").textContent = `${list.length} result${list.length === 1 ? "" : "s"}`;
   if (!list.length) {
     box.innerHTML = `<div class="hint">${state.runs.length ? "No results for this filter." : "No results yet."}</div>`;
@@ -1456,8 +1476,7 @@ function renderHistory() {
   for (const run of list) {
     const b = document.createElement("button");
     b.className = "rtile" + (run === state.run ? " active" : "") + (run.status === "error" ? " failed" : "");
-    const n = runNumber(run);
-    b.setAttribute("aria-label", `Open Run ${n}`);
+    b.setAttribute("aria-label", `Open run: ${run.prompt || "untitled"}`);
     const pic = document.createElement("span"); pic.className = "rpic";
     if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
     if (run.resultUrl) { const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img); }
@@ -1467,18 +1486,19 @@ function renderHistory() {
       pic.append(badge);
     }
     const meta = document.createElement("span"); meta.className = "rmeta";
-    const l = document.createElement("span"); l.textContent = `Run ${n}`;
+    const took = runTook(run);
+    const l = document.createElement("span"); l.textContent = took ? fmtTime(took) : "";
     const st = document.createElement("span"); st.className = run.status === "error" ? "strong" : "hint";
     st.textContent = run.status === "error" ? "Failed" : relTime(run.finished || run.created);
     meta.append(l, st);
     b.append(pic, meta);
-    b.title = run.prompt;
+    b.title = run.status === "error" && run.error ? `${run.prompt}\n\nFailed: ${run.error}` : run.prompt;
     b.onclick = () => selectRun(run);
     // × removes the run from the history only; its files stay (a sibling: buttons cannot nest)
     const x = document.createElement("button");
     x.className = "rtile-x"; x.textContent = "×";
     x.title = "Remove from history (files are kept)";
-    x.setAttribute("aria-label", `Remove Run ${n} from history`);
+    x.setAttribute("aria-label", "Remove this run from the results");
     x.onclick = () => hideRun(run);
     const wrap = document.createElement("div"); wrap.className = "rwrap";
     wrap.append(b, x);
@@ -1611,7 +1631,7 @@ function loadRunSettings(run) {
   saveForm();
   refreshSize();
   setView("create");
-  showToast(`Settings of Run ${runNumber(run)} loaded.`);
+  showToast("Settings loaded.");
 }
 
 // ------------------------------------------------------------------ view switching (hash router)

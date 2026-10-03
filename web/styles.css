@@ -638,3 +638,7 @@ button.busy::before {
 body:not(.mode-upscale) .upscale-only, body:not(.up-seedvr2) .seedvr2-only { display: none !important; }
 body.mode-upscale #refsSec, body.mode-upscale #sizeSec, body.mode-upscale #modeCard, body.mode-upscale .maskpanel,
 body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !important; }
+/* five result filters do not fit a phone: they scroll sideways instead of being cut off */
+#resultFilter { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+#resultFilter button { flex: none; }
+@media (max-width: 480px) { #resultFilter button { padding: 0 10px; } }

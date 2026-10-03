@@ -400,7 +400,8 @@ async def list_runs(hidden: bool = False):
             runs.append(json.loads(f.read_text()))
         except (OSError, json.JSONDecodeError):
             continue
-    runs = [r for r in runs if r.get("status") == "done" and bool(r.get("hidden")) == hidden]
+    # failed runs stay listed (crash, OOM, gray noise); runs the user cancelled do not
+    runs = [r for r in runs if r.get("status") in ("done", "error") and bool(r.get("hidden")) == hidden]
     return sorted(runs, key=lambda r: r.get("created", 0), reverse=True)
 
 
@@ -602,13 +603,16 @@ def job_summary(job: dict) -> dict:
     run = job["run"]
     return {"job_id": run["id"], "status": run["status"], "prompt": run["params"].get("prompt", ""),
             "seed": run["params"].get("seed"), "steps": run["params"].get("steps"), "value": job.get("value", 0),
-            "created": run["created"], "size": run.get("size"), "frames": run["frames"], "error": run.get("error"),
+            "created": run["created"], "started": run.get("started"), "size": run.get("size"), "frames": run["frames"],
+            "error": run.get("error"),
             "phase": job.get("phase"), "decode_steps": decode_steps(job["params"])}
 
 
 async def finish_job(job: dict, status: str, **extra) -> None:
     run = job["run"]
-    run.update({"status": status, "finished": time.time(), **extra})
+    now = time.time()
+    # took = time from the start of execution (model loading included), not the time waiting in the queue
+    run.update({"status": status, "finished": now, "took": now - (run.get("started") or run["created"]), **extra})
     save_run(run)
     await broadcast({"type": status, "job_id": run["id"], "run": run})
     JOBS.pop(run["id"], None)
@@ -652,9 +656,9 @@ async def run_job(job: dict) -> None:
                         job["phase"] = ph
                         await broadcast({"type": "node", "job_id": run_id, **ph})
                 elif kind == "execution_start":
-                    run["status"] = "running"
+                    run.update(status="running", started=time.time())   # the UI's elapsed time survives reloads
                     save_run(run)
-                    await broadcast({"type": "running", "job_id": run_id})
+                    await broadcast({"type": "running", "job_id": run_id, "started": run["started"]})
                 elif kind == "progress" and (node == "sampler" or node.startswith("chunk_")):
                     # chunked runs report per chunk; convert to overall step numbers
                     offset = chunk_starts[int(node.split("_")[1])] if node.startswith("chunk_") else 0

@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import websockets
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageOps
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 import align
 import graphs
+import prepare
 import installer
 import presets
 
@@ -47,7 +48,8 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of", "color_correction", "group", "variant")
+                  "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of", "color_correction", "group", "variant",
+                  "crop_stitch", "crop_context", "crop_box", "orig_size")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -351,6 +353,8 @@ class SizeReq(BaseModel):
     height: int
     megapixels: float = 0.95
     resolution: int = 1024
+    mask_bbox: list[int] | None = None   # crop & stitch: mask bounding box in source pixels (x0, y0, x1, y1)
+    crop_context: float = 0.5
 
 
 @app.post("/api/size")
@@ -358,6 +362,11 @@ async def size(req: SizeReq):
     report = graphs.size_report(req.width, req.height, req.megapixels, req.resolution)
     report["suggested"] = graphs.safe_settings(req.width, req.height, req.megapixels, req.resolution)
     report["match_res"] = graphs.matching_resolution(report["work_w"], report["work_h"])
+    if req.mask_bbox and len(req.mask_bbox) == 4:
+        box = prepare.crop_box(tuple(req.mask_bbox), req.width, req.height, req.crop_context)
+        crop = graphs.size_report(box["w"], box["h"], req.megapixels, req.resolution)
+        report["crop"] = {**box, "work_w": crop["work_w"], "work_h": crop["work_h"],
+                          "scale": round(crop["work_w"] / box["w"], 2)}
     return report
 
 
@@ -705,7 +714,8 @@ async def run_job(job: dict) -> None:
                     await broadcast({"type": "running", "job_id": run_id, "started": run["started"]})
                 elif kind == "progress" and (node == "sampler" or node.startswith("chunk_")):
                     # chunked runs report per chunk; convert to overall step numbers
-                    offset = chunk_starts[int(node.split("_")[1])] if node.startswith("chunk_") else 0
+                    i = int(m[1]) if (m := re.fullmatch(r"chunk_(\d+)", node)) else -1
+                    offset = chunk_starts[i] if 0 <= i < len(chunk_starts) else 0   # turbo graphs have chunk_0 even without saved steps
                     step = job["value"] = offset + data["value"]
                     await broadcast({"type": "progress", "job_id": run_id, "value": step, "max": int(params["steps"])})
                 elif kind == "executed" and node.startswith(("stepsave_", "stepraw_")):
@@ -733,9 +743,25 @@ async def run_job(job: dict) -> None:
     except asyncio.CancelledError:
         raise
     except HTTPException as e:
+        await drop_prompt(run.get("prompt_id"))
         await finish_job(job, "error", error=str(e.detail))
     except Exception as e:  # keep the queue alive, report to the UI
+        await drop_prompt(run.get("prompt_id"))
         await finish_job(job, "error", error=repr(e))
+
+
+async def drop_prompt(pid: str | None) -> None:
+    """A run that failed on our side must not keep ComfyUI busy: remove or interrupt its prompt."""
+    if not pid:
+        return
+    try:
+        q = await comfy_json("GET", "/queue")
+        if pid in [item[1] for item in q["queue_running"]]:
+            await client.post("/interrupt", json={"prompt_id": pid})
+        elif pid in [item[1] for item in q["queue_pending"]]:
+            await client.post("/queue", json={"delete": [pid]})
+    except Exception:
+        pass
 
 
 async def complete_run(job: dict, pid: str) -> None:
@@ -755,6 +781,12 @@ async def complete_run(job: dict, pid: str) -> None:
             await adjust_run(run, AlignReq(save=True, **post))
         except Exception as e:  # never fail the run because of the post-processing
             print(f"post-processing failed for {run_id}: {e!r}")
+    if params.get("crop_box") and res:   # crop & stitch: the run's result is the full-size original with the edit
+        full = await stitch_result(run, params, view_url(res))
+        await finish_job(job, "done", result_url=view_url(full), crop_url=view_url(res), before_url=input_mask_url(params["orig_image"]),
+                         raw_url=None, aligned=None, upscaled_url=None, mask_url=input_mask_url(params["orig_mask"]),
+                         filename=full["filename"], crop_box=params["crop_box"])
+        return
     await finish_job(job, "done",
                      result_url=view_url(res) if res else None, before_url=view_url(before) if before else run.get("before_url"),
                      raw_url=view_url(raw) if raw else None,
@@ -822,6 +854,51 @@ def save_run_config(run_id: str, run: dict, params: dict, graph: dict) -> None:
         pass
 
 
+async def load_input(name: str) -> Image.Image:
+    """An uploaded input image, turned upright like ComfyUI's LoadImage does."""
+    return ImageOps.exif_transpose(await _fetch_view(input_mask_url(name))).convert("RGB")
+
+
+async def crop_input(params: dict, run_id: str) -> None:
+    """Crop & stitch: the edit runs on a crop around the mask (at the full working size, so more detail);
+    the original stays in orig_image and the result is pasted back after the run (stitch_result)."""
+    orig = await load_input(params["image"])
+    mask = (await _fetch_view(input_mask_url(params["mask"]))).convert("L").resize(orig.size, Image.BILINEAR)
+    bbox = prepare.mask_bbox(mask)
+    if not bbox:
+        raise HTTPException(400, "the mask is empty")
+    box = prepare.crop_box(bbox, *orig.size, context=float(params.get("crop_context") or 0.5))
+    files = []
+    for img, name in ((prepare.crop(orig, box), f"{run_id}_crop.png"), (prepare.crop(mask, box), f"{run_id}_cropmask.png")):
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        files.append(await upload_to_comfy(buf.getvalue(), name, SUBFOLDER))
+    params.update(orig_image=params["image"], orig_mask=params["mask"], crop_box=box, orig_size=list(orig.size),
+                  image=files[0], mask=files[1], src_w=box["w"], src_h=box["h"], upscale=0)
+    # the crop has another shape than the whole image: keep it below the token limit and match the encoder size
+    if not graphs.size_report(box["w"], box["h"], params["megapixels"], params["resolution"])["safe"]:
+        params.update({k: v for k, v in graphs.safe_settings(box["w"], box["h"], params["megapixels"], params["resolution"]).items()
+                       if k in ("megapixels", "resolution")})
+    if params.get("match_ref", True):
+        work = graphs.size_report(box["w"], box["h"], params["megapixels"], params["resolution"])
+        params["resolution"] = graphs.matching_resolution(work["work_w"], work["work_h"])
+
+
+async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:
+    """Pastes the finished crop (the automatically fixed one if there is one) back into the original."""
+    run_id, box = run["id"], params["crop_box"]
+    fixed = RUNS / run_id / "aligned.png"
+    result = Image.open(fixed) if run.get("aligned") and fixed.exists() else await _fetch_view(crop_url)
+    orig = await load_input(params["orig_image"])
+    mask = (await _fetch_view(input_mask_url(params["orig_mask"]))).convert("L")
+    feather = float(params.get("feather") or 0) * box["w"] / max(1, params["work_w"])   # working px -> source px
+    full = await asyncio.to_thread(prepare.stitch, orig, result, mask, box, feather / 3)
+    out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
+    (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(full.save, out_dir / "InpaintStudio" / f"{run_id}_full.png")
+    return {"filename": f"{run_id}_full.png", "subfolder": "InpaintStudio", "type": "output"}
+
+
 @app.post("/api/jobs")
 async def create_job(params: dict):
     if params.get("preset"):
@@ -850,9 +927,11 @@ async def create_job(params: dict):
         params["upscale"] = 0
     if params.get("family") == "qwen21_turbo":  # fixed few-step schedule, no CFG
         params.update(steps=graphs.turbo_steps(params["steps"]), cfg=1.0)
+    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    if params.get("crop_stitch") and params.get("use_mask") and params.get("mask") and params.get("task", "edit") == "edit":
+        await crop_input(params, run_id)
     rep = graphs.size_report(params["src_w"], params["src_h"], params["megapixels"], params["resolution"])
     params["work_w"], params["work_h"] = rep["work_w"], rep["work_h"]
-    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     params["prefix"] = f"InpaintStudio/{run_id}"
     graph = graphs.build_edit_graph(params)
     run = {"id": run_id, "created": time.time(), "status": "queued",

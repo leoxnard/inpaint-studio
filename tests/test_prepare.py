@@ -73,3 +73,14 @@ def test_pad_places_the_image_and_masks_the_new_area():
 def test_pad_rejects_an_image_outside_the_canvas():
     with pytest.raises(ValueError):
         prepare.pad(noise(400, 300), 300, 0, 600, 400)
+
+
+def test_size_endpoint_reports_the_crop():
+    from fastapi.testclient import TestClient
+
+    import server
+    c = TestClient(server.app)
+    rep = c.post("/api/size", json={"width": 4000, "height": 3000, "megapixels": 0.95, "resolution": 1008,
+                                    "mask_bbox": [1000, 1000, 1400, 1200], "crop_context": 0.5}).json()
+    assert rep["crop"]["x"] == 800 and rep["crop"]["w"] == 800 and rep["crop"]["h"] == 512
+    assert rep["crop"]["scale"] > 1   # a small crop is scaled up to the working size

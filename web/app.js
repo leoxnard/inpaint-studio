@@ -11,7 +11,7 @@ const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays",
-  "upscaleModel", "upscaleFactor", "colorCorrection",
+  "upscaleModel", "upscaleFactor", "colorCorrection", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -220,6 +220,7 @@ async function refreshSize() {
     state.size = rep;
     renderSizeInfo(rep, applied);
     syncMaskToSize();
+    refreshCropDebounced();
     return rep;
   } catch (e) {
     showError(e.message);
@@ -358,7 +359,62 @@ function draw() {
     dctx.globalAlpha = 1;
     dctx.drawImage(maskOutline(), 0, 0, w, h);
   }
+  const c = cropOn() && state.crop;
+  if (c && state.srcW) {   // the part that goes to the model
+    const s = w / state.srcW, lw = Math.max(1.5, w / display.getBoundingClientRect().width * 1.5);
+    dctx.save();
+    dctx.lineWidth = lw;
+    dctx.setLineDash([lw * 5, lw * 4]);
+    dctx.strokeStyle = "rgba(0,0,0,.7)";
+    dctx.strokeRect(c.x * s, c.y * s, c.w * s, c.h * s);
+    dctx.strokeStyle = "#fff";
+    dctx.lineDashOffset = lw * 4;
+    dctx.strokeRect(c.x * s, c.y * s, c.w * s, c.h * s);
+    dctx.restore();
+  }
 }
+
+// ------------------------------------------------------------------ crop & stitch
+// Optional: only a crop around the mask is edited (more detail) and pasted back into the full-size original.
+function cropOn() { return maskOn() && $("cropStitch").checked && state.task !== "generate"; }
+
+// bounding box of the painted mask, in source pixels
+function maskBBox() {
+  const m = state.mask;
+  if (!m || !state.hasMask || !state.srcW) return null;
+  const { width: w, height: h } = m;
+  const d = m.getContext("2d").getImageData(0, 0, w, h).data;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (d[(y * w + x) * 4 + 3] > 127) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+  }
+  if (x1 < 0) return null;
+  const sx = state.srcW / w, sy = state.srcH / h;
+  return [Math.floor(x0 * sx), Math.floor(y0 * sy), Math.ceil((x1 + 1) * sx), Math.ceil((y1 + 1) * sy)];
+}
+
+async function refreshCrop() {
+  $("cropContextOut").textContent = `${$("cropContext").value} %`;
+  const bbox = cropOn() ? maskBBox() : null;
+  if (!bbox) {
+    state.crop = null;
+    $("cropInfo").textContent = cropOn() ? "Paint or compute a mask to see the crop." : "";
+    render();
+    return;
+  }
+  try {
+    const rep = await postJson("/api/size", { width: state.srcW, height: state.srcH, megapixels: num("megapixels"),
+      resolution: parseInt($("resolution").value, 10) || 1024, mask_bbox: bbox, crop_context: num("cropContext") / 100 });
+    state.crop = rep.crop;
+    const c = rep.crop;
+    $("cropInfo").textContent = `Crop ${c.w} × ${c.h} px of ${state.srcW} × ${state.srcH}, edited at ${c.work_w} × ${c.work_h}`
+      + (c.scale > 1.05 ? ` (${c.scale}× more detail)` : "");
+  } catch (e) { showError(e.message); }
+  render();
+}
+const refreshCropDebounced = debounce(refreshCrop, 250);
 
 // White dashed outline of the mask, about 1.5 screen pixels wide
 function maskOutline() {
@@ -822,6 +878,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     clean_overlays: $("cleanOverlays").checked,
+    crop_stitch: cropOn() || undefined, crop_context: cropOn() ? num("cropContext") / 100 : undefined, match_ref: $("matchRef").checked,
     post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
@@ -1428,6 +1485,7 @@ function settingsRows(run) {
   if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
   if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
   if (p.clean_overlays) rows.push(["Watermarks", "Removed"]);
+  if (p.crop_box) rows.push(["Crop", `${p.crop_box.w} × ${p.crop_box.h} of ${(p.orig_size || []).join(" × ")}`]);
   const took = runTook(run);
   rows.push(["Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : ""]);
   return rows.filter(([, v]) => v !== "" && v != null);
@@ -1973,6 +2031,9 @@ function syncModeUi() {
   if (state.maskUiReady) applyMaskTexts();  // not during module init (applyMaskMode runs it later)
 }
 $("mode").addEventListener("change", syncModeUi);
+$("mode").addEventListener("change", refreshCropDebounced);
+$("cropStitch").addEventListener("change", refreshCrop);
+$("cropContext").addEventListener("input", refreshCropDebounced);
 
 // "Area to change" cards are a view of the hidden #mode select
 function syncAreaCards() {
@@ -2199,6 +2260,7 @@ function saveSession(patch) {
 let maskSaveTimer = 0;
 // uploads the current mask (incl. brush edits) shortly after it changes, so a reload can restore it
 function scheduleMaskSave() {
+  refreshCropDebounced();
   clearTimeout(maskSaveTimer);
   maskSaveTimer = setTimeout(async () => {
     if (!state.maskAvailable || !state.mask || !state.hasMask || !state.imageName) return;

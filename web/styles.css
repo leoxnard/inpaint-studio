@@ -658,3 +658,8 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 .variants img { width: 100%; height: 100%; object-fit: cover; }
 .runbox .row #variants { flex: none; width: auto; min-height: 44px; }
 .rtile.picking { outline: 2px dashed var(--ink); outline-offset: 2px; }
+
+/* crop & stitch options under the area cards */
+.crop-opts { display: grid; gap: 8px; margin-top: 12px; }
+.crop-opts .crop-ctx { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; }
+.crop-opts .crop-ctx input { grid-column: 1 / -1; width: 100%; }

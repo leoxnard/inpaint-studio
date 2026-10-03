@@ -14,14 +14,16 @@ COMFY = os.environ.get("COMFY_URL") or "http://127.0.0.1:8188"
 TEST_IMAGE = "B491A4F1-7B92-4FA5-AA43-681AE15CB30C_1_105_c.jpeg"
 
 
-def comfy_up() -> bool:
+def comfy_idle() -> bool:
     try:
-        return httpx.get(f"{COMFY}/queue", timeout=2).status_code == 200
-    except httpx.HTTPError:
+        r = httpx.get(f"{COMFY}/queue", timeout=2)
+        q = r.json() if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
         return False
+    return bool(q is not None and not q.get("queue_running") and not q.get("queue_pending"))
 
 
-pytestmark = pytest.mark.skipif(not comfy_up(), reason="ComfyUI not running")
+pytestmark = pytest.mark.skipif(not comfy_idle(), reason="ComfyUI not running or busy")
 
 
 @pytest.fixture()

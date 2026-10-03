@@ -147,8 +147,16 @@ def reference_takes(p: dict[str, Any]) -> str:
         return ""
     main, refs = ref_labels(family, n)
     takes = [str(t).strip().rstrip(".") for t in (p.get("ref_takes") or [])[:n]]
-    return " ".join(f"Replace the {t} in {main} with the {t} from {ref}, in the place and at the size of the {t} in {main}."
-                    for ref, t in zip(refs, takes) if t)
+    orders = [f"Replace the {t} in {main} with the {t} from {ref}, in the place and at the size of the {t} in {main}."
+              for ref, t in zip(refs, takes) if t]
+    if not orders:
+        return ""
+    # a "face" take otherwise brings the whole head (hair, no cap) from the reference
+    one = len(orders) == 1
+    keep = (f"Replace only {'this part itself' if one else 'these parts themselves'}: anything on, over or around "
+            f"{'it' if one else 'them'} in {main}, like headwear, glasses, hair, jewellery or clothing, stays unless "
+            "the instruction changes it.")
+    return " ".join([*orders, keep])
 
 
 def edit_prompt(p: dict[str, Any]) -> str:

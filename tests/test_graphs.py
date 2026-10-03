@@ -173,8 +173,9 @@ def test_reference_takes_become_replacement_orders_after_the_prompt():
     p = dict(prompt="remove the tshirt", family="qwen21", task="edit", refs=["a.png", "b.png"],
              ref_takes=["", "face. "])
     enc = graphs.edit_prompt(p)
-    assert enc.endswith("remove the tshirt\n\nReplace the face in <image1> with the face from <image3>, "
-                        "in the place and at the size of the face in <image1>.")
+    assert "remove the tshirt\n\nReplace the face in <image1> with the face from <image3>, " \
+           "in the place and at the size of the face in <image1>. Replace only this part itself:" in enc
+    assert enc.endswith("stays unless the instruction changes it.")
     assert "<image2> take" not in enc and "Replace the  in" not in enc
     assert graphs.edit_prompt({**p, "ref_note": ""}).startswith("remove the tshirt\n\nReplace the face in <image1>")
     assert "with the face from Picture 3, in the place" in graphs.edit_prompt({**p, "family": "qwen_edit"})

@@ -26,7 +26,8 @@ image is image 1 and the references are image 2, 3 …; when you generate, they 
 ("Place the red apple from image 2 on the sand"). They are scaled like the main image and saved
 with the run. Next to each reference, write in a few words what to take from it ("face");
 after your prompt the model then gets "Replace the face in <image1> with the face from <image3>, in the place
-and at the size of the face in <image1>.", so
+and at the size of the face in <image1>.", plus a line that anything on or around it (a cap, hair, glasses)
+stays, so
 this part is replaced even when the prompt does not mention it. When you edit, it also gets a hidden
 instruction that image 1 is the image to edit (framing and the rest stay) and that only what the
 instruction asks for comes from the references. Qwen 2.1 names the images `<image1>`, `<image2>` …, Edit 2511

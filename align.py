@@ -20,6 +20,7 @@ from PIL import Image
 ANALYSIS_WIDTH = 512
 FINE_WIDTH = 1536
 SEAM_OUT, SEAM_IN, SEAM_FEATHER = 40, 8, 2.0  # seam band (px) and feather (sigma)
+WARP_MAX_LOCAL = 2.0  # px (analysis scale) a flow vector may differ from the large-scale field
 
 
 def _gray(img: Image.Image, size: tuple[int, int]) -> np.ndarray:
@@ -148,6 +149,10 @@ def fix_warp(original: np.ndarray, raw: np.ndarray, keep: np.ndarray) -> np.ndar
     k = cv2.resize(keep.astype(np.uint8), small, interpolation=cv2.INTER_NEAREST)
     k = cv2.erode(k, np.ones((9, 9), np.uint8))  # patches touching the mask compare different content
     k = k.astype(np.float32) * _flow_reliable(g0, g1, flow, back)
+    # a warp is a smooth distortion; vectors far off the large-scale field belong to things the model
+    # moved or redrew (a hand placed differently) and would stretch them when continued into the mask
+    coarse = _fill_smooth(flow, k, sigma=max(small) / 10)
+    k = k * (np.linalg.norm(flow - coarse, axis=-1) < WARP_MAX_LOCAL)
     flow = _fill_smooth(flow, k, sigma=max(small) / 40)
     flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR) / f
     gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))

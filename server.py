@@ -7,6 +7,7 @@ Step 2 runs the edit; ComfyUI's per-step latent previews are relayed to the brow
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import io
 import json
 import os
@@ -17,12 +18,13 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import websockets
 from PIL import Image, ImageFilter
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -47,12 +49,38 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "keep_identical", "preset", "quant", "task", "family",
                   "upscale", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_note", "upscale_of", "color_correction")
 
-app = FastAPI(title="Inpaint Studio")
+@asynccontextmanager
+async def lifespan(app):
+    mark_orphaned_runs()
+    await start_comfy()
+    yield
+    INSTALLER.cancel()
+    COMFY_PROC.stop()
+
+
+app = FastAPI(title="Inpaint Studio", lifespan=lifespan)
 client = httpx.AsyncClient(base_url=COMFY, timeout=60)
+
+
+# Hosts/origins allowed to use the API (any port): blocks other websites and DNS rebinding
+ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]", "testserver",
+                 *(h.strip().lower() for h in os.environ.get("INPAINT_STUDIO_ALLOWED_HOSTS", "").split(",") if h.strip())}
+
+
+def local_origin(host: str | None, origin: str | None) -> bool:
+    def name(netloc: str) -> str:
+        netloc = netloc.strip().lower()
+        return netloc[:netloc.index("]") + 1] if netloc.startswith("[") and "]" in netloc else netloc.split(":")[0]
+    if name(host or "") not in ALLOWED_HOSTS:
+        return False
+    return origin is None or name(urlsplit(origin).netloc) in ALLOWED_HOSTS
 
 
 @app.middleware("http")
 async def security_headers(request, call_next):
+    if request.url.path.startswith(("/api/", "/data/")) and not local_origin(
+            request.headers.get("host"), request.headers.get("origin")):
+        return JSONResponse({"detail": "forbidden origin"}, status_code=403)
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -795,6 +823,9 @@ async def cancel_job(job_id: str):
 
 @app.websocket("/ws/jobs")
 async def ws_jobs(ws: WebSocket):
+    if not local_origin(ws.headers.get("host"), ws.headers.get("origin")):
+        await ws.close(code=1008)
+        return
     await ws.accept()
     SUBSCRIBERS.add(ws)
     await ws.send_json({"type": "snapshot", "jobs": [job_summary(j) for j in JOBS.values()]})
@@ -807,7 +838,6 @@ async def ws_jobs(ws: WebSocket):
         SUBSCRIBERS.discard(ws)
 
 
-@app.on_event("startup")
 async def start_comfy():
     try:
         await ensure_comfy()
@@ -815,14 +845,7 @@ async def start_comfy():
         print(f"could not start ComfyUI: {e!r}")
 
 
-@app.on_event("shutdown")
-async def stop_comfy():
-    INSTALLER.cancel()
-    COMFY_PROC.stop()
-
-
-@app.on_event("startup")
-async def mark_orphaned_runs():
+def mark_orphaned_runs():
     # jobs live in memory; runs left "queued"/"running" by a previous server process are stale
     for f in RUNS.glob("*/run.json"):
         try:

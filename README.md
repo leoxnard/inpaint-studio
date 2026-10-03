@@ -113,11 +113,14 @@ Studio/config.json` (run history lives there too, in `runs/`).
 The server starts ComfyUI headless on 8188 when nothing answers there yet and stops it on shutdown.
 
 ## Mac app
-`macos/build-app.sh [path]` builds **Inpaint Studio.app** (default `~/Applications`), a stay-open
-AppleScript applet with the app code bundled in `Contents/Resources/app`, so the .app alone can be
-sent to someone. First start installs `uv` and the app's Python deps (venv in Application Support),
-then starts the server and opens the UI. Quitting stops the server (and the ComfyUI it started) and
-warns first if jobs are still running. The applet is only ad-hoc signed: on another Mac open it via
+`macos/build-app.sh [path]` builds **Inpaint Studio.app** (default `~/Applications`), a small native
+Swift app (`macos/InpaintStudio.swift`, one WKWebView window) with the app code bundled in
+`Contents/Resources/app`, so the .app alone can be sent to someone. First start installs `uv` and the
+app's Python deps (venv in Application Support), then starts the server and shows the UI in its own
+window (no browser tab). Downloads go to ~/Downloads, View → Open in Browser opens the same UI in the
+browser. Closing the window keeps the server running (click the Dock icon to get it back); quitting
+stops the server (and the ComfyUI it started) and warns first if jobs are still running. Rebuilding
+quits a running copy and opens the new one. The app is only ad-hoc signed: on another Mac open it via
 right-click → Open the first time.
 Logs: `~/Library/Logs/InpaintStudio.log`, `~/Library/Logs/InpaintStudio-ComfyUI.log`.
 

@@ -9,7 +9,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 
 ## Commands
 - Run: `./run.sh` (http://127.0.0.1:7380), or the Mac app built by `macos/build-app.sh`
-  (code bundled in the .app; the server itself starts ComfyUI headless if 8188 is free and stops it on
+  (native Swift WKWebView window, `macos/InpaintStudio.swift`; a rebuild quits and reopens the running app; code bundled in the .app; the server itself starts ComfyUI headless if 8188 is free and stops it on
   shutdown). First-run setup: `installer.py` + `web/setup.js`; data in `~/Library/Application Support/Inpaint Studio`
 - Tests: `uv run pytest` (the queue integration test uses a tiny CPU-only graph against the
   running ComfyUI and is skipped when ComfyUI is down)

@@ -8,6 +8,7 @@ no accounts needed. An existing Comfy Desktop install is detected and reused.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -28,7 +29,8 @@ CONFIG_FILE = APP_SUPPORT / "config.json"
 COMFY_DESKTOP = Path.home() / "Library/Application Support/Comfy Desktop"
 COMFY_PORT = 8188
 COMFY_ZIP = "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags/v0.38.0.zip"
-GGUF_ZIP = "https://github.com/city96/ComfyUI-GGUF/archive/refs/heads/main.zip"
+# Pinned on 2026-10-03: patch_gguf_loader regex-patches this code, so an unpinned main could break it
+GGUF_ZIP = "https://github.com/city96/ComfyUI-GGUF/archive/6ea2651e7df66d7585f6ffee804b20e92fb38b8a.zip"
 HF = "https://huggingface.co/{repo}/resolve/main/{path}"
 
 BASE_STEPS = [  # id, title, description
@@ -281,8 +283,9 @@ class Installer:
         headers = {"Range": f"bytes={have}-"} if have else {}
         async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60, read=120)) as client:
             async with client.stream("GET", url, headers=headers) as r:
+                expected = expected_sha256([*r.history, r])
                 if r.status_code == 416:  # already complete
-                    part.replace(dest)
+                    await self._verify(part, dest, expected, st)
                     return
                 r.raise_for_status()
                 if r.status_code == 200:
@@ -298,6 +301,12 @@ class Installer:
                         dt = time.monotonic() - t0
                         if dt > 1:
                             st["rate"] = round((have - b0) / dt)
+        await self._verify(part, dest, expected, st)
+
+    async def _verify(self, part: Path, dest: Path, expected: str | None, st: dict) -> None:
+        if expected:
+            st["message"] = f"Verifying {dest.name}"
+        await verify_download(part, expected)
         part.replace(dest)
 
     async def _download_zip(self, url: str, target: Path, st: dict, label: str) -> None:
@@ -323,6 +332,35 @@ class Installer:
         finally:
             if proc.returncode is None:
                 proc.kill()
+
+
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(8 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def expected_sha256(responses) -> str | None:
+    """SHA256 of an LFS file as announced by Hugging Face (x-linked-etag, or etag on the final response)."""
+    for r in responses:
+        h = getattr(r, "headers", r)
+        for name in ("x-linked-etag", "etag"):
+            v = (h.get(name) or "").strip()
+            v = v.removeprefix("W/").strip('"').lower()
+            if re.fullmatch(r"[0-9a-f]{64}", v):
+                return v
+    return None
+
+
+async def verify_download(part: Path, expected: str | None) -> None:
+    """Check the finished .part file against the expected sha256 (skipped when unknown); delete it on mismatch."""
+    if not expected:
+        return
+    if await asyncio.to_thread(file_sha256, part) != expected:
+        part.unlink(missing_ok=True)
+        raise RuntimeError(f"{part.name.removesuffix('.part')}: checksum mismatch, download again")
 
 
 def _extract_stripped(zpath: Path, target: Path) -> None:

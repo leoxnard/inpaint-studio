@@ -543,13 +543,16 @@ async function computeMask() {
   const btn = $("computeMask");
   btn.disabled = true;
   $("maskSpinner").hidden = false;
+  const token = Math.random().toString(36).slice(2, 10);
+  state.maskToken = token;
+  $("cancelMask").hidden = false;
   try {
     const rep = await refreshSize();
     if (!rep) return;
     const res = await postJson("/api/mask", {
       image: state.imageName, megapixels: num("megapixels"), text,
       threshold: num("threshold"), refine: parseInt($("refine").value, 10) || 0,
-      expand: parseInt($("expand").value, 10) || 0, invert: $("invert").checked,
+      expand: parseInt($("expand").value, 10) || 0, invert: $("invert").checked, token,
     });
     const im = await loadImage(res.mask_url);
     applyMaskImage(im);
@@ -558,12 +561,21 @@ async function computeMask() {
     updateStale();
     render();
   } catch (e) {
-    showError(e.message);
+    if (state.maskToken === token) showError(e.message);  // a cancelled mask needs no error
   } finally {
+    if (state.maskToken === token) state.maskToken = null;
     btn.disabled = false;
     $("maskSpinner").hidden = true;
+    $("cancelMask").hidden = true;
   }
 }
+$("cancelMask").onclick = () => {
+  const token = state.maskToken;
+  if (!token) return;
+  state.maskToken = null;
+  $("cancelMask").hidden = true;
+  postJson(`/api/mask/${token}/cancel`, {}).catch(() => {});
+};
 
 // black/white mask image (white = replace) -> mask canvas
 function applyMaskImage(im, mp = num("megapixels")) {

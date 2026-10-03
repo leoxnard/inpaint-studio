@@ -72,8 +72,10 @@ async def comfy_json(method: str, path: str, **kw) -> Any:
     return r.json() if r.content else {}
 
 
-async def submit(graph: dict, client_id: str, extra: dict | None = None) -> str:
+async def submit(graph: dict, client_id: str, extra: dict | None = None, front: bool = False) -> str:
     body = {"prompt": graph, "client_id": client_id}
+    if front:  # ahead of everything still pending in ComfyUI's queue (after the running prompt)
+        body["front"] = True
     if extra:
         body["extra_data"] = extra
     res = await comfy_json("POST", "/prompt", json=body)
@@ -82,9 +84,11 @@ async def submit(graph: dict, client_id: str, extra: dict | None = None) -> str:
     return res["prompt_id"]
 
 
-async def wait_history(prompt_id: str, timeout: float = 300) -> dict:
+async def wait_history(prompt_id: str, timeout: float = 300, cancelled: asyncio.Event | None = None) -> dict:
     start = time.time()
     while time.time() - start < timeout:
+        if cancelled and cancelled.is_set():
+            raise HTTPException(499, "Mask cancelled")
         h = await comfy_json("GET", f"/history/{prompt_id}")
         if prompt_id in h:
             entry = h[prompt_id]
@@ -336,18 +340,44 @@ class MaskReq(BaseModel):
     refine: int = 2
     expand: int = 24
     invert: bool = False
+    token: str = ""  # lets the page cancel this mask via /api/mask/{token}/cancel
+
+
+MASKS: dict[str, tuple[str, asyncio.Event]] = {}  # token -> (prompt_id, cancelled) of masks in flight
 
 
 @app.post("/api/mask")
 async def mask(req: MaskReq):
+    """Runs the mask graph and waits for it. Masks jump ahead of queued edit runs (front of ComfyUI's
+    queue), so they only wait for the run that is currently sampling."""
     graph = graphs.build_mask_graph(req.image, req.megapixels, req.text, req.threshold, req.refine, req.expand, req.invert)
     t0 = time.time()
-    pid = await submit(graph, f"inpaint-studio-{uuid.uuid4().hex[:6]}")
-    entry = await wait_history(pid, timeout=180)
+    pid = await submit(graph, f"inpaint-studio-{uuid.uuid4().hex[:6]}", front=True)
+    token = req.token or pid
+    cancelled = asyncio.Event()
+    MASKS[token] = (pid, cancelled)
+    try:
+        entry = await wait_history(pid, timeout=1800, cancelled=cancelled)
+    finally:
+        MASKS.pop(token, None)
     imgs = entry.get("outputs", {}).get("out_mask", {}).get("images", [])
     if not imgs:
         raise HTTPException(500, "mask output missing")
     return {"mask_url": view_url(imgs[0]), "seconds": round(time.time() - t0, 1)}
+
+
+@app.post("/api/mask/{token}/cancel")
+async def cancel_mask(token: str):
+    if token not in MASKS:
+        raise HTTPException(404, "mask not found or already finished")
+    pid, cancelled = MASKS[token]
+    cancelled.set()
+    q = await comfy_json("GET", "/queue")
+    if pid in [item[1] for item in q["queue_running"]]:
+        await client.post("/interrupt", json={"prompt_id": pid})
+    elif pid in [item[1] for item in q["queue_pending"]]:
+        await client.post("/queue", json={"delete": [pid]})
+    return {"cancelled": True}
 
 
 # ---------------------------------------------------------------- run history (persisted on disk)

@@ -1928,6 +1928,7 @@ async function loadStoredRuns() {
     const runs = await api("/api/runs");
     state.runs = runs.map(runFromStored);
     renderHistory();
+    loadRemovedRuns();   // only to know whether the Removed filter has anything in it
   } catch (e) { showError(`Could not load run history: ${e.message}`); }
 }
 
@@ -1994,7 +1995,23 @@ function setDivider(pct) {
 }
 
 // Results: finished and failed runs as tiles, filtered by task
+// a filter with no runs in it is not shown (All always is); if the shown one runs empty, back to All
+function syncResultFilters() {
+  const count = {
+    edit: state.runs.filter((r) => runTask(r) === "edit").length,
+    generate: state.runs.filter((r) => runTask(r) === "generate").length,
+    failed: state.runs.filter((r) => r.status === "error").length,
+    removed: (state.removed || []).length,
+  };
+  for (const b of $("resultFilter").children) b.hidden = b.dataset.filter !== "all" && !count[b.dataset.filter];
+  if (state.resultFilter !== "all" && !count[state.resultFilter]) {
+    state.resultFilter = "all";
+    for (const b of $("resultFilter").children) b.setAttribute("aria-pressed", String(b.dataset.filter === "all"));
+  }
+}
+
 function renderHistory() {
+  syncResultFilters();
   const box = $("history");
   box.innerHTML = "";
   const f = state.resultFilter;
@@ -2042,6 +2059,7 @@ async function hideRun(run) {
   try {
     await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/hide`, {});
     state.runs = state.runs.filter((r) => r !== run);
+    state.removed.unshift(run);   // so the Removed filter shows up right away
     if (state.run === run) { state.follow = false; showLatest(); } else renderHistory();
   } catch (e) { showError(e.message); }
 }
@@ -2073,7 +2091,7 @@ function renderRemoved(box) {
 }
 async function loadRemovedRuns() {
   try { state.removed = (await api("/api/runs?hidden=1")).map(runFromStored); } catch (e) { showError(e.message); }
-  if (state.resultFilter === "removed") renderHistory();
+  renderHistory();   // also shows or hides the Removed filter
 }
 async function restoreRun(run) {
   try {

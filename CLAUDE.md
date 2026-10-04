@@ -35,6 +35,9 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   (whole image: on the pixels the edit did not change, `align.unchanged`; upscales: colours only, `align.match_colors_scaled`). Runs → Post-processing picks the steps
   (fixes + grain, `POST /api/runs/{id}/post`, `server.post_process`); the Create options run automatically after
   the job (`post_*` params). Everything that is on goes into one `<run>_fixed.png` (`run.fixed_url`), overwritten on every Apply and removed when all is off; `aligned.png` in the run dir holds the fixes alone.
+- `imports.py` – own files from the Download Center (Your files): a model, LoRA, upscaler or other model file on the
+  Mac is symlinked into `models/<folder>` and registered as preset / component (`imports.apply`, `imports.json` in
+  App Support); Remove deletes only the link. `POST /api/imports/pick` opens the macOS file dialog via osascript.
 - `presets.py` – model presets (files, quants, sizes, defaults), components (encoders, VAEs,
   SAM3, upscalers, Viggle node, LoRAs with their `families`, grouped by `LORA_GROUPS`) and the RAM-fit estimate. `installer.py` – setup and the download queue (more items can be queued while one runs) and
   the headless ComfyUI process.
@@ -69,3 +72,13 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   `GET /api/runs`, removed by `DELETE /api/runs/{id}`. × on a result tile or Select → remove → hide hides a run
   (`POST …/hide`, files kept); `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed).
   Results → Select works on picked runs: compare, post-process all, use as input, download, remove.
+- Jobs: `finish_job` runs once per job; a silent (30 s) or closed ComfyUI socket falls back to polling (`follow_job`,
+  5 failed polls end the run); deleting a queued/running run is a 409; `POST /api/jobs` input is checked (`JobCheck`).
+- Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the
+  original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
+- Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by
+  `create_job` / `/api/mask`, read by `GET /api/prompt-history`. Top bar: RAM from ComfyUI, `POST /api/comfy/free`.
+- Guidance (Generate, `graphs.apply_control`): Z-Image Fun ControlNet Union (`ZImageFunControlnet`) or Qwen-Image 2512
+  DiffSynth patches (`QwenImageDiffsynthControlnet`) via `ModelPatchLoader` (models/model_patches); depth map from
+  Depth Anything 3 small (models/geometry_estimation), edges from core `Canny`. The map is saved as `<run>/control.png`.
+- Restarting the dev server stops a ComfyUI it started itself (and every run on it); check `:8188` after a restart.

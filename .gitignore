@@ -5,3 +5,10 @@ __pycache__/
 .DS_Store
 scratch/
 data/
+dist/
+
+# Local working files
+PLAN*.md
+design/*.dc.html
+design/ollama-DESIGN.md
+.claude/

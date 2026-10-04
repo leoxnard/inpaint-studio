@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 import httpx
 import websockets
 import numpy as np
+import psutil
 from PIL import Image, ImageFilter, ImageOps, PngImagePlugin
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -38,6 +39,7 @@ import prepare
 import imports
 import installer
 import presets
+import sysload
 
 ROOT = Path(__file__).parent
 WEB = ROOT / "web"
@@ -182,14 +184,22 @@ async def status():
     except HTTPException as e:
         # boot: startup progress while the ComfyUI this server started is not answering yet (the loading screen)
         return {"comfy": False, "error": e.detail, "download": download, "boot": COMFY_PROC.boot()}
-    memory = None
-    try:   # what ComfyUI's machine has left (on Apple silicon RAM and VRAM are the same memory)
-        sysinfo = (await comfy_json("GET", "/system_stats")).get("system", {})
-        memory = {"total": sysinfo["ram_total"], "free": sysinfo["ram_free"]}
-    except (HTTPException, KeyError):
-        pass
     return {"comfy": True, "running": len(q["queue_running"]), "pending": len(q["queue_pending"]), "download": download,
-            "memory": memory}
+            "load": await asyncio.to_thread(system_load), "model_loaded": MODELS["loaded"]}
+
+
+# Whether ComfyUI holds a model: set by every finished run or mask, cleared by Free memory and when ComfyUI restarts
+# (another process id). ComfyUI has no API for its loaded models, so runs started elsewhere are not seen.
+MODELS: dict[str, Any] = {"loaded": False, "comfy_pid": None}
+
+
+def system_load() -> dict:
+    pid = MODELS["comfy_pid"]
+    if not pid or not psutil.pid_exists(pid):
+        pid = sysload.comfy_pid(urlsplit(COMFY).port or 8188)
+        if pid != MODELS["comfy_pid"]:
+            MODELS.update(comfy_pid=pid, loaded=False)
+    return sysload.snapshot(pid)
 
 
 @app.post("/api/comfy/free")
@@ -198,6 +208,7 @@ async def free_memory():
     if JOBS:
         raise HTTPException(409, "a run is queued or running; free memory when the queue is empty")
     await comfy_json("POST", "/free", json={"unload_models": True, "free_memory": True})
+    MODELS["loaded"] = False
     return {"freed": True}
 
 
@@ -527,6 +538,7 @@ async def mask(req: MaskReq):
     imgs = entry.get("outputs", {}).get("out_mask", {}).get("images", [])
     if not imgs:
         raise HTTPException(500, "mask output missing")
+    MODELS["loaded"] = True
     return {"mask_url": view_url(imgs[0]), "seconds": round(time.time() - t0, 1)}
 
 
@@ -920,6 +932,7 @@ async def post_run(run_id: str, req: PostReq):
 class UpscaleReq(BaseModel):
     image: str                    # ComfyUI input name (as returned by /api/upload)
     upscaler: str                 # component key of an installed upscaler
+    upscale_of: str | None = None  # the edit run this upscale follows (queued automatically after it)
     factor: float = Field(2, gt=0)
     long_side: int | None = Field(None, gt=0)  # target length of the longer side in px instead of the factor (the other follows)
     megabytes: float | None = Field(None, gt=0)  # or a rough target file size (prepare.size_for_megabytes)
@@ -982,7 +995,7 @@ async def upscale(req: UpscaleReq):
                                        req.color_correction, seed, size)
     what = (f"to {req.long_side} px on the long side" if req.long_side else f"to about {req.megabytes:g} MB ({size[0]} px wide)"
             if req.megabytes else f"×{factor:g}")
-    params = {"task": "upscale", "prompt": f"Upscale {what} with {comp['title']}", "upscale": round(factor, 3),
+    params = {"task": "upscale", "prompt": f"Upscale {what} with {comp['title']}", "upscale_of": req.upscale_of, "upscale": round(factor, 3),
               "upscale_long_side": req.long_side, "upscale_mb": None if req.long_side else req.megabytes, "grain": req.grain, "grain_strength": req.grain_strength, "image": req.image,
               "upscaler": req.upscaler, "color_correction": req.color_correction if comp.get("engine") == "seedvr2" else None,
               "seed": seed, "steps": 1, "save_every": 0, "save_last": 0, "refs": [], "use_mask": False, "mask": None}
@@ -1148,7 +1161,28 @@ async def drop_prompt(pid: str | None) -> None:
         pass
 
 
+async def follow_up_upscale(run: dict, params: dict) -> None:
+    """An edit with Upscale on: its result (with post-processing) is upscaled as a run of its own."""
+    up = params.get("then_upscale")
+    src = run.get("fixed_url") or run.get("result_url")
+    if not up or run.get("status") != "done" or not src:
+        return
+    try:
+        img = await _fetch_view(src)
+        name = await upload_to_comfy(await png_bytes(img), f"{run['id']}_for_upscale.png", SUBFOLDER)
+        await upscale(UpscaleReq(image=name, upscaler=up["upscaler"], factor=up["factor"],
+                                 color_correction=up["color_correction"], upscale_of=run["id"]))
+    except Exception as e:   # the edit itself is done and stays so
+        print(f"follow-up upscale of {run['id']} failed: {e!r}")
+
+
 async def complete_run(job: dict, pid: str) -> None:
+    MODELS["loaded"] = True
+    await _complete_run(job, pid)
+    await follow_up_upscale(job["run"], job["params"])
+
+
+async def _complete_run(job: dict, pid: str) -> None:
     """Collects the outputs of a finished prompt, runs the automatic paste fixes and finishes the job."""
     run, params, run_id = job["run"], job["params"], job["run"]["id"]
     entry = await wait_history(pid, timeout=30)
@@ -1436,21 +1470,20 @@ async def create_job(params: dict):
     params["ref_crops"] = [graphs.crop_box(c) for c in crops[:len(params["refs"])]]
     up = presets.COMPONENTS.get(params.get("upscaler") or "")
     if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler":
-        params.update(upscale_model=presets.file_name(up), upscale_native=up["scale"])
-        if up.get("engine") == "seedvr2":   # diffusion upscaler: needs its VAE, runs after the edit in the same graph
-            have = installer.installed(installer.load_config())
-            missing = [k for k in [params["upscaler"], *up.get("needs", [])] if not have[f"component:{k}"]]
-            if missing:
-                raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Download Center)")
-            params.update(upscale_engine="seedvr2", upscale_vae=presets.file_name(presets.COMPONENTS[up["needs"][0]]),
-                          color_correction=params.get("color_correction") or "lab")
-    else:
-        params["upscale"] = 0
+        # the upscale becomes its own run once the edit is done (two results: the edit and its upscale)
+        have = installer.installed(installer.load_config())
+        missing = [k for k in [params["upscaler"], *up.get("needs", [])] if not have[f"component:{k}"]]
+        if missing:
+            raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Download Center)")
+        params["then_upscale"] = {"upscaler": params["upscaler"], "factor": int(params["upscale"]),
+                                  "color_correction": params.get("color_correction") or "lab"}
+    params["upscale"] = 0
     if params.get("remove_bg"):  # transparent PNG: whole image only, and nothing afterwards that works in RGB
         if params.get("task", "edit") != "edit" or params.get("family") not in graphs.REMOVE_BG_FAMILIES:
             raise HTTPException(400, "Remove background needs an edit with Qwen-Image 2.1")
         if params.get("outpaint"):
             raise HTTPException(400, "Remove background does not work with Extend canvas")
+        params.pop("then_upscale", None)
         params.update(use_mask=False, mask=None, crop_stitch=False, upscale=0, keep_whole=False,
                       **{f"post_{k}": False for k in ("align", "colors", "warp", "poisson", "grain")})
     if params.get("control"):   # control guidance (generate): the patch for this family and map type must be installed

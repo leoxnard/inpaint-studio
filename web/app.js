@@ -151,12 +151,41 @@ function showDownloadProgress(d) {
     : "Models, components and folders";
 }
 
+$("downloadComfy").addEventListener("click", () => {
+  showToast("Saved to Downloads. Drag the file onto the ComfyUI window to open its workflow.", { ms: 8000 });
+});
+// CPU / GPU / RAM in the top bar: the whole bar is the Mac, the dark part is this app (server + ComfyUI)
+function setMeter(id, totalPct, appPct, text, title) {
+  const m = $(id);
+  m.querySelector("s").style.width = `${Math.max(0, Math.min(100, totalPct ?? 0))}%`;
+  m.querySelector("u").style.width = `${Math.max(0, Math.min(100, appPct ?? 0))}%`;
+  m.querySelector("em").textContent = text;
+  m.title = title;
+}
+function renderMeters(s) {
+  const l = s.load;
+  $("meters").hidden = !l;
+  if (!l) return;
+  const pct = (v) => `${Math.round(v)} %`, gb = (b) => (b / 1e9).toFixed(1);
+  setMeter("mCpu", l.cpu.total, l.cpu.app, pct(l.cpu.total), `CPU ${pct(l.cpu.total)} in use, this app ${pct(l.cpu.app)}`);
+  const g = l.gpu.total;
+  setMeter("mGpu", g, s.running ? g : 0, g == null ? "–" : pct(g),
+    g == null ? "GPU load not available" : `GPU ${pct(g)} busy${s.running ? " (a run is on)" : ""}. macOS does not report the GPU per app.`);
+  setMeter("mRam", (100 * l.ram.used) / l.ram.total, (100 * l.ram.app) / l.ram.total, `${gb(l.ram.used)}/${Math.round(l.ram.total / 1e9)} GB`,
+    `RAM ${gb(l.ram.used)} of ${gb(l.ram.total)} GB in use, this app ${gb(l.ram.app)} GB`);
+  const b = $("freeMem");
+  if (!b.dataset.busy) {
+    b.disabled = !s.model_loaded || !!(s.running || s.pending);
+    b.title = s.running || s.pending ? "A run is on: free memory when the queue is empty"
+      : s.model_loaded ? "Unload ComfyUI's models and free their memory (the next run loads its model again)" : "No model loaded";
+  }
+}
 $("freeMem").onclick = async () => {
   const b = $("freeMem");
-  b.disabled = true; b.textContent = "Freeing…";
+  b.disabled = true; b.dataset.busy = "1"; b.textContent = "Freeing…";
   try { await postJson("/api/comfy/free", {}); showToast("ComfyUI's models are unloaded."); }
   catch (e) { showError(e.message); }
-  finally { b.textContent = "Free memory"; setTimeout(pollStatus, 1500); }
+  finally { b.textContent = "Free"; delete b.dataset.busy; setTimeout(pollStatus, 1500); }
 };
 
 // recent prompts (edit / generate) and mask texts, kept by the server (shared by the app and the dev server)
@@ -188,15 +217,13 @@ async function pollStatus() {
     downloading = !!s.download;
     if (s.comfy) {
       pill.className = "pill online";
-      const mem = s.memory;
-      $("statusText").textContent = mem ? `ComfyUI running · ${(mem.free / 1e9).toFixed(1)} of ${Math.round(mem.total / 1e9)} GB free` : "ComfyUI running";
-      $("freeMem").hidden = false;
-      $("freeMem").disabled = !!(s.running || s.pending);
+      $("statusText").textContent = "ComfyUI running";
+      renderMeters(s);
       // the page loaded before ComfyUI was up: the sampler/scheduler lists are still empty
       if (appStarted && !$("sampler").options.length) loadModels();
     } else {
       pill.className = "pill offline";
-      $("freeMem").hidden = true;
+      $("meters").hidden = true;
       $("statusText").textContent = s.boot && s.boot.exited == null ? "ComfyUI starting" : "ComfyUI offline";
     }
   } catch {
@@ -2204,7 +2231,10 @@ function renderDetails(run, status) {
     $("downloadUpscaled").download = (run.filename || "result.png").replace(/\.png$/, `_x${run.upscale}.png`);
   }
   $("downloadComfy").hidden = !(done && run.resultUrl && run.serverId && runTask(run) !== "upscale");
-  if (!$("downloadComfy").hidden) $("downloadComfy").href = `/api/runs/${encodeURIComponent(run.serverId)}/comfyui.png`;
+  if (!$("downloadComfy").hidden) {
+    $("downloadComfy").href = `/api/runs/${encodeURIComponent(run.serverId)}/comfyui.png`;
+    $("downloadComfy").download = `${run.serverId}_comfyui.png`;
+  }
   $("downloadSteps").hidden = !visibleFrames(run).length;
   $("cancelRun").hidden = status !== "running";
   $("removeRun").hidden = status !== "queued";
@@ -2345,6 +2375,10 @@ function tileImage(run, pic) {
     const line = document.createElement("span"); line.className = "rsplit";
     pic.append(before, line);
     pic.addEventListener("mouseenter", () => { if (!before.src) before.src = thumbUrl(run.beforeUrl); });
+    pic.addEventListener("mousemove", (e) => {   // the split follows the mouse: result left, original right
+      const r = pic.getBoundingClientRect();
+      pic.style.setProperty("--split", `${Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100))}%`);
+    });
     pic.classList.add("has-before");
   }
   return img;

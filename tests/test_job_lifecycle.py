@@ -127,3 +127,26 @@ def test_comfyui_png_carries_the_graph(tmp_path, monkeypatch):
     assert r.status_code == 200
     graph = json.loads(Image.open(io.BytesIO(r.content)).text["prompt"])
     assert "out_result" in graph
+
+
+def test_edit_upscale_becomes_a_follow_up_run(monkeypatch):
+    calls = []
+
+    async def fetch(url):
+        from PIL import Image
+        return Image.new("RGB", (8, 8))
+
+    async def upload(data, name, sub):
+        return f"{sub}/{name}"
+
+    async def upscale(req):
+        calls.append(req)
+    monkeypatch.setattr(server, "_fetch_view", fetch)
+    monkeypatch.setattr(server, "upload_to_comfy", upload)
+    monkeypatch.setattr(server, "upscale", upscale)
+    run = {"id": "r1", "status": "done", "result_url": "/api/view?filename=r1.png", "fixed_url": "/api/view?filename=r1_fixed.png"}
+    asyncio.run(server.follow_up_upscale(run, {"then_upscale": {"upscaler": "up_x", "factor": 2, "color_correction": "lab"}}))
+    assert len(calls) == 1 and calls[0].upscale_of == "r1" and calls[0].image == "inpaint-studio/r1_for_upscale.png"
+    asyncio.run(server.follow_up_upscale({**run, "status": "error"}, {"then_upscale": {"upscaler": "up_x", "factor": 2,
+                                                                                        "color_correction": "lab"}}))
+    assert len(calls) == 1

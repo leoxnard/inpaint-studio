@@ -113,8 +113,8 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
       inner.appendChild(buildComponents());
       inner.appendChild(buildModels());
       inner.appendChild(buildUpscalers());
-      inner.appendChild(buildLoras());
       inner.appendChild(buildControl());
+      inner.appendChild(buildLoras());
       inner.appendChild(buildImports());
     } else {
       seedFirstRun();

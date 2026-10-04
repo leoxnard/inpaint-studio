@@ -20,7 +20,12 @@
     </nav>
     <div class="spacer"></div>
     <span class="pill" id="statusPill" title="ComfyUI status"><i class="dot"></i><span id="statusText">Checking...</span></span>
-    <button id="freeMem" class="linkbtn" hidden title="Unload ComfyUI's models and free its memory (the next run loads its model again)">Free memory</button>
+    <div class="meters" id="meters" hidden>
+      <span class="meter" id="mCpu"><b>CPU</b><i><s></s><u></u></i><em></em></span>
+      <span class="meter" id="mGpu"><b>GPU</b><i><s></s><u></u></i><em></em></span>
+      <span class="meter" id="mRam"><b>RAM</b><i><s></s><u></u></i><em></em></span>
+      <button id="freeMem" class="linkbtn">Free</button>
+    </div>
     <button id="setupBtn" title="Models, components and folders">Download Center</button>
   </header>
 
@@ -522,7 +527,7 @@
           <button id="postBtn" title="Align, fix colours, warp and edges, add grain: pick the steps, see a preview, apply. The plain result stays.">Post-processing</button>
           <a class="btn" id="downloadBtn" download>Download</a>
           <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
-          <a class="btn" id="downloadComfy" hidden title="The result with its ComfyUI workflow inside: drop the file onto ComfyUI to open the exact graph">Download for ComfyUI</a>
+          <a class="btn" id="downloadComfy" hidden title="Saves the result with its ComfyUI workflow inside to Downloads. Drag the file onto ComfyUI to open the exact graph.">Download for ComfyUI</a>
           <button id="downloadSteps">Download shown steps</button>
           <button id="cancelRun">Cancel run</button>
           <button id="removeRun">Remove from queue</button>

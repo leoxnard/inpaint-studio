@@ -77,8 +77,10 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
 - Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by
-  `create_job` / `/api/mask`, read by `GET /api/prompt-history`. Top bar: RAM from ComfyUI, `POST /api/comfy/free`.
+  `create_job` / `/api/mask`, read by `GET /api/prompt-history`. Top bar: CPU / GPU / RAM meters (`sysload.py`: the app part = this server + ComfyUI, RAM as phys footprint; GPU only as a whole), **Free** (`POST /api/comfy/free`) is enabled only while `MODELS["loaded"]` (set by a finished run or mask, cleared by Free or a new ComfyUI pid).
 - Guidance (Generate, `graphs.apply_control`): Z-Image Fun ControlNet Union (`ZImageFunControlnet`) or Qwen-Image 2512
   DiffSynth patches (`QwenImageDiffsynthControlnet`) via `ModelPatchLoader` (models/model_patches); depth map from
   Depth Anything 3 small (models/geometry_estimation), edges from core `Canny`. The map is saved as `<run>/control.png`.
 - Restarting the dev server stops a ComfyUI it started itself (and every run on it); check `:8188` after a restart.
+- An edit with Upscale on runs as two results: the edit, then an upscale run of its (post-processed) result
+  (`params.then_upscale` → `follow_up_upscale`, the upscale run has `upscale_of`).

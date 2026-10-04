@@ -3168,7 +3168,9 @@ $("setupBtn").onclick = showSetup;
 // optional upscaler: lists the installed upscale models, links to the downloads page otherwise
 function renderUpscalers() {
   const sel = $("upscaler");
-  const ups = (state.setup?.components || []).filter((c) => c.kind === "upscaler" && c.installed && !c.engine);
+  // every installed upscaler; SeedVR2 also needs its VAE
+  const has = (k) => (state.setup?.components || []).some((c) => c.key === k && c.installed);
+  const ups = (state.setup?.components || []).filter((c) => c.kind === "upscaler" && c.installed && c.needs.every(has));
   const keep = sel.value || storedForm().upscaler;
   sel.innerHTML = "";
   for (const u of ups) sel.add(new Option(`${u.title}`, u.key));

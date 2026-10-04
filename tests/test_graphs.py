@@ -257,6 +257,20 @@ def test_seedvr2_graph_follows_the_template():
     assert g["out_result"]["inputs"]["images"] == ["post", 0]
 
 
+def test_seedvr2_upscales_the_edit_result_in_the_same_graph():
+    import presets
+    p = dict(presets.resolve("qwen21_uc", None), family="qwen21", task="edit", image="a.png", mask=None, megapixels=0.95,
+             resolution=1008, prompt="x", negative="", steps=4, denoise=1.0, seed=5, cfg=1.0, sampler="euler",
+             scheduler="simple", feather=0, work_w=1024, work_h=1024, prefix="P", upscale=2,
+             upscale_model="s.safetensors", upscale_engine="seedvr2", upscale_vae="v.safetensors")
+    g = graphs.build_edit_graph(p)
+    assert g["sv_resize"]["inputs"]["image"] == g["out_result"]["inputs"]["images"]
+    assert g["sv_resize"]["inputs"]["scale_by"] == 2 and g["sv_sampler"]["inputs"]["seed"] == 5
+    assert g["sampler"]["inputs"]["steps"] == 4   # the edit's own sampler is untouched
+    assert g["out_upscaled"]["inputs"] == {"images": ["sv_post", 0], "filename_prefix": "P_x2"}
+    assert "up_model" not in g
+
+
 def test_loras_are_chained_after_the_model_loader():
     import presets
     p = dict(presets.resolve("qwen21_uc", None), family="qwen21", task="edit", image="a.png", mask=None, megapixels=0.95,

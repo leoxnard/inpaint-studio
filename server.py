@@ -627,9 +627,9 @@ async def upscale(req: UpscaleReq):
     src = await _fetch_view(input_mask_url(req.image))
     w, h = src.size
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
-    files = {"model": Path(comp["path"]).name}
+    files = {"model": presets.file_name(comp)}
     if comp.get("engine") == "seedvr2":
-        files["vae"] = Path(presets.COMPONENTS[comp["needs"][0]]["path"]).name
+        files["vae"] = presets.file_name(presets.COMPONENTS[comp["needs"][0]])
     seed = int.from_bytes(os.urandom(4), "big")
     graph = graphs.build_upscale_graph(req.image, comp, files, req.factor, f"InpaintStudio/{run_id}",
                                        req.color_correction, seed)
@@ -1013,8 +1013,15 @@ async def create_job(params: dict):
     crops = params.get("ref_crops") or []   # optional {x, y, w, h} per reference
     params["ref_crops"] = [graphs.crop_box(c) for c in crops[:len(params["refs"])]]
     up = presets.COMPONENTS.get(params.get("upscaler") or "")
-    if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler" and not up.get("engine"):
-        params.update(upscale_model=up["path"].rsplit("/", 1)[-1], upscale_native=up["scale"])
+    if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler":
+        params.update(upscale_model=presets.file_name(up), upscale_native=up["scale"])
+        if up.get("engine") == "seedvr2":   # diffusion upscaler: needs its VAE, runs after the edit in the same graph
+            have = installer.installed(installer.load_config())
+            missing = [k for k in [params["upscaler"], *up.get("needs", [])] if not have[f"component:{k}"]]
+            if missing:
+                raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Downloads)")
+            params.update(upscale_engine="seedvr2", upscale_vae=presets.file_name(presets.COMPONENTS[up["needs"][0]]),
+                          color_correction=params.get("color_correction") or "lab")
     else:
         params["upscale"] = 0
     if params.get("family") == "qwen21_turbo":  # fixed few-step schedule, no CFG

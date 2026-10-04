@@ -105,7 +105,7 @@ Model presets (`presets.py`) bundle a GGUF diffusion model (all quantisations th
 Silicon) with its text encoder and VAE: Qwen-Image 2.1 UC / official / Viggle Turbo (edit +
 generate), Qwen-Image-Edit 2511 (edit, experimental), Qwen-Image 2512 (generate, experimental),
 Z-Image Turbo (generate, edit = img2img). The **Downloads** page installs or deletes them,
-shows a RAM-fit estimate per quant (like LM Studio) and recommends a quant for this Mac. The model
+picks a quant in an LM Studio style selector (format, RAM fit, recommended for this Mac, downloaded, size). The model
 picker sits in the topbar; UNet/CLIP/VAE can still be overridden in Advanced. The Edit card has
 an **Edit | Generate** switch (generate = text to image, no input image) and prompt presets
 (built-in + own, saved in the browser).
@@ -114,8 +114,10 @@ an **Edit | Generate** switch (generate = text to image, no input image) and pro
 Free edit + paste runs can be fixed automatically after pasting (Edit card) or later via
 **Adjust…**: match colours & exposure (smooth Lab offset field measured outside the mask), fix
 local warp (DIS optical flow, OpenCV) and seamless edges (graph-cut seam, OpenCV), on top of shift/scale alignment.
-The fixed result is saved as `<run>_fixed.png`. An optional upscaler (UltraSharp / RealESRGAN,
-from the Downloads page) upscales the result in pixel space and saves `<run>_x2.png` / `_x4.png`.
+The fixed result is saved as `<run>_fixed.png`. An optional upscaler from the Downloads page
+(UltraSharp / RealESRGAN in pixel space, or SeedVR2) upscales the result and saves `<run>_x2.png` / `_x4.png`.
+SeedVR2 comes as 1.4B sharp (community distillation, needs a small pinned ComfyUI node), 3B, 7B and
+7B sharp in int8 / fp16; its memory estimate assumes a 4 MP result.
 
 ## Requirements & setup
 Only macOS on Apple Silicon (32 GB RAM recommended). On first start the UI shows a **setup page**

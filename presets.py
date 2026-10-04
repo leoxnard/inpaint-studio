@@ -36,16 +36,43 @@ COMPONENTS: dict[str, dict[str, Any]] = {
     "up_realesrgan_x2": {"title": "RealESRGAN 2x", "kind": "upscaler", "scale": 2, "repo": "ai-forever/Real-ESRGAN",
                          "path": "RealESRGAN_x2.pth", "folder": "upscale_models", "size": 67_061_725,
                          "description": "Optional upscaler: fast, natural-looking 2x upscale."},
-    "up_seedvr2_7b": {"title": "SeedVR2 7B (int8)", "kind": "upscaler", "engine": "seedvr2", "scale": 4, "repo": "Comfy-Org/SeedVR2",
-                      "path": "diffusion_models/seedvr2_7b_int8_convrot.safetensors", "folder": "diffusion_models",
-                      "size": 8_334_897_976, "needs": ["vae_seedvr2"],
-                      "description": "Optional upscaler: diffusion upscaler that restores real detail, any factor. Slow and large; needs the SeedVR2 VAE."},
     "vae_seedvr2": {"title": "SeedVR2 VAE", "kind": "upscaler_vae", "repo": "Comfy-Org/SeedVR2",
                     "path": "vae/seedvr2_ema_vae_fp16.safetensors", "folder": "vae", "size": 501_324_814,
-                    "description": "Needed by the SeedVR2 upscaler."},
+                    "description": "Needed by every SeedVR2 upscaler."},
+    "seedvr2_14b_node": {"title": "SeedVR2 1.4B support (ComfyUI node)", "kind": "upscaler_node", "repo": "lvladikov/SeedVR2-1.4B",
+                         "rev": "a47293eab2562560ac4eaba531bd570bdaf29bca", "path": "comfyui/ComfyUI-SeedVR2-1.4B/__init__.py",
+                         "save_as": "seedvr2_1_4b_support.py", "folder": "custom_node", "size": 14_193,
+                         "description": "Teaches ComfyUI the 6-block 1.4B model and adds a leaner single-image VAE path."},
     "sam3": {"title": "SAM3 (masking)", "repo": "Comfy-Org/sam3.1",
              "path": "checkpoints/sam3.1_multiplex_fp16.safetensors", "folder": "checkpoints", "size": 1_745_546_848},
 }
+
+
+def _seedvr2(title: str, path: str, size: int, description: str, repo: str = "Comfy-Org/SeedVR2",
+             needs: tuple[str, ...] = ("vae_seedvr2",), **extra: Any) -> dict[str, Any]:
+    return {"title": f"SeedVR2 {title}", "kind": "upscaler", "engine": "seedvr2", "group": "SeedVR2", "scale": 4,
+            "repo": repo, "path": path, "folder": "diffusion_models", "size": size, "needs": list(needs),
+            "description": description, **extra}
+
+
+COMPONENTS.update({
+    "up_seedvr2_14b": _seedvr2("1.4B sharp (fp16)", "comfyui/seedvr2_distill_6L_1.4B_sharp_fp16_comfyui.safetensors",
+                               2_886_486_040, "Community distillation of 7B sharp: smallest and fastest, needs a small ComfyUI node.",
+                               repo="lvladikov/SeedVR2-1.4B", needs=("vae_seedvr2", "seedvr2_14b_node"),
+                               rev="a47293eab2562560ac4eaba531bd570bdaf29bca"),
+    "up_seedvr2_3b": _seedvr2("3B (int8)", "diffusion_models/seedvr2_3b_int8_convrot.safetensors", 3_458_259_704,
+                              "Small official model: good detail at half the memory of 7B."),
+    "up_seedvr2_3b_fp16": _seedvr2("3B (fp16)", "diffusion_models/seedvr2_3b_fp16.safetensors", 6_784_268_336,
+                                   "3B at full precision."),
+    "up_seedvr2_7b": _seedvr2("7B (int8)", "diffusion_models/seedvr2_7b_int8_convrot.safetensors", 8_334_897_976,
+                              "Restores the most real detail. Slow and memory-hungry at large sizes."),
+    "up_seedvr2_7b_fp16": _seedvr2("7B (fp16)", "diffusion_models/seedvr2_7b_fp16.safetensors", 16_480_583_960,
+                                   "7B at full precision; needs a lot of RAM."),
+    "up_seedvr2_7b_sharp": _seedvr2("7B sharp (int8)", "diffusion_models/seedvr2_7b_sharp_int8_convrot.safetensors", 8_334_897_976,
+                                    "7B tuned for crisper detail (can look over-sharpened on faces)."),
+    "up_seedvr2_7b_sharp_fp16": _seedvr2("7B sharp (fp16)", "diffusion_models/seedvr2_7b_sharp_fp16.safetensors", 16_480_583_960,
+                                         "7B sharp at full precision; needs a lot of RAM."),
+})
 
 
 def file_name(c: dict[str, Any]) -> str:
@@ -237,6 +264,17 @@ def memory_need(pid: str, quant: str) -> int:
     vae = COMPONENTS[pr["vae"]]["size"]
     te = COMPONENTS[pr["text_encoder"]]["size"]
     return int(max(unet + vae + ACTIVATIONS, te + 1.5e9))
+
+
+# SeedVR2 samples the whole image at once, so memory grows with the output size (calibrated with 7B on a 32 GB
+# Mac, mirrored in web/app.js); the Downloads label uses a 4 MP output (x2 of a ~1 MP result).
+SEEDVR2_BYTES_PER_MP = 2e9
+SEEDVR2_REF_MP = 4
+
+
+def seedvr2_memory(cid: str, mp: float = SEEDVR2_REF_MP) -> int:
+    c = COMPONENTS[cid]
+    return int(c["size"] + sum(COMPONENTS[k]["size"] for k in c.get("needs", [])) + SEEDVR2_BYTES_PER_MP * mp)
 
 
 def memory_fit(need: int, ram: int) -> str:

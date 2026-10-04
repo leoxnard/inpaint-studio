@@ -6,7 +6,6 @@ const PATH_FIELDS = [
   ["comfy_dir", "ComfyUI folder"], ["models_dir", "Models folder"],
   ["input_dir", "Input folder"], ["output_dir", "Output folder"],
 ];
-const COLLAPSE_AFTER = 4;   // quant lists longer than this are collapsed
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -38,7 +37,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
   let readyAtStart = false;
   let builtReady = null;          // mode of the current skeleton (ready or first run)
   let pathsOpen = false;
-  const expanded = new Set();     // preset ids with the full quant list open
+  const picked = new Map();       // picker key (preset id / "seedvr2") -> chosen item id
   const loraOpen = new Set(), loraClosed = new Set();   // LoRA groups opened / closed by hand
   const baseSel = new Set();      // first run: base steps to install
   let pick = { preset: null, quant: null };
@@ -326,13 +325,55 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
         onDelete: () => confirmDelete(sam.id, "Masking (SAM3)", sam.size, "The masking tools will be hidden afterwards."),
       }));
     }
-    for (const u of data.components.filter((c) => c.kind === "upscaler" || c.kind === "upscaler_vae")) {
+    for (const u of data.components.filter((c) => c.kind === "upscaler" && !c.group)) {
       sec.appendChild(itemRow({
         id: u.id, title: u.title, desc: u.description, size: u.size, installed: u.installed, deletable: true, optional: true,
         onDelete: () => confirmDelete(u.id, u.title, u.size, ""),
       }));
     }
+    const sv = data.components.filter((c) => c.group === "SeedVR2");
+    if (sv.length) sec.appendChild(buildSeedvr2Card(sv));
     return sec;
+  }
+
+  // SeedVR2: one card, a row per size/precision; the VAE (and the 1.4B node) come along with the first download
+  function buildSeedvr2Card(variants) {
+    const card = el("div", `mcard${variants.some((v) => v.installed) ? " complete" : ""}`);
+    const head = el("div", "head");
+    head.appendChild(el("b", null, "SeedVR2 upscaler"));
+    head.appendChild(el("span", "tag-opt", "Optional"));
+    card.appendChild(head);
+    card.appendChild(el("div", "hint", "Diffusion upscaler that redraws real detail, any factor. Bigger = more detail but slower and more memory; int8 is close to fp16 at half the size. Memory grows with the output size: the estimate is for a 4 MP result (×2 of a ~1 MP image)."));
+    const needs = el("div", "needs");
+    const deps = [...new Set(variants.flatMap((v) => v.needs))].map(comp).filter(Boolean);
+    for (const d of deps) {
+      const n = el("div", "n");
+      n.appendChild(el("span", null, `${d.kind === "upscaler_node" ? "Node" : "VAE"}: ${d.title} (${fmtBytes(d.size)})`));
+      if (d.installed) {
+        n.appendChild(installedBadge());
+        n.appendChild(actBtn("Delete", "danger linkbtn", () => confirmDelete(d.id, d.title, d.size,
+          d.kind === "upscaler_node" ? "SeedVR2 1.4B stops working." : "All SeedVR2 upscalers stop working until it is downloaded again.")));
+      } else {
+        const users = variants.filter((v) => v.needs.includes(d.key)).map((v) => v.title.replace("SeedVR2 ", ""));
+        n.appendChild(el("span", "pstate", `downloaded together with ${users.length === variants.length ? "the first model" : users.join(", ")}`));
+      }
+      needs.appendChild(n);
+    }
+    card.appendChild(needs);
+    const opts = variants.map((v) => {
+      const [, name, quant] = v.title.match(/^SeedVR2 (.*) \((\w+)\)$/) || [, v.title, ""];
+      return { id: v.id, name, format: "safetensors", quant, size: v.size, memory: v.memory, fit: v.fit,
+               installed: v.installed, note: v.description, memNote: `at ${data.system.seedvr2_ref_mp} MP` };
+    });
+    card.appendChild(variantPicker("seedvr2", opts, (o) => {
+      const v = variants.find((x) => x.id === o.id);
+      if (v.installed) return [installedBadge(), actBtn("Delete", "danger", () => confirmDelete(v.id, v.title, v.size))];
+      const extra = v.needs.map(comp).filter((d) => d && !d.installed);
+      const total = v.size + extra.reduce((n, d) => n + d.size, 0);
+      return [queueBtn(v.id, actBtn(`Download ${fmtBytes(total)}`, "primary", () => startInstall([v.id]),
+        extra.length ? `${fmtBytes(v.size)} model + ${extra.map((d) => `${fmtBytes(d.size)} ${d.title}`).join(" + ")}` : ""))];
+    }));
+    return card;
   }
 
   // ---------------------------------------------------------------- models (ready mode)
@@ -384,43 +425,113 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     for (const k of p.nodes || []) needs.appendChild(compLine(p, k, "Custom node"));
     card.appendChild(needs);
 
-    const long = p.quants.length > COLLAPSE_AFTER;
-    const open = expanded.has(p.id);
-    const shown = !long || open ? p.quants : p.quants.filter((q) => q.installed || q.quant === recQuant(p));
-    const table = el("div", "qtable");
-    for (const q of shown) {
-      const row = el("div", "qrow");
-      row.appendChild(el("span", "q", q.quant));
-      const grow = el("span", "grow");
-      grow.appendChild(el("span", "sz", fmtBytes(q.size)));
-      if (q.memory) grow.appendChild(el("span", "sz", `~${fmtBytes(q.memory)} memory`));
-      const fb = fitBadge(q);
-      if (fb) grow.appendChild(fb);
-      if (q.quant === recQuant(p)) grow.appendChild(el("span", "tag-rec", p.recommended_quant ? "Recommended for your Mac" : "recommended"));
-      grow.appendChild(stateTag(q.id));
-      row.appendChild(grow);
-      if (q.installed) {
-        row.appendChild(installedBadge());
-        row.appendChild(actBtn("Delete", "danger", () => confirmDelete(q.id, `${p.title} ${q.quant}`, q.size)));
-      } else {
-        const d = downloadLabel(p, q);
-        row.appendChild(queueBtn(q.id, actBtn(d.label, "primary", () => {
-          if (q.fit === "no" && !window.confirm(`${p.title} ${q.quant} is probably too large for this Mac (needs ~${fmtBytes(q.memory)}). Download anyway?`)) return;
-          startInstall([q.id]);
-        }, d.title)));
-      }
-      table.appendChild(row);
-    }
-    card.appendChild(table);
-    if (long) {
-      const t = actBtn(open ? "Show fewer quantisations" : `Show all ${p.quants.length} quantisations`, "linkbtn", () => {
-        if (open) expanded.delete(p.id); else expanded.add(p.id);
-        structural();
-      });
-      t.style.alignSelf = "flex-start";
-      card.appendChild(t);
-    }
+    const opts = p.quants.map((q) => ({
+      id: q.id, format: q.file.endsWith(".gguf") ? "GGUF" : "safetensors",
+      quant: q.quant.replace("_convrot", ""), size: q.size, memory: q.memory, fit: q.fit, installed: q.installed,
+      rec: q.quant === recQuant(p), recTitle: p.recommended_quant ? "Recommended for your Mac" : "Recommended",
+    }));
+    card.appendChild(variantPicker(p.id, opts, (o) => {
+      const q = p.quants.find((x) => x.id === o.id);
+      if (q.installed) return [installedBadge(), actBtn("Delete", "danger", () => confirmDelete(q.id, `${p.title} ${q.quant}`, q.size))];
+      const d = downloadLabel(p, q);
+      return [queueBtn(q.id, actBtn(d.label, "primary", () => {
+        if (q.fit === "no" && !window.confirm(`${p.title} ${q.quant} is probably too large for this Mac (needs ~${fmtBytes(q.memory)}). Download anyway?`)) return;
+        startInstall([q.id]);
+      }, d.title))];
+    }));
     return card;
+  }
+
+  // ---------------------------------------------------------------- variant picker (LM Studio style)
+  // One button with the chosen quantisation/size and its labels; a click opens the list of all of them.
+  // Default choice: the recommended one if installed, else an installed one, else the recommended one.
+  const FIT_SHORT = { good: ["ok", "Fits"], tight: ["warn", "Tight"], no: ["bad", "Likely too large"] };
+
+  function optionLine(o, inButton = false) {
+    const line = el("span", "vline");
+    line.appendChild(el("span", `vfmt ${o.format === "GGUF" ? "gguf" : ""}`, o.format === "GGUF" ? "GGUF" : "ST"));
+    line.lastChild.title = o.format;
+    if (o.name) line.appendChild(el("span", "vname", o.name));
+    if (o.quant) line.appendChild(el("span", "vquant", o.quant));
+    const f = FIT_SHORT[o.fit];
+    if (f) {
+      const b = el("span", `badge ${f[0]}`, f[1]);
+      if (o.memory) b.title = `Estimated peak memory ~${fmtBytes(o.memory)}${o.memNote ? ` ${o.memNote}` : ""}`;
+      line.appendChild(b);
+    }
+    if (o.rec) line.appendChild(el("span", "tag-rec", o.recTitle || "Recommended"));
+    line.appendChild(el("span", "vgrow"));
+    if (o.installed && !inButton) line.appendChild(el("span", "vdone", "Downloaded"));
+    line.appendChild(stateTag(o.id));
+    const sz = el("span", "vsize", fmtBytes(o.size));
+    if (o.memory) sz.title = `~${fmtBytes(o.memory)} memory${o.memNote ? ` ${o.memNote}` : ""}`;
+    line.appendChild(sz);
+    return line;
+  }
+
+  function variantPicker(key, opts, actions) {
+    const wrap = el("div", "vpick");
+    const def = opts.find((o) => o.rec && o.installed) || opts.find((o) => o.installed) || opts.find((o) => o.rec) || opts[0];
+    const cur = opts.find((o) => o.id === picked.get(key)) || def;
+    const row = el("div", "vrow");
+    const btn = el("button", "vbtn");
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "listbox");
+    btn.setAttribute("aria-expanded", "false");
+    btn.appendChild(optionLine(cur, true));
+    btn.appendChild(el("span", "vcaret", "▾"));
+    row.appendChild(btn);
+    const side = el("div", "vact");
+    for (const a of actions(cur)) side.appendChild(a);
+    row.appendChild(side);
+    wrap.appendChild(row);
+    const meta = [];
+    if (cur.memory) meta.push(`~${fmtBytes(cur.memory)} memory${cur.memNote ? ` ${cur.memNote}` : ""}`);
+    if (cur.note) meta.push(cur.note);
+    const inst = opts.filter((o) => o.installed && o !== cur);
+    if (inst.length) meta.push(`also downloaded: ${inst.map((o) => o.quant || o.name).join(", ")}`);
+    if (meta.length) wrap.appendChild(el("div", "hint vmeta", meta.join(" · ")));
+
+    let menu = null;
+    const close = () => {
+      if (!menu) return;
+      menu.remove();
+      menu = null;
+      btn.setAttribute("aria-expanded", "false");
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+    const outside = (e) => { if (!wrap.contains(e.target)) close(); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { close(); btn.focus(); return; }
+      if (!["ArrowDown", "ArrowUp"].includes(e.key)) return;
+      e.preventDefault();
+      const items = [...menu.querySelectorAll(".vopt")];
+      const i = items.indexOf(document.activeElement);
+      items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+    };
+    btn.onclick = () => {
+      if (menu) { close(); return; }
+      menu = el("div", "vmenu");
+      menu.setAttribute("role", "listbox");
+      for (const o of opts) {
+        const it = el("button", `vopt${o === cur ? " sel" : ""}`);
+        it.type = "button";
+        it.setAttribute("role", "option");
+        it.setAttribute("aria-selected", String(o === cur));
+        it.appendChild(el("span", "vcheck", o === cur ? "✓" : ""));
+        it.appendChild(optionLine(o));
+        it.onclick = () => { picked.set(key, o.id); close(); structural(); };
+        menu.appendChild(it);
+      }
+      wrap.appendChild(menu);
+      btn.setAttribute("aria-expanded", "true");
+      updateStateTags();
+      menu.querySelector(".vopt.sel")?.focus();
+      document.addEventListener("pointerdown", outside, true);
+      document.addEventListener("keydown", onKey, true);
+    };
+    return wrap;
   }
 
   function buildModels() {

@@ -31,7 +31,7 @@ COMFY_PORT = 8188
 COMFY_ZIP = "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags/v0.38.0.zip"
 # Pinned on 2026-10-03: patch_gguf_loader regex-patches this code, so an unpinned main could break it
 GGUF_ZIP = "https://github.com/city96/ComfyUI-GGUF/archive/6ea2651e7df66d7585f6ffee804b20e92fb38b8a.zip"
-HF = "https://huggingface.co/{repo}/resolve/main/{path}"
+HF = "https://huggingface.co/{repo}/resolve/{rev}/{path}"
 
 BASE_STEPS = [  # id, title, description
     ("comfyui", "ComfyUI", "Image generation engine with its own Python environment (PyTorch etc., ~1.5 GB)"),
@@ -107,7 +107,7 @@ def item_path(cfg: dict, item: str) -> Path | None:
     if kind == "component":
         c = presets.COMPONENTS[rest]
         if c["folder"] == "custom_node":  # a single-file ComfyUI custom node
-            f = Path(cfg["comfy_dir"]) / "custom_nodes" / Path(c["path"]).name
+            f = Path(cfg["comfy_dir"]) / "custom_nodes" / presets.file_name(c)
             return f if f.is_file() else None
         folders = [c["folder"], "clip"] if c["folder"] == "text_encoders" else [c["folder"]]
         return _model_file(cfg, folders, presets.file_name(c))
@@ -121,11 +121,11 @@ def item_target(cfg: dict, item: str) -> tuple[str, Path, int]:
     if kind == "component":
         c = presets.COMPONENTS[rest]
         base = Path(cfg["comfy_dir"]) / "custom_nodes" if c["folder"] == "custom_node" else Path(cfg["models_dir"]) / c["folder"]
-        return HF.format(repo=c["repo"], path=c["path"]), base / presets.file_name(c), c["size"]
+        return HF.format(repo=c["repo"], rev=c.get("rev", "main"), path=c["path"]), base / presets.file_name(c), c["size"]
     pid, _, q = rest.partition(":")
     pr = presets.PRESETS[pid]
     f = pr["quants"][q]
-    return HF.format(repo=pr["repo"], path=f["file"]), Path(cfg["models_dir"]) / "diffusion_models" / f["file"], f["size"]
+    return HF.format(repo=pr["repo"], rev="main", path=f["file"]), Path(cfg["models_dir"]) / "diffusion_models" / f["file"], f["size"]
 
 
 def item_title(item: str) -> str:
@@ -186,6 +186,8 @@ def expand(items: list[str], have: dict[str, bool]) -> list[str]:
     for it in items:
         if it.startswith("model:"):
             want.update(f"component:{c}" for c in needed_components(it.split(":")[1]) if not have[f"component:{c}"])
+        elif it.startswith("component:"):   # e.g. SeedVR2 needs its VAE (and the 1.4B a node)
+            want.update(f"component:{c}" for c in presets.COMPONENTS[it.split(":")[1]].get("needs", []) if not have[f"component:{c}"])
     base = [s for s, _, _ in BASE_STEPS if s in want]
     comps = [f"component:{c}" for c in presets.COMPONENTS if f"component:{c}" in want]
     models = sorted(i for i in want if i.startswith("model:"))

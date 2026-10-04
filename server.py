@@ -210,10 +210,14 @@ async def setup_status():
     base = [{"id": s, "title": t, "description": d, "installed": have[s]} for s, t, d in installer.BASE_STEPS]
     comps = [{"id": f"component:{cid}", "key": cid, "title": c["title"], "size": c["size"], "file": presets.file_name(c),
              "installed": have[f"component:{cid}"], "kind": c.get("kind"), "scale": c.get("scale"),
-             "engine": c.get("engine"), "needs": c.get("needs", []), "families": c.get("families"),
+             "engine": c.get("engine"), "group": c.get("group"), "needs": c.get("needs", []), "families": c.get("families"),
              "strength": c.get("strength"), "repo": c["repo"], "description": c.get("description", "")}
              for cid, c in presets.COMPONENTS.items()]
     ram = system_ram()
+    for c in comps:
+        if c["engine"] == "seedvr2":
+            c["memory"] = presets.seedvr2_memory(c["key"])
+            c["fit"] = presets.memory_fit(c["memory"], ram)
     models = []
     for pid, pr in presets.PRESETS.items():
         st = installer.preset_status(have, pid)
@@ -227,7 +231,7 @@ async def setup_status():
                         "memory": presets.memory_need(pid, q), "fit": presets.memory_fit(presets.memory_need(pid, q), ram)}
                        for q, f in pr["quants"].items()]})
     return {"ready": installer.ready(have), "mask_available": have["component:sam3"], "config": cfg,
-            "system": {"ram": ram, "gpu_budget": int(ram * presets.GPU_SHARE)},
+            "system": {"ram": ram, "gpu_budget": int(ram * presets.GPU_SHARE), "seedvr2_ref_mp": presets.SEEDVR2_REF_MP},
             "base": base, "components": comps, "lora_groups": presets.LORA_GROUPS, "presets": models, "default_preset": presets.DEFAULT_PRESET,
             "comfy": {"up": await comfy_up(), "managed": COMFY_PROC.managed}, "install": INSTALLER.state()}
 
@@ -262,7 +266,8 @@ async def setup_install(req: InstallReq):
 
     async def done() -> None:
         finished = [i for i, st in INSTALLER.steps.items() if st["state"] == "done"]
-        new_code = any(i in ("comfyui", "gguf_node") or i.startswith("component:viggle_node") for i in finished)
+        new_code = any(i in ("comfyui", "gguf_node") or (i.startswith("component:")
+                       and presets.COMPONENTS[i.split(":")[1]]["folder"] == "custom_node") for i in finished)
         if new_code and COMFY_PROC.managed:
             COMFY_PROC.stop()  # restart so new code / nodes are loaded
         elif new_code and await comfy_up():

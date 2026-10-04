@@ -204,7 +204,7 @@ body.dragging::after {
 .sizeinfo b { color: var(--ink); font-weight: 600; }
 .badge { display: inline-block; padding: 1px 8px; border-radius: var(--r-pill); font-size: 12px; font-weight: 600; background: var(--selected); color: var(--ink); }
 .badge.ok { color: var(--ok); }
-.badge.bad { background: var(--ink); color: var(--on-ink); }
+.badge.bad { background: var(--bad); color: var(--canvas); }
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .create-center { padding: 20px; gap: 14px; overflow-y: auto; }
@@ -462,7 +462,7 @@ button.linkbtn:hover:not(:disabled) { border: 0; color: var(--charcoal); }
 /* download centre */
 .setup h3.sec { font-size: 16px; margin: 10px 0 0; color: var(--ink); }
 .setup .guided { border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-.setup.busy button.act { opacity: .45; pointer-events: none; }
+.setup.busy button.act:not(.queue) { opacity: .45; pointer-events: none; }
 .irow { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
 .irow .name { font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .irow .desc { grid-column: 1; font-size: 12px; color: var(--muted); }
@@ -486,6 +486,30 @@ button.linkbtn:hover:not(:disabled) { border: 0; color: var(--charcoal); }
 .qrow .sz { color: var(--muted); font-size: 12px; }
 .qrow .grow { flex: 1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .qrow button { padding: 0 12px; min-height: 30px; font-size: 13px; }
+/* variant picker (quantisations / sizes), LM Studio style */
+.vpick { position: relative; display: flex; flex-direction: column; gap: 4px; }
+.vrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vbtn { flex: 1 1 320px; min-width: 0; display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 10px; min-height: 38px;
+  background: var(--canvas); border: 1px solid var(--border); border-radius: var(--r-card); color: var(--ink); cursor: pointer; font-weight: 400; }
+.vbtn:hover, .vbtn[aria-expanded="true"] { border-color: var(--hairline-strong); }
+.vcaret { color: var(--muted); font-size: 12px; }
+.vact { display: flex; align-items: center; gap: 8px; }
+.vact button { padding: 0 12px; min-height: 34px; font-size: 13px; }
+.vline { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; font-size: 13px; }
+.vfmt { font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--muted); }
+.vfmt.gguf { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
+.vname { font-weight: 600; }
+.vquant { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; }
+.vgrow { flex: 1; }
+.vdone { font-size: 12px; font-weight: 600; color: var(--ok); }
+.vsize { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+.vmeta { font-size: 12px; }
+.vmenu { position: absolute; top: 44px; left: 0; right: 0; z-index: 20; max-height: 360px; overflow-y: auto; display: flex; flex-direction: column;
+  background: var(--canvas); border: 1px solid var(--hairline-strong); border-radius: var(--r-card); box-shadow: 0 8px 24px rgba(0,0,0,.25); padding: 4px; }
+.vopt { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 7px 8px; min-height: 0; border: 0; border-radius: 6px;
+  background: none; color: var(--ink); cursor: pointer; font-weight: 400; }
+.vopt:hover, .vopt:focus-visible { background: var(--selected); outline: none; }
+.vcheck { width: 16px; flex: none; color: var(--accent); font-weight: 700; }
 button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
 .tag-rec { font-size: 11px; color: var(--accent); }
 .pstate { font-size: 11px; color: var(--muted); }

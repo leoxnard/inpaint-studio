@@ -13,6 +13,8 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - Run: `./run.sh` (http://127.0.0.1:7380), or the Mac app built by `macos/build-app.sh`
   (native Swift WKWebView window, `macos/InpaintStudio.swift`; a rebuild quits and reopens the running app; code bundled in the .app; the server itself starts ComfyUI headless if 8188 is free and stops it on
   shutdown; while it boots, `/api/status` → `boot` (phases read from its log, `installer.BOOT_STEPS`) drives the loading screen). First-run setup: `installer.py` + `web/setup.js`; data in `~/Library/Application Support/Inpaint Studio`
+- Release: `macos/release.sh <version>` (zip + DMG → GitHub release, `--dry-run` builds into `dist/` only);
+  users install with `install.sh` (curl one-liner in README, no quarantine flag so no Gatekeeper prompt). Needs a public repo.
 - Tests: `uv run pytest` (the queue integration test uses a tiny CPU-only graph against the
   running ComfyUI and is skipped when ComfyUI is down)
 

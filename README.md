@@ -39,7 +39,16 @@ of the app; after that only from the top bar.
 
 **Requirements:** macOS on Apple Silicon, 32 GB RAM recommended.
 
-1. Get the app: build it with `macos/build-app.sh` (see [Mac app](#mac-app)), or run from source with `./run.sh`.
+1. Get the app. The easiest way is this line in Terminal (it also updates an existing install):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/leoxnard/inpaint-studio/main/install.sh | bash
+   ```
+
+   Or download `InpaintStudio.dmg` from the [latest release](https://github.com/leoxnard/inpaint-studio/releases/latest).
+   The app is not notarized, so macOS blocks the first start: open it, click **Done**, then
+   **System Settings → Privacy & Security → Open Anyway**. You can also build it yourself with
+   `macos/build-app.sh` (see [Mac app](#mac-app)) or run from source with `./run.sh`.
 2. On the first start a **setup page** opens. It finds an existing Comfy Desktop install or installs what is
    missing. You can pick the steps, folders and quantisation:
    - ComfyUI (pinned zip from GitHub, with its own uv venv)
@@ -298,7 +307,11 @@ macos/build-app.sh /some/dir  # or somewhere else
   server and the ComfyUI it started, and warns first if jobs are still running.
 - **View → Open in Browser** opens the same UI in your browser. Downloads go to `~/Downloads`.
 - Rebuilding quits a running copy and opens the new one.
-- The app is only ad-hoc signed. On another Mac, open it the first time with right-click → Open.
+- The app is only ad-hoc signed. Installed with `install.sh` or built yourself, it opens without a warning
+  (curl and git do not set the quarantine flag). A downloaded DMG needs **Open Anyway** once (see
+  [Quick start](#quick-start)).
+- Release: `macos/release.sh 1.1.0` builds `dist/InpaintStudio.zip` (for `install.sh`) and
+  `dist/InpaintStudio.dmg` and uploads both as GitHub release `v1.1.0`. `--dry-run` only builds.
 - Icon: `design/app-icon*.svg` (light + dark). After changing them run `macos/make-icons.sh` (needs Xcode)
   and commit its outputs.
 

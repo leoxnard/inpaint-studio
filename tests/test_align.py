@@ -126,3 +126,17 @@ def test_whole_image_compose_without_fixes_is_the_edit():
     e = Image.fromarray(rng.integers(0, 255, (64, 64, 3), dtype=np.uint8))
     out, _ = align.compose(o, e, None, 0, 0, 1.0)
     assert np.abs(np.asarray(out, int) - np.asarray(e, int)).max() <= 1
+
+
+def test_upscale_colours_fix_the_drift_at_full_size():
+    import numpy as np
+    from PIL import Image
+
+    import align
+    rng = np.random.default_rng(8)
+    o = Image.fromarray(rng.integers(60, 190, (60, 80, 3), dtype=np.uint8)).resize((160, 120), Image.BICUBIC)
+    up = np.asarray(o.resize((640, 480), Image.BICUBIC), float) + [-14, -10, 6]   # a ×4 upscale, darker and bluer
+    out, stats = align.match_colors_scaled(o, Image.fromarray(np.clip(up, 0, 255).astype(np.uint8)))
+    assert out.size == (640, 480)
+    back = np.asarray(out.resize((160, 120), Image.BOX), float)
+    assert np.abs(back - np.asarray(o, float)).mean() < 3 and stats["outside_diff"] < stats["unaligned_diff"]

@@ -328,3 +328,20 @@ def _seam_weight(o: np.ndarray, m: np.ndarray, hard: np.ndarray) -> np.ndarray:
         sel = hard.astype(np.float32)
     w = cv2.GaussianBlur(sel, (0, 0), SEAM_FEATHER)
     return np.where(core > 0, 1.0, np.where(outer > 0, w, 0.0)).astype(np.float64)
+
+
+def match_colors_scaled(original: Image.Image, result: Image.Image) -> tuple[Image.Image, dict]:
+    """Colour / exposure drift of an upscale (or any result larger than its original): the smooth Lab offset field is
+    measured at the original's size on the pixels that did not change (`unchanged`), then resized to the result and
+    applied there, so the full-resolution detail stays and the large blur runs on the small image only."""
+    o = np.asarray(original.convert("RGB"), np.float64)
+    r = np.asarray(result.convert("RGB"), np.float32)
+    small = cv2.resize(r, (o.shape[1], o.shape[0]), interpolation=cv2.INTER_AREA).astype(np.float64)
+    keep = unchanged(o, small)
+    lab = lambda a: cv2.cvtColor((a / 255).astype(np.float32), cv2.COLOR_RGB2LAB)
+    diff = _fill_smooth(lab(o) - lab(small), keep.astype(np.float32), sigma=max(o.shape[:2]) / 12).astype(np.float32)
+    fixed_small = np.clip(cv2.cvtColor(lab(small) + diff, cv2.COLOR_LAB2RGB) * 255, 0, 255)
+    field = cv2.resize(diff, (r.shape[1], r.shape[0]), interpolation=cv2.INTER_LINEAR)
+    out = np.clip(cv2.cvtColor(lab(r) + field, cv2.COLOR_LAB2RGB) * 255, 0, 255)
+    err = lambda a: round(float(np.abs(o - a).mean(axis=-1)[keep].mean()), 2) if keep.any() else 0.0
+    return Image.fromarray(out.astype(np.uint8)), {"unaligned_diff": err(small), "outside_diff": err(fixed_small)}

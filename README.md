@@ -130,6 +130,8 @@ Full HD 1920 to 8K 7680; each image of a folder gets it) or a rough file size in
 (estimated from how well the original compresses as PNG, `prepare.size_for_megabytes`; usually within ±25 %). Upscalers come out clean and
 lose the camera's grain, so by default the original's grain is added back at its original size
 (`prepare.add_grain`, saved as `<run>_fixed.png`; the clean upscale stays as `<run>.png`, "Clean" in Runs).
+Upscales get Post-processing in Runs too: colours & exposure (the drift measured at the original's size on the
+unchanged pixels and applied at full size, `align.match_colors_scaled`) and film grain with its strength.
 The grain is measured only on flat areas (edges and texture are not grain), separately for three frequency
 bands and six brightness bands, and only what the result lacks per band is added: a VAE's fine pixel pattern
 does not count as grain, and grain that is strongest in the midtones stays that way. Brightness bands with few

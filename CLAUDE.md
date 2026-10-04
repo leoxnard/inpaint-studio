@@ -31,7 +31,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - `align.py` – post-processing of a paste-mode free edit or a whole-image edit: shift/scale alignment (phase
   correlation), local warp fix (DIS optical flow), colour/exposure match (Lab offset field) and
   seamless edges (graph-cut seam in a band around the mask edge, paste only), measured outside the mask
-  (whole image: on the pixels the edit did not change, `align.unchanged`). Runs → Post-processing picks the steps
+  (whole image: on the pixels the edit did not change, `align.unchanged`; upscales: colours only, `align.match_colors_scaled`). Runs → Post-processing picks the steps
   (fixes + grain, `POST /api/runs/{id}/post`, `server.post_process`); the Create options run automatically after
   the job (`post_*` params). Everything that is on goes into one `<run>_fixed.png` (`run.fixed_url`), overwritten on every Apply and removed when all is off; `aligned.png` in the run dir holds the fixes alone.
 - `presets.py` – model presets (files, quants, sizes, defaults), components (encoders, VAEs,

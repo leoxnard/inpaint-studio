@@ -1818,11 +1818,11 @@ function renderViewer() {
   $("runFile").textContent = run?.filename || "";
   // toolbar above the image
   $("rawSeg").hidden = !(run && hasRaw(run));
-  const [pasted, raw] = $("rawSeg").children;   // an upscale's "raw" is the clean upscale without the grain
+  const [pasted, raw] = $("rawSeg").children;   // an upscale's "raw" is the clean upscale, before post-processing
   const up = run && runTask(run) === "upscale";
-  pasted.textContent = up ? "With grain" : "Pasted result";
+  pasted.textContent = up ? "Post-processed" : "Pasted result";
   raw.textContent = up ? "Clean" : "Raw (full generated image)";
-  pasted.title = up ? "The upscale with the original's grain added back" : "The original with only the masked area replaced";
+  pasted.title = up ? "The upscale with its post-processing (grain, colours)" : "The original with only the masked area replaced";
   raw.title = up ? "The upscaler's output as it came out" : "The model's full generated image, before the masked area was pasted in";
   syncRawSeg();
   $("compareRow").hidden = !(done && run.beforeUrl);
@@ -2100,7 +2100,7 @@ function runFromStored(r) {
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
     aligned: r.aligned || null, fixedUrl: r.fixed_url || null, grainUrl: r.grain_url || null,
-    grain: r.grain ?? !!r.grain_url, grainStrength: r.grain_strength ?? r.params?.grain_strength ?? GRAIN_STRENGTH, task: r.params?.task || "edit", preset: r.params?.preset || null,
+    grain: r.grain ?? (!!r.grain_url || (r.params?.task === "upscale" && !!r.params?.grain)), grainStrength: r.grain_strength ?? r.params?.grain_strength ?? GRAIN_STRENGTH, task: r.params?.task || "edit", preset: r.params?.preset || null,
     value: r.params?.steps, max: r.params?.steps, created: r.created, finished: r.finished || null,
     started: r.started || null, took: r.took || null,
     status: r.status || "done", error: r.error || null, params: r.params || null, size: r.size || null,
@@ -2938,17 +2938,18 @@ async function startSession() {
 }
 
 // ------------------------------------------------------------------ post-processing of a finished run
-// What a run can get (mirrors server.post_kind): fix = "paste" (raw image + mask), "whole" (whole-image edit) or null;
-// grain unless the run has it already (upscale or crop & stitch made with grain). null: nothing to offer.
+// What a run can get (mirrors server.post_kind): fix = "paste" (raw image + mask), "whole" (whole-image edit),
+// "upscale" (colours only) or null; grain unless the run has it baked in (crop & stitch made with grain).
+// null: nothing to offer.
 function postOptions(run) {
   const p = run.params || {};
   if (p.remove_bg) return null;   // transparent PNG: the fixes and grain work in RGB
   const task = runTask(run);
   let fix = null;
-  if (!p.outpaint && run.beforeUrl && run.rawUrl && run.maskUrl) fix = "paste";
+  if (task === "upscale") fix = run.beforeUrl && run.resultUrl ? "upscale" : null;
+  else if (!p.outpaint && run.beforeUrl && run.rawUrl && run.maskUrl) fix = "paste";
   else if (task === "edit" && p.use_mask === false && !p.outpaint && run.beforeUrl && run.resultUrl) fix = "whole";
-  const grain = !!(run.beforeUrl && run.resultUrl && task !== "generate" && !(task === "upscale" && p.grain)
-    && !(p.crop_box && p.crop_grain !== false));
+  const grain = !!(run.beforeUrl && run.resultUrl && task !== "generate" && !(p.crop_box && p.crop_grain !== false));
   return fix || grain ? { fix, grain } : null;
 }
 let postTimer = 0;
@@ -2989,7 +2990,7 @@ async function postRequest(body) {
     $("cmpBefore").src = run.beforeUrl;
     $("cmpAfter").src = res.url;
     $("liveImg").hidden = true; $("compare").hidden = false;
-    const where = res.kind === "whole" ? "Difference in unchanged areas" : "Outside-mask difference";
+    const where = res.kind === "paste" ? "Outside-mask difference" : "Difference in unchanged areas";
     $("postInfo").textContent = res.outside_diff != null
       ? `${where}: ${res.unaligned_diff} → ${res.outside_diff} / 255` + (res.confidence ? ` · match confidence ${res.confidence}` : "")
       : "Preview";
@@ -3005,6 +3006,7 @@ $("postBtn").onclick = () => {
   if (!opt) return;
   for (const el of $("postPanel").querySelectorAll(".post-fix")) el.hidden = !opt.fix;
   for (const el of $("postPanel").querySelectorAll(".post-paste")) el.hidden = opt.fix !== "paste";
+  for (const el of $("postPanel").querySelectorAll(".post-geo")) el.hidden = !opt.fix || opt.fix === "upscale";
   for (const el of $("postPanel").querySelectorAll(".post-grain")) el.hidden = !opt.grain;
   // the panel starts at what the run has now
   const a = opt.fix && run.aligned ? run.aligned : {};

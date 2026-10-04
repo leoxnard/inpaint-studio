@@ -20,6 +20,7 @@
     </nav>
     <div class="spacer"></div>
     <span class="pill" id="statusPill" title="ComfyUI status"><i class="dot"></i><span id="statusText">Checking...</span></span>
+    <button id="freeMem" class="linkbtn" hidden title="Unload ComfyUI's models and free its memory (the next run loads its model again)">Free memory</button>
     <button id="setupBtn" title="Models, components and folders">Download Center</button>
   </header>
 
@@ -154,7 +155,8 @@
         <div class="mp-find">
           <h2 class="h">Find mask</h2>
           <div class="row">
-            <input type="text" id="maskText" value="person" aria-label="What to mask" placeholder="What to mask, e.g. person">
+            <input type="text" id="maskText" value="person" aria-label="What to mask" placeholder="What to mask, e.g. person" list="maskHistory">
+            <datalist id="maskHistory"></datalist>
             <button class="primary" id="computeMask">Compute mask</button>
             <button id="cancelMask" hidden title="Stop computing the mask (e.g. when it waits behind a long run), then paint it yourself">Cancel</button>
           </div>
@@ -250,7 +252,9 @@
           <button id="promptSave" title="Save the current prompt as a preset">Save as preset</button>
         </div>
         <button id="promptDelete" class="linkbtn" title="Delete the selected custom preset" disabled>Delete preset</button>
-        <label>Prompt
+        <div class="row between"><label for="prompt">Prompt</label>
+          <select id="promptHistory" class="compact" aria-label="Recent prompts" title="Recent prompts"><option value="">Recent…</option></select></div>
+        <label>
           <textarea id="prompt" rows="4">Replace the person with a walking dog. Keep everything else unchanged.</textarea>
         </label>
         <label class="check" title="Adds an instruction to remove watermarks, logos, captions and overlaid text (when generating: to create none). With a mask only the masked area can change.">
@@ -501,6 +505,7 @@
           <button id="postBtn" title="Align, fix colours, warp and edges, add grain: pick the steps, see a preview, apply. The plain result stays.">Post-processing</button>
           <a class="btn" id="downloadBtn" download>Download</a>
           <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
+          <a class="btn" id="downloadComfy" hidden title="The result with its ComfyUI workflow inside: drop the file onto ComfyUI to open the exact graph">Download for ComfyUI</a>
           <button id="downloadSteps">Download shown steps</button>
           <button id="cancelRun">Cancel run</button>
           <button id="removeRun">Remove from queue</button>

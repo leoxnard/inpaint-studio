@@ -151,6 +151,32 @@ function showDownloadProgress(d) {
     : "Models, components and folders";
 }
 
+$("freeMem").onclick = async () => {
+  const b = $("freeMem");
+  b.disabled = true; b.textContent = "Freeing…";
+  try { await postJson("/api/comfy/free", {}); showToast("ComfyUI's models are unloaded."); }
+  catch (e) { showError(e.message); }
+  finally { b.textContent = "Free memory"; setTimeout(pollStatus, 1500); }
+};
+
+// recent prompts (edit / generate) and mask texts, kept by the server (shared by the app and the dev server)
+async function loadPromptHistory() {
+  try {
+    const h = await api("/api/prompt-history");
+    const sel = $("promptHistory");
+    sel.length = 1;
+    for (const t of h.prompts) sel.add(new Option(t.length > 80 ? `${t.slice(0, 80)}…` : t, t));
+    sel.disabled = !h.prompts.length;
+    $("maskHistory").replaceChildren(...h.masks.map((t) => new Option(t)));
+  } catch { /* the history is a convenience */ }
+}
+$("promptHistory").onchange = (e) => {
+  if (!e.target.value) return;
+  $("prompt").value = e.target.value;
+  $("prompt").dispatchEvent(new Event("input", { bubbles: true }));
+  e.target.value = "";
+};
+
 let statusTimer = null;
 async function pollStatus() {
   clearTimeout(statusTimer);
@@ -162,11 +188,15 @@ async function pollStatus() {
     downloading = !!s.download;
     if (s.comfy) {
       pill.className = "pill online";
-      $("statusText").textContent = "ComfyUI running";
+      const mem = s.memory;
+      $("statusText").textContent = mem ? `ComfyUI running · ${(mem.free / 1e9).toFixed(1)} of ${Math.round(mem.total / 1e9)} GB free` : "ComfyUI running";
+      $("freeMem").hidden = false;
+      $("freeMem").disabled = !!(s.running || s.pending);
       // the page loaded before ComfyUI was up: the sampler/scheduler lists are still empty
       if (appStarted && !$("sampler").options.length) loadModels();
     } else {
       pill.className = "pill offline";
+      $("freeMem").hidden = true;
       $("statusText").textContent = s.boot && s.boot.exited == null ? "ComfyUI starting" : "ComfyUI offline";
     }
   } catch {
@@ -1123,6 +1153,7 @@ async function computeMask() {
   } catch (e) {
     if (state.maskToken === token) showError(e.message);  // a cancelled mask needs no error
   } finally {
+    loadPromptHistory();   // the server remembered the mask text
     if (state.maskToken === token) state.maskToken = null;
     btn.disabled = false;
     $("maskSpinner").hidden = true;
@@ -1367,6 +1398,7 @@ async function submitJob(params, url = "/api/jobs", { quiet = false } = {}) {
   const job = jobFromSummary(sum);
   if (url === "/api/jobs") job.params = params;   // known only to the page that queued it ("Load settings in Create")
   renderQueue();
+  loadPromptHistory();
   if (!quiet) showToast(params.group ? `${params.variant + 1} variations added to the queue` : "Added to the queue", { runsLink: true });
   // show it right away if nothing else is running, otherwise it just waits in the queue
   if (state.follow && ![...state.jobs.values()].some((j) => j !== job && j.status === "running")) viewJob(job);
@@ -2169,6 +2201,8 @@ function renderDetails(run, status) {
     $("downloadUpscaled").textContent = `Download upscaled (${run.upscale}×)`;
     $("downloadUpscaled").download = (run.filename || "result.png").replace(/\.png$/, `_x${run.upscale}.png`);
   }
+  $("downloadComfy").hidden = !(done && run.resultUrl && run.serverId && runTask(run) !== "upscale");
+  if (!$("downloadComfy").hidden) $("downloadComfy").href = `/api/runs/${encodeURIComponent(run.serverId)}/comfyui.png`;
   $("downloadSteps").hidden = !visibleFrames(run).length;
   $("cancelRun").hidden = status !== "running";
   $("removeRun").hidden = status !== "queued";
@@ -2750,6 +2784,7 @@ function initApp() {
   setMode("paint");
   renderHistory();
   loadModels();
+  loadPromptHistory();
 }
 
 function syncModeUi() {

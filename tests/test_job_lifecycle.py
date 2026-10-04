@@ -100,3 +100,30 @@ def test_thumb_is_small_cached_and_refuses_other_urls(tmp_path, monkeypatch):
     assert len(list((tmp_path / "thumbs").iterdir())) == 1
     assert c.get("/api/thumb", params={"src": "/data/runs/../secret.png"}).status_code == 404
     assert c.get("/api/thumb", params={"src": "https://example.com/x.png"}).status_code == 400
+
+
+def test_prompt_history_dedupes_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "RUNS", tmp_path / "runs")
+    for t in ("a", "b", "a", "  ", "c"):
+        server.remember_prompt("prompts", t)
+    server.remember_prompt("masks", "person")
+    h = TestClient(server.app).get("/api/prompt-history").json()
+    assert h == {"prompts": ["c", "a", "b"], "masks": ["person"]}
+
+
+def test_comfyui_png_carries_the_graph(tmp_path, monkeypatch):
+    import io
+    import json
+    from PIL import Image
+    monkeypatch.setattr(server, "RUNS", tmp_path)
+    d = stored_run(tmp_path, "r1", status="done")
+    run = read(d) | {"result_url": "/api/view?filename=r1.png&subfolder=InpaintStudio&type=output"}
+    (d / "run.json").write_text(json.dumps(run))
+
+    async def fetch(url):
+        return Image.new("RGB", (8, 8))
+    monkeypatch.setattr(server, "_fetch_view", fetch)
+    r = TestClient(server.app).get("/api/runs/r1/comfyui.png")
+    assert r.status_code == 200
+    graph = json.loads(Image.open(io.BytesIO(r.content)).text["prompt"])
+    assert "out_result" in graph

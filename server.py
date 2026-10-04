@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 import httpx
 import websockets
 import numpy as np
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageFilter, ImageOps, PngImagePlugin
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -180,7 +180,54 @@ async def status():
     except HTTPException as e:
         # boot: startup progress while the ComfyUI this server started is not answering yet (the loading screen)
         return {"comfy": False, "error": e.detail, "download": download, "boot": COMFY_PROC.boot()}
-    return {"comfy": True, "running": len(q["queue_running"]), "pending": len(q["queue_pending"]), "download": download}
+    memory = None
+    try:   # what ComfyUI's machine has left (on Apple silicon RAM and VRAM are the same memory)
+        sysinfo = (await comfy_json("GET", "/system_stats")).get("system", {})
+        memory = {"total": sysinfo["ram_total"], "free": sysinfo["ram_free"]}
+    except (HTTPException, KeyError):
+        pass
+    return {"comfy": True, "running": len(q["queue_running"]), "pending": len(q["queue_pending"]), "download": download,
+            "memory": memory}
+
+
+@app.post("/api/comfy/free")
+async def free_memory():
+    """Unloads ComfyUI's models and frees its cache (the next run loads its model again)."""
+    if JOBS:
+        raise HTTPException(409, "a run is queued or running; free memory when the queue is empty")
+    await comfy_json("POST", "/free", json={"unload_models": True, "free_memory": True})
+    return {"freed": True}
+
+
+# ---------------------------------------------------------------- prompt history (edit/generate prompts, mask texts)
+
+HISTORY_KINDS, HISTORY_MAX = ("prompts", "masks"), 50
+
+
+def load_prompt_history() -> dict:
+    try:
+        data = json.loads((RUNS.parent / "prompt_history.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    return {k: [t for t in data.get(k, []) if isinstance(t, str)] for k in HISTORY_KINDS}
+
+
+def remember_prompt(kind: str, text: str) -> None:
+    """Newest first, no duplicates, at most HISTORY_MAX per kind."""
+    text = (text or "").strip()
+    if not text:
+        return
+    data = load_prompt_history()
+    data[kind] = [text, *[t for t in data[kind] if t != text]][:HISTORY_MAX]
+    try:
+        (RUNS.parent / "prompt_history.json").write_text(json.dumps(data, indent=1))
+    except OSError:
+        pass
+
+
+@app.get("/api/prompt-history")
+async def prompt_history():
+    return load_prompt_history()
 
 
 # ---------------------------------------------------------------- setup (first run, optional masking)
@@ -413,6 +460,7 @@ async def mask(req: MaskReq):
     """Runs the mask graph and waits for it. Masks jump ahead of queued edit runs (front of ComfyUI's
     queue), so they only wait for the run that is currently sampling."""
     graph = graphs.build_mask_graph(req.image, req.megapixels, req.text, req.threshold, req.refine, req.expand, req.invert)
+    remember_prompt("masks", req.text)
     t0 = time.time()
     pid = await submit(graph, f"inpaint-studio-{uuid.uuid4().hex[:6]}", front=True)
     token = req.token or pid
@@ -450,6 +498,30 @@ def save_run(run: dict) -> None:
     tmp = d / "run.json.tmp"
     tmp.write_text(json.dumps(run, indent=1))
     tmp.replace(d / "run.json")
+
+
+@app.get("/api/runs/{run_id}/comfyui.png")
+async def comfyui_png(run_id: str):
+    """The run's result with its ComfyUI graph in the PNG (the "prompt" text chunk ComfyUI writes itself), so
+    dropping the file onto ComfyUI opens the exact workflow."""
+    d = (RUNS / run_id).resolve()
+    stored = load_job(run_id) if d.parent == RUNS.resolve() else None
+    try:
+        run = json.loads((d / "run.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        run = None
+    if not stored or not run or not run.get("result_url"):
+        raise HTTPException(404, "this run has no result with a stored graph")
+    img = await _fetch_view(run.get("crop_url") or run["result_url"])   # crop & stitch: the graph made the crop
+
+    def encode() -> bytes:
+        info = PngImagePlugin.PngInfo()
+        info.add_text("prompt", json.dumps(stored["graph"]))
+        buf = io.BytesIO()
+        img.save(buf, "PNG", pnginfo=info)
+        return buf.getvalue()
+    return Response(await asyncio.to_thread(encode), media_type="image/png",
+                    headers={"Content-Disposition": f'attachment; filename="{run_id}_comfyui.png"'})
 
 
 THUMBS = RUNS.parent / "thumbs"
@@ -1339,6 +1411,7 @@ async def create_job(params: dict):
     run = {"id": run_id, "created": time.time(), "status": "queued",
            "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": rep, "frames": []}
     save_run_config(run_id, run, params, graph)
+    remember_prompt("prompts", params.get("prompt", ""))
     return start_job(run, params, graph)
 
 

@@ -2,10 +2,11 @@ Brain note: ~/brain/Projects/inpaint-studio.md
 
 # Inpaint Studio
 
-Local UI on top of ComfyUI (127.0.0.1:8188): optional SAM3 mask (tune + brush-paint), then an
-edit (inpaint / free edit + paste / no mask), text-to-image generate or upscale (own task, upscale
-models only; edits can still upscale their result) with model presets
-(Qwen-Image 2.1 UC/official/Viggle Turbo, Edit 2511, 2512, Z-Image) and live per-step previews.
+Local UI on top of ComfyUI (127.0.0.1:8188). Three tasks: Edit (optional SAM3 mask, tune + brush/wand/bucket;
+whole image / inpaint / free edit + paste / extend canvas), Generate (text to image) and Upscale (own task, upscale
+models only; edits can still upscale their result). Single images or whole folders, model presets
+(Qwen-Image 2.1 UC/official/Viggle Turbo, Edit 2511, 2512, Z-Image), live per-step previews, post-processing.
+README.md is the user guide (tables + short bullets); keep it in sync when UI features change.
 Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy.
 
 ## Commands
@@ -65,5 +66,6 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   `<run>/step_NN_TOTAL.png` (+ `raw_step_…`), `<run>/config.json` (all params, encoder prompt, graph). The server strips ComfyUI's `_00001_` counter.
 - Run history: `~/Library/Application Support/Inpaint Studio/runs/<id>/run.json` + live preview
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by
-  `GET /api/runs`, removed by `DELETE /api/runs/{id}`. × in Results hides a run (`POST …/hide`, files kept);
-  `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed).
+  `GET /api/runs`, removed by `DELETE /api/runs/{id}`. × on a result tile or Select → remove → hide hides a run
+  (`POST …/hide`, files kept); `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed).
+  Results → Select works on picked runs: compare, post-process all, use as input, download, remove.

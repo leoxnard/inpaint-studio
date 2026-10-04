@@ -976,9 +976,21 @@ const zEnd = (e) => {
 stageEl.addEventListener("pointerup", zEnd, true);
 stageEl.addEventListener("pointercancel", zEnd, true);
 document.addEventListener("keydown", (e) => {
-  if (state.view !== "create" || !state.imgEl || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (state.view !== "create") return;
   const t = document.activeElement;
-  if (/INPUT|TEXTAREA|SELECT|BUTTON/.test(t.tagName) || t.isContentEditable) return;
+  // ⌘↵ queues from anywhere in Create, also while typing the prompt
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); if (!$("runEdit").disabled) $("runEdit").click(); return; }
+  if (!state.imgEl || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable) return;
+  if (t.tagName === "BUTTON" && (e.key === " " || e.key === "Enter")) return;   // a focused button still clicks
+  const tool = { b: "paint", e: "erase", w: "wand", g: "bucket" }[e.key.toLowerCase()];
+  if (tool && maskOn()) { setMode(tool); return; }
+  if ((e.key === "[" || e.key === "]") && maskOn()) {
+    const r = $("brushSize"), v = parseFloat(r.value);
+    r.value = Math.round(e.key === "]" ? v * 1.25 + 1 : v / 1.25);   // the range clamps to its min/max
+    r.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
   if (e.key === " ") { e.preventDefault(); spaceDown = true; stageEl.classList.add("pannable"); }
   else if (e.key === "0") resetZoom();
   else if (e.key === "+" || e.key === "=") zoomCenter(1.5);
@@ -1417,7 +1429,9 @@ function connectJobs() {
     const m = JSON.parse(ev.data);
     switch (m.type) {
       case "snapshot": {
-        state.jobs.clear();
+        // update the job objects in place: the viewer (state.run) keeps pointing at the one it shows
+        const live = new Set(m.jobs.map((j) => j.job_id));
+        for (const id of [...state.jobs.keys()]) if (!live.has(id)) state.jobs.delete(id);
         for (const sum of m.jobs) jobFromSummary(sum);
         renderQueue();
         const running = [...state.jobs.values()].find((j) => j.status === "running");
@@ -2285,9 +2299,18 @@ function syncResultFilters() {
   }
 }
 
+const thumbUrl = (url) => `/api/thumb?src=${encodeURIComponent(url)}`;
 function tileImage(run, pic) {
   if (!run.resultUrl) return null;
-  const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img);
+  const img = document.createElement("img"); img.src = thumbUrl(run.resultUrl); img.alt = ""; img.loading = "lazy"; pic.append(img);
+  // hover: result on the left, original on the right (only when the original has the result's shape)
+  if (run.beforeUrl && runTask(run) !== "generate" && !run.params?.outpaint) {
+    const before = document.createElement("img"); before.className = "rbefore"; before.alt = "";
+    const line = document.createElement("span"); line.className = "rsplit";
+    pic.append(before, line);
+    pic.addEventListener("mouseenter", () => { if (!before.src) before.src = thumbUrl(run.beforeUrl); });
+    pic.classList.add("has-before");
+  }
   return img;
 }
 // model of a run for the result tiles: the upscaler, or the preset with its quantisation
@@ -2298,10 +2321,17 @@ function runModelName(run) {
   return model && p.quant ? `${model} · ${p.quant}` : model;
 }
 // "W × H" of the result: the working size first, then the loaded image (crop & stitch results are larger)
-function sizeLabel(el, run, img) {
-  const set = (w, h) => { el.textContent = w ? `${w} × ${h}` : ""; };
-  set(run.size?.work_w, run.size?.work_h);
-  img?.addEventListener("load", () => set(img.naturalWidth, img.naturalHeight));
+// size of the result file (the tile only loads a thumbnail): crop & stitch gives the original's size, an upscale
+// in the edit multiplies the working size (an upscale run's size is already its output)
+function runOutSize(run) {
+  const p = run.params || {}, w = run.size?.work_w, h = run.size?.work_h;
+  if (p.crop_box && p.orig_size) return p.orig_size;
+  if (w && runTask(run) !== "upscale" && p.upscale > 1) return [Math.round(w * p.upscale), Math.round(h * p.upscale)];
+  return w ? [w, h] : null;
+}
+function sizeLabel(el, run) {
+  const out = runOutSize(run);
+  el.textContent = out ? `${out[0]} × ${out[1]}` : "";
 }
 
 // the runs the results grid shows for the current filter, in its order
@@ -2332,12 +2362,13 @@ function renderHistory() {
     if (pickable) b.setAttribute("aria-pressed", String(picked));
     b.setAttribute("aria-label", `Open run: ${run.prompt || "untitled"}`);
     const pic = document.createElement("span"); pic.className = "rpic";
-    if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
+    const out = runOutSize(run);
+    if (out) pic.style.aspectRatio = `${out[0]} / ${out[1]}`;
     const img = tileImage(run, pic);
     const meta = document.createElement("span"); meta.className = "rmeta";
     const model = document.createElement("span"); model.className = "rmodel"; model.textContent = runModelName(run);
     model.title = model.textContent;
-    const l = document.createElement("span"); sizeLabel(l, run, img);
+    const l = document.createElement("span"); sizeLabel(l, run);
     meta.append(model, l);
     if (run.status === "error") { const st = document.createElement("span"); st.className = "strong"; st.textContent = "Failed"; meta.append(st); }
     if (pickable) {   // which picks share the source image of the first pick
@@ -2381,7 +2412,8 @@ function renderRemoved(box) {
     b.className = "rtile removed";
     b.setAttribute("aria-label", `Restore the run from ${relTime(run.finished || run.created)}`);
     const pic = document.createElement("span"); pic.className = "rpic";
-    if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
+    const out = runOutSize(run);
+    if (out) pic.style.aspectRatio = `${out[0]} / ${out[1]}`;
     const img = tileImage(run, pic);
     const meta = document.createElement("span"); meta.className = "rmeta";
     const l = document.createElement("span"); l.textContent = "Restore";

@@ -626,6 +626,12 @@ button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
 .rtile.active, .rtile.active:hover:not(:disabled) { border-color: var(--ink); }
 .rpic { position: relative; display: block; width: 100%; aspect-ratio: 1; border-radius: var(--r-img); background: var(--surface); overflow: hidden; }
 .rpic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rpic .rbefore { position: absolute; inset: 0; clip-path: inset(0 0 0 50%); opacity: 0; }
+.rpic .rsplit { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .25); opacity: 0; pointer-events: none; }
+@media (hover: hover) {
+  .rpic.has-before:hover .rbefore[src], .rpic.has-before:hover .rbefore[src] + .rsplit { opacity: 1; }
+}
 .rtile.failed .rpic { opacity: .45; }
 .rtile.removed .rpic { opacity: .55; }
 .rtile.removed:hover .rpic { opacity: 1; }

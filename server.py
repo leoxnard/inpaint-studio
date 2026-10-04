@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 from contextlib import asynccontextmanager
 import io
 import json
@@ -449,6 +450,47 @@ def save_run(run: dict) -> None:
     tmp = d / "run.json.tmp"
     tmp.write_text(json.dumps(run, indent=1))
     tmp.replace(d / "run.json")
+
+
+THUMBS = RUNS.parent / "thumbs"
+THUMB_PX = 384
+
+
+@app.get("/api/thumb")
+async def thumb(src: str):
+    """A small JPEG of a run image (/api/view?… or /data/runs/…) for the result tiles. Cached on disk by URL;
+    URLs of files that get overwritten carry a ?t= stamp, so a cached thumb never goes stale."""
+    key = hashlib.sha1(src.encode()).hexdigest()
+    found = [p for p in (THUMBS / f"{key}.jpg", THUMBS / f"{key}.png") if p.exists()]
+    if found:
+        path = found[0]
+    else:
+        if src.startswith("/api/view?"):
+            img = await _fetch_view(src)
+        elif src.startswith("/data/runs/"):
+            f = (RUNS / urlsplit(src).path.removeprefix("/data/runs/")).resolve()
+            if not f.is_relative_to(RUNS.resolve()) or not f.is_file():
+                raise HTTPException(404, "image not found")
+            img = await asyncio.to_thread(Image.open, f)
+        else:
+            raise HTTPException(400, "not a run image")
+
+        def make() -> Path:
+            im = ImageOps.exif_transpose(img)
+            im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
+            alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+            out = THUMBS / f"{key}.{'png' if alpha else 'jpg'}"   # transparent results keep their alpha
+            THUMBS.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_name(out.name + ".tmp")
+            if alpha:
+                im.convert("RGBA").save(tmp, "PNG")
+            else:
+                im.convert("RGB").save(tmp, "JPEG", quality=85)
+            tmp.replace(out)
+            return out
+        path = await asyncio.to_thread(make)
+    return FileResponse(path, media_type="image/png" if path.suffix == ".png" else "image/jpeg",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.get("/api/runs")

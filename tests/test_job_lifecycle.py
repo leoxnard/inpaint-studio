@@ -85,3 +85,18 @@ def test_upload_of_a_non_image_is_a_400():
     c = TestClient(server.app)
     r = c.post("/api/upload", files={"file": ("notes.txt", b"hello", "text/plain")})
     assert r.status_code == 400 and "notes.txt" in r.json()["detail"]
+
+
+def test_thumb_is_small_cached_and_refuses_other_urls(tmp_path, monkeypatch):
+    from PIL import Image
+    runs = tmp_path / "runs"
+    (runs / "r1").mkdir(parents=True)
+    Image.new("RGB", (2000, 1000), (200, 10, 10)).save(runs / "r1" / "aligned.png")
+    monkeypatch.setattr(server, "RUNS", runs)
+    monkeypatch.setattr(server, "THUMBS", tmp_path / "thumbs")
+    c = TestClient(server.app)
+    r = c.get("/api/thumb", params={"src": "/data/runs/r1/aligned.png?t=1"})
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and "immutable" in r.headers["cache-control"]
+    assert len(list((tmp_path / "thumbs").iterdir())) == 1
+    assert c.get("/api/thumb", params={"src": "/data/runs/../secret.png"}).status_code == 404
+    assert c.get("/api/thumb", params={"src": "https://example.com/x.png"}).status_code == 400

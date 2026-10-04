@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import time
@@ -464,9 +465,9 @@ async def delete_run(run_id: str):
     d = (RUNS / run_id).resolve()
     if d.parent != RUNS.resolve() or not d.is_dir():
         raise HTTPException(404, "run not found")
-    for f in d.iterdir():
-        f.unlink()
-    d.rmdir()
+    if run_id in JOBS:
+        raise HTTPException(409, "the run is still queued or running; cancel it first")
+    shutil.rmtree(d)
     return {"deleted": run_id}
 
 
@@ -835,6 +836,9 @@ def job_summary(job: dict) -> dict:
 
 
 async def finish_job(job: dict, status: str, **extra) -> None:
+    if job.get("finished"):   # cancel and completion can race; the first one wins
+        return
+    job["finished"] = True
     run = job["run"]
     now = time.time()
     # took = time from the start of execution (model loading included), not the time waiting in the queue
@@ -858,7 +862,15 @@ async def run_job(job: dict) -> None:
             save_run(run)
             await broadcast({"type": "queued", "job_id": run_id, "job": job_summary(job)})
             while True:
-                msg = await cws.recv()
+                try:
+                    msg = await asyncio.wait_for(cws.recv(), 30)
+                except asyncio.TimeoutError:
+                    # silence is normal during long steps; only a prompt ComfyUI no longer has is a problem
+                    q = await comfy_json("GET", "/queue")
+                    if pid in [item[1] for item in q["queue_running"] + q["queue_pending"]]:
+                        continue
+                    await follow_job(job)   # finished meanwhile (history) or gone
+                    return
                 if isinstance(msg, bytes):
                     parsed = parse_preview(msg)
                     if parsed and not any(f["kind"] == "saved" and f["step"] == step for f in run["frames"]):
@@ -915,6 +927,11 @@ async def run_job(job: dict) -> None:
                     return
     except asyncio.CancelledError:
         raise
+    except websockets.ConnectionClosed:
+        if run.get("prompt_id"):   # our socket died, ComfyUI may still run the prompt: poll it instead
+            await follow_job(job)
+        else:
+            await finish_job(job, "error", error="Lost the connection to ComfyUI")
     except HTTPException as e:
         await drop_prompt(run.get("prompt_id"))
         await finish_job(job, "error", error=str(e.detail))
@@ -940,11 +957,18 @@ async def drop_prompt(pid: str | None) -> None:
 async def complete_run(job: dict, pid: str) -> None:
     """Collects the outputs of a finished prompt, runs the automatic paste fixes and finishes the job."""
     run, params, run_id = job["run"], job["params"], job["run"]["id"]
-    outs = (await wait_history(pid, timeout=30)).get("outputs", {})
+    entry = await wait_history(pid, timeout=30)
+    if any(kind == "execution_interrupted" for kind, _ in entry.get("status", {}).get("messages", [])):
+        await finish_job(job, "cancelled", error="Cancelled")
+        return
+    outs = entry.get("outputs", {})
     def first(key: str) -> dict | None:
         img = (outs.get(key, {}).get("images") or [None])[0]
         return drop_counter(img) if img else None
     res, before, raw, upscaled = first("out_result"), first("out_before"), first("out_raw"), first("out_upscaled")
+    if not res:
+        await finish_job(job, "error", error="ComfyUI finished without a result image")
+        return
     use_mask = params.get("use_mask") and params.get("mask")
     run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,
                mask_url=input_mask_url(params["mask"]) if use_mask else None, result_url=view_url(res) if res else None)
@@ -1004,19 +1028,32 @@ async def follow_job(job: dict) -> None:
     """Follows a prompt submitted by an earlier server process (reattached after a restart). ComfyUI sends
     progress and previews only to the client that submitted it, so this only polls queue and history."""
     run, pid = job["run"], job["run"]["prompt_id"]
+    fails = 0
     try:
         while True:
-            if pid in await comfy_json("GET", f"/history/{pid}"):
+            try:
+                hist = await comfy_json("GET", f"/history/{pid}")
+                q = None if pid in hist else await comfy_json("GET", "/queue")
+                fails = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception:   # one failed poll (ComfyUI busy, 502) is not the end of the run
+                fails += 1
+                if fails >= 5:
+                    raise
+                await asyncio.sleep(2)
+                continue
+            if q is None:
                 await complete_run(job, pid)
                 return
-            q = await comfy_json("GET", "/queue")
             if pid in [item[1] for item in q["queue_running"]]:
                 if run["status"] != "running":
                     run.update(status="running", started=run.get("started") or time.time())
                     save_run(run)
                     await broadcast({"type": "running", "job_id": run["id"], "started": run["started"]})
             elif pid not in [item[1] for item in q["queue_pending"]]:
-                await finish_job(job, "error", error="Server restarted before the job finished")
+                await finish_job(job, "error", error="The prompt is no longer in ComfyUI"
+                                 if not job.get("reattached") else "Server restarted before the job finished")
                 return
             await asyncio.sleep(2)
     except asyncio.CancelledError:
@@ -1237,6 +1274,11 @@ async def cancel_job(job_id: str):
     if pid and pid in [item[1] for item in q["queue_pending"]]:
         await client.post("/queue", json={"delete": [pid]})
     job["task"].cancel()
+    try:
+        await job["task"]
+    except (asyncio.CancelledError, Exception):
+        pass
+    await drop_prompt(job["run"].get("prompt_id"))   # submitted while we were cancelling
     await finish_job(job, "cancelled", error="Removed from queue")
     return {"cancelled": True, "was": "queued"}
 

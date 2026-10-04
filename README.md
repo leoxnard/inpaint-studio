@@ -78,8 +78,7 @@ The ×1 … ×8 menu next to the queue button adds **variations**: the same run 
 own seed (random, or seed, seed + 1, …). In Runs the variations of one batch show as a strip under the
 image. **Compare** (next to the result filters) picks two or more results (dashed tiles, click to toggle)
 and shows them side by side (`web/compare.js`): **Detail** (default) is a grid where every tile shows the
-same part of its image, moved and resized with the minimap at the bottom left or by scrolling/pinching and
-dragging in a tile; **Split** cuts one frame into fixed strips. Drag a label to change the order. Labels name
+same part of its image (scroll/pinch to zoom, drag to pan, all tiles follow); **Split** cuts one frame into fixed strips. Drag a label to change the order. Labels name
 the model plus every setting that differs; results from different source images can be mixed.
 
 If the server restarts while ComfyUI keeps running (e.g. Comfy Desktop), unfinished runs are followed

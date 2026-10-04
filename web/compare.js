@@ -1,6 +1,6 @@
 // Compare several runs side by side (Runs view). Two modes:
-//  - "detail" (default): a grid where every tile shows the same part of its image; a minimap at the bottom left
-//    moves and resizes that part, and wheel / drag / pinch in any tile zoom and pan all tiles together.
+//  - "detail" (default): a grid where every tile shows the same part of its image; wheel / drag / pinch in any
+//    tile zoom and pan all tiles together.
 //  - "split": one frame cut into equal fixed vertical strips, strip k shows run k.
 // In both modes the labels can be dragged onto another one to change the order.
 // The view is kept relative to the first image (centre and width as fractions), so images of different sizes
@@ -122,19 +122,9 @@ export function createMultiCompare(root, { onExit }) {
     t.img.style.transform = `translate(${tw / 2 - view.cx * n.w * s}px, ${th / 2 - view.cy * n.h * s}px)`;
   }
 
-  let mini = null;
   function updateView() {
     clampView();
     for (const t of tiles) placeImage(t);
-    if (!mini) return;
-    const { box, rect, shade } = mini;
-    const mw = box.clientWidth, mh = box.clientHeight;
-    for (const r of [rect, shade]) {
-      r.style.left = `${(view.cx - view.w / 2) * mw}px`;
-      r.style.top = `${(view.cy - viewH() / 2) * mh}px`;
-      r.style.width = `${view.w * mw}px`;
-      r.style.height = `${viewH() * mh}px`;
-    }
   }
 
   function buildDetail() {
@@ -162,7 +152,6 @@ export function createMultiCompare(root, { onExit }) {
       tiles.push({ item: it, box, img });
       panZoom(box);
     });
-    buildMinimap();
     updateView();
   }
 
@@ -218,69 +207,6 @@ export function createMultiCompare(root, { onExit }) {
     box.addEventListener("pointercancel", up);
   }
 
-  // minimap of the first image: drag the frame to move it, a corner to resize it, click elsewhere to jump there
-  function buildMinimap() {
-    const W = stage.clientWidth, H = stage.clientHeight;
-    const maxMW = Math.min(220, W * 0.32), maxMH = Math.min(170, H * 0.36);
-    const a = refAspect();
-    const mw = Math.min(maxMW, maxMH * a), mh = mw / a;
-    const box = el("div", "mc-mini");
-    box.style.width = `${mw}px`;
-    box.style.height = `${mh}px`;
-    box.title = "Drag the frame to move it, a corner to resize it";
-    const img = el("img");
-    img.src = items[0].url;
-    img.alt = "";
-    img.draggable = false;
-    // the image and the dimmed outside are clipped to the rounded box; frame and corners sit on top, unclipped
-    const clip = el("div", "mc-clip");
-    const shade = el("div", "mc-shade");
-    clip.append(img, shade);
-    const rect = el("div", "mc-rect");
-    for (const c of ["nw", "ne", "sw", "se"]) { const h = el("span", `mc-h ${c}`); h.dataset.corner = c; rect.append(h); }
-    box.append(clip, rect);
-    stage.append(box);
-    mini = { box, rect, shade };
-
-    let drag = null;
-    box.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      box.setPointerCapture(e.pointerId);
-      const r = box.getBoundingClientRect();
-      const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
-      const corner = e.target.dataset?.corner;
-      if (corner) {   // the opposite corner stays where it is
-        const ax = corner.includes("w") ? view.cx + view.w / 2 : view.cx - view.w / 2;
-        const ay = corner.includes("n") ? view.cy + viewH() / 2 : view.cy - viewH() / 2;
-        drag = { kind: "resize", ax, ay, sx: corner.includes("w") ? -1 : 1, sy: corner.includes("n") ? -1 : 1 };
-        return;
-      }
-      if (e.target !== rect) { view.cx = x; view.cy = y; updateView(); }
-      drag = { kind: "move", x, y };
-    });
-    box.addEventListener("pointermove", (e) => {
-      if (!drag) return;
-      const r = box.getBoundingClientRect();
-      const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
-      if (drag.kind === "move") {
-        view.cx += x - drag.x;
-        view.cy += y - drag.y;
-        drag.x = x; drag.y = y;
-      } else {
-        const hPerW = viewH() / view.w;   // keeps the tile aspect ratio
-        const w = Math.max((x - drag.ax) * drag.sx, (y - drag.ay) * drag.sy / hPerW, 0.02);
-        view.w = Math.min(w, maxW(), drag.sx > 0 ? 1 - drag.ax : drag.ax, (drag.sy > 0 ? 1 - drag.ay : drag.ay) / hPerW);
-        view.cx = drag.ax + drag.sx * view.w / 2;
-        view.cy = drag.ay + drag.sy * view.w * hPerW / 2;
-      }
-      updateView();
-    });
-    const end = () => { drag = null; };
-    box.addEventListener("pointerup", end);
-    box.addEventListener("pointercancel", end);
-  }
-
   // ---------------------------------------------------------------- split
   function buildSplit() {
     const W = stage.clientWidth, H = stage.clientHeight;
@@ -311,7 +237,6 @@ export function createMultiCompare(root, { onExit }) {
   function layout() {
     stage.innerHTML = "";
     tiles = [];
-    mini = null;
     if (mode === "detail") buildDetail(); else buildSplit();
   }
 

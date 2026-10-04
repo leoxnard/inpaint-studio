@@ -1909,15 +1909,38 @@ $("compareCancel").onclick = () => {
   syncCompareUi();
   renderHistory();
 };
+// Compare starts sorted: runs of the same model side by side (models in the order they were picked),
+// within a model by parameter count (1.4B < 3B < 7B), then quantisation (Q4 < Q8 < fp16; _S < _M < _L)
+function cmpModelKey(r) {
+  const p = r.params || {};
+  const up = runTask(r) === "upscale" && (state.setup?.components || []).find((c) => c.key === p.upscaler);
+  const name = up ? up.title : presetById(p.preset)?.title || p.unet || "";
+  const q = (up ? name : p.quant || p.unet || "").toLowerCase();
+  return {
+    model: up ? up.group || up.key : p.preset || p.unet || runTask(r),
+    params: parseFloat(name.match(/(\d+(?:\.\d+)?)\s*B\b/i)?.[1]) || 0,
+    bits: parseFloat(q.match(/q(\d+)/)?.[1] || q.match(/(?:fp|bf|int)(\d+)/)?.[1]) || 99,
+    size: { s: 0, m: 1, l: 2 }[q.match(/_k_([sml])\b/)?.[1]] ?? 1,
+  };
+}
+function sortForCompare(runs) {
+  const keys = new Map(runs.map((r) => [r, cmpModelKey(r)]));
+  const firstSeen = [...new Set(runs.map((r) => keys.get(r).model))];
+  return [...runs].sort((a, b) => {
+    const ka = keys.get(a), kb = keys.get(b);
+    return firstSeen.indexOf(ka.model) - firstSeen.indexOf(kb.model) || ka.params - kb.params || ka.bits - kb.bits || ka.size - kb.size;
+  });
+}
+
 function startCompare() {
-  const runs = cmpRuns();
+  const runs = sortForCompare(cmpRuns());
   if (runs.length < 2) return;
   const labels = cmpLabels(runs);
   const sources = new Set(runs.map(cmpSource));
   state.cmp.active = true;
   document.body.classList.add("cmp-active");
   $("multiCmp").hidden = false;
-  multiCmp.show(runs.map((r, i) => ({ key: r.serverId, url: r.aligned?.url || r.upscaledUrl || r.resultUrl, ...labels[i] })),
+  multiCmp.show(runs.map((r, i) => ({ key: r.serverId, url: r.grainUrl || r.aligned?.url || r.upscaledUrl || r.resultUrl, ...labels[i] })),
     { note: sources.size > 1 ? "Different source images" : "" });
 }
 function exitCompare() {

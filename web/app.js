@@ -1662,6 +1662,13 @@ function visibleFrames(run) {
 
 // the result as shown and downloaded: with grain added afterwards, else the fixed one, else the plain result
 const shownResult = (run) => run.grainUrl || run.aligned?.url || run.resultUrl;
+// what the viewer shows right now: a picked step, else the raw image ("Raw" on) or the (pasted) result
+function viewedImage(run) {
+  const f = run.shown != null ? visibleFrames(run)[run.shown] : null;
+  if (f) return { url: f.url, suffix: `_step${f.step}${f.variant === "raw" ? "_raw" : ""}` };
+  if ($("viewRaw").checked && run.rawUrl) return { url: run.rawUrl, suffix: "_raw" };
+  return { url: shownResult(run), suffix: "" };
+}
 const hasRaw = (run) => !!(run && (run.rawUrl || run.frames.some((f) => f.variant === "raw")));
 
 // one step frame in the viewer
@@ -1684,7 +1691,7 @@ function showFinal() {
   run.shown = null;
   for (const img of $("filmstrip").children) img.classList.remove("active");
   $("resultEmpty").hidden = true;
-  const after = $("viewRaw").checked && run.rawUrl ? run.rawUrl : shownResult(run);
+  const after = viewedImage(run).url;
   if (!run.beforeUrl || !$("compareToggle").checked) {
     $("liveImg").src = after;
     $("liveImg").hidden = false;
@@ -2304,9 +2311,11 @@ $("useResult").onclick = async () => {
   const run = state.run;
   if (!run || !run.resultUrl) return;
   try {
-    const blob = await (await fetch(shownResult(run))).blob();
+    const { url, suffix } = viewedImage(run);   // raw or pasted, whichever is on screen
+    const blob = await (await fetch(url)).blob();
     if (!ensureEditTask()) return;
-    await setImageFile(new File([blob], run.filename || "result.png", { type: blob.type || "image/png" }));
+    const name = (run.filename || "result.png").replace(/(\.\w+)?$/, `${suffix}$1`);
+    await setImageFile(new File([blob], name, { type: blob.type || "image/png" }));
     setView("create");
   } catch (e) { showError(e.message); }
 };

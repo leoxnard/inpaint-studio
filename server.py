@@ -552,13 +552,13 @@ class PostReq(BaseModel):
     warp: bool = False
     poisson: bool = False  # seamless edges (masked edits only)
     grain: bool = False    # the original's film / sensor grain (prepare.add_grain)
-    grain_strength: float = Field(1.0, ge=0, le=3)   # 1 = what the result lacks compared with the original
+    grain_strength: float = Field(prepare.GRAIN_STRENGTH, ge=0, le=3)   # 1 = what the result lacks compared with the original
     save: bool = False
 
 
 def grain_strength(params: dict) -> float:
     v = params.get("grain_strength")
-    return 1.0 if v is None else min(3.0, max(0.0, float(v)))
+    return prepare.GRAIN_STRENGTH if v is None else min(3.0, max(0.0, float(v)))
 
 
 def fix_kind(run: dict) -> str | None:
@@ -632,35 +632,38 @@ def _grain_mask_url(run: dict) -> str | None:
     return run.get("mask_url")
 
 
-async def post_process(run: dict, req: PostReq, kind: str | None) -> dict:
+def _output_dir() -> Path:
+    out = (COMFY_OUTPUT or Path(installer.load_config()["output_dir"])) / "InpaintStudio"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool = False) -> dict:
     """Post-processing of a finished run: the fixes (fix_image, when kind allows them), then the grain, on top
-    of each other. Without save a JPEG preview; with save the fixed image (aligned.png in the run dir, <run>_fixed.png)
-    and the grained one (<run>_grain.png, run["grain_url"]), which the viewer and downloads then prefer.
-    Steps that are off are removed from the run again."""
+    of each other. Without save a JPEG preview. With save everything that is on ends up in ONE file next to the
+    result, <run>_fixed.png (run["fixed_url"], which the viewer and downloads then prefer), overwritten on every
+    save and removed when nothing is on. The fixes alone are kept as aligned.png in the run dir (crop & stitch
+    pastes that one). internal (crop & stitch before stitching): only aligned.png, the stitched result comes later."""
     run_id = run["id"]
     if not run.get("result_url"):
         raise HTTPException(400, "the run has no result")
     fixes = kind is not None and (req.auto or req.dx or req.dy or req.scale != 1 or req.colors or req.warp or req.poisson)
     result: dict[str, Any] = {"kind": kind}
+    changed = fixes or req.grain
     if fixes:
         img, info = await fix_image(run, req, kind)
         result.update(info)
     elif kind is None and run.get("aligned") and (RUNS / run_id / "aligned.png").exists():
         img = Image.open(RUNS / run_id / "aligned.png")   # extend canvas: the blend made at the end of the run
+        changed = True
     else:
         img = await _fetch_view(run["result_url"])
-    out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
     stamp = int(time.time() * 1000)
     if req.save and kind is not None:
         if fixes:
             img.save(RUNS / run_id / "aligned.png")
             url = f"/data/runs/{run_id}/aligned.png?t={stamp}"
             run["aligned"] = {k: result[k] for k in ("dx", "dy", "scale", "colors", "warp", "poisson", "outside_diff")} | {"url": url}
-            try:  # next to <run>.png, so the files on disk match what the app shows
-                (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
-                img.save(out_dir / "InpaintStudio" / f"{run_id}_fixed.png")
-            except OSError:
-                pass
         else:
             run.pop("aligned", None)
     if req.grain:
@@ -672,20 +675,23 @@ async def post_process(run: dict, req: PostReq, kind: str | None) -> dict:
         seed = int((run.get("params") or {}).get("seed") or 0)
         img = await asyncio.to_thread(prepare.add_grain, original, img, seed, mask, req.grain_strength)
     if req.save:
-        if req.grain:
-            name = f"{run_id}_grain.png"
-            (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(img.save, out_dir / "InpaintStudio" / name)
-            run["grain_url"] = view_url({"filename": name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
-            run["grain_strength"] = req.grain_strength
-        else:
-            run.pop("grain_url", None)
+        run.pop("grain_url", None)   # older runs kept the grain in its own <run>_grain.png
+        run["grain"], run["grain_strength"] = req.grain, req.grain_strength
+        if not internal:
+            path = _output_dir() / f"{run_id}_fixed.png"
+            if changed:
+                await asyncio.to_thread(img.save, path)
+                run["fixed_url"] = view_url({"filename": path.name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
+            else:   # nothing on: back to the plain result
+                path.unlink(missing_ok=True)
+                run.pop("fixed_url", None)
         save_run(run)
-        result["url"] = run.get("grain_url") or (run.get("aligned") or {}).get("url") or run["result_url"]
+        result["url"] = run.get("fixed_url") or (run.get("aligned") or {}).get("url") or run["result_url"]
     else:
         await asyncio.to_thread(img.convert("RGB").save, RUNS / run_id / "post_preview.jpg", quality=92)
         result["url"] = f"/data/runs/{run_id}/post_preview.jpg?t={stamp}"
-    result.update(saved=req.save, aligned=run.get("aligned"), grain_url=run.get("grain_url"), grain_strength=run.get("grain_strength"))
+    result.update(saved=req.save, aligned=run.get("aligned"), fixed_url=run.get("fixed_url"), grain=run.get("grain"),
+                  grain_strength=run.get("grain_strength"))
     return result
 
 
@@ -708,7 +714,7 @@ class UpscaleReq(BaseModel):
     megabytes: float | None = None  # or a rough target file size (prepare.size_for_megabytes)
     color_correction: str = "lab"  # SeedVR2 only
     grain: bool = True            # give the result the original's grain back (prepare.add_grain)
-    grain_strength: float = Field(1.0, ge=0, le=3)
+    grain_strength: float = Field(prepare.GRAIN_STRENGTH, ge=0, le=3)
 
 
 _bpp_cache: dict[str, float] = {}
@@ -938,7 +944,8 @@ async def complete_run(job: dict, pid: str) -> None:
     if res and (fixes or grain):
         try:
             await post_process(run, PostReq(save=True, grain=grain, grain_strength=grain_strength(params),
-                                            **(post if fixes else {})), kind if fixes else None)
+                                            **(post if fixes else {})), kind if fixes else None,
+                               internal=bool(params.get("crop_box")))
         except Exception as e:  # never fail the run because of the post-processing
             print(f"post-processing failed for {run_id}: {e!r}")
     if params.get("task") == "upscale" and params.get("grain") and res:
@@ -1114,11 +1121,9 @@ async def outpaint_fix(run: dict, params: dict, before_url: str, raw_url: str) -
     fixed.save(RUNS / run_id / "aligned.png")
     run["aligned"] = {"outpaint": True, "colors": bool(params.get("outpaint_colors", True)),
                       "url": f"/data/runs/{run_id}/aligned.png?t={int(time.time() * 1000)}"}
-    out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
-    try:
-        fixed.save(out_dir / "InpaintStudio" / f"{run_id}_fixed.png")
-    except OSError:
-        pass
+    fixed.save(_output_dir() / f"{run_id}_fixed.png")
+    run["fixed_url"] = view_url({"filename": f"{run_id}_fixed.png", "subfolder": "InpaintStudio", "type": "output"}) \
+        + f"&t={int(time.time() * 1000)}"
 
 
 async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:
@@ -1138,14 +1143,14 @@ async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:
 
 
 async def grain_result(run: dict, params: dict, res_url: str) -> dict:
-    """Upscale task: the original's grain added to the clean upscale (prepare.add_grain) -> <run>_grain.png."""
+    """Upscale task: the original's grain added to the clean upscale (prepare.add_grain) -> <run>_fixed.png."""
     run_id = run["id"]
     orig, result = await _fetch_view(input_mask_url(params["image"])), await _fetch_view(res_url)
     out = await asyncio.to_thread(prepare.add_grain, orig, result, int(params.get("seed") or 0), None, grain_strength(params))
     out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
     (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(out.save, out_dir / "InpaintStudio" / f"{run_id}_grain.png")
-    return {"filename": f"{run_id}_grain.png", "subfolder": "InpaintStudio", "type": "output"}
+    await asyncio.to_thread(out.save, out_dir / "InpaintStudio" / f"{run_id}_fixed.png")
+    return {"filename": f"{run_id}_fixed.png", "subfolder": "InpaintStudio", "type": "output"}
 
 
 @app.post("/api/jobs")

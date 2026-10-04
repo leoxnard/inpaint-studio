@@ -59,6 +59,9 @@ def crop(img: Image.Image, box: dict[str, int]) -> Image.Image:
 FREQ_BANDS = ((0.0, 0.7), (0.7, 1.5), (1.5, 3.0))   # grain is measured and rebuilt per spatial frequency band (DoG sigmas)
 LUMA_EDGES = np.array([0, 40, 80, 120, 160, 200, 256], np.float32)   # ... and per brightness band
 LUMA_CENTERS = (LUMA_EDGES[:-1] + LUMA_EDGES[1:]) / 2
+LUMA_PRIOR = 2000            # pixels: a brightness band with this many flat pixels is half its own value, half the overall
+GRAIN_MAX_SIGMA = 1.0        # the coarsest grain expected (blur of white noise), see plausible_grain
+GRAIN_STRENGTH = 0.8         # default strength: grain on a smooth model result looks stronger than in the textured original
 
 
 def _band(img: np.ndarray, lo: float, hi: float) -> np.ndarray:
@@ -101,11 +104,34 @@ def grain_profile(img: np.ndarray, where: np.ndarray) -> np.ndarray:
     sel = [(lum >= LUMA_EDGES[i]) & (lum < LUMA_EDGES[i + 1]) for i in range(len(LUMA_CENTERS))]
     for f, (lo, hi) in enumerate(FREQ_BANDS):
         d = _band(img, lo, hi)[flat]
-        out[f] = _robust_std(d)
+        overall = _robust_std(d)
         for i, m in enumerate(sel):
-            if m.sum() >= 300:
-                out[f, i] = _robust_std(d[m])
+            # few pixels give a noisy value, and the noise only pushes the grain to add up (max(o² - r², 0)):
+            # pulled towards the overall value, the fewer pixels the more
+            n = int(m.sum())
+            band = _robust_std(d[m]) if n >= 50 else overall
+            out[f, i] = (n * band + LUMA_PRIOR * overall) / (n + LUMA_PRIOR)
     return out
+
+
+def _white_band_ratios(sigma: float) -> np.ndarray:
+    """Std of each frequency band relative to the next finer one, for white noise blurred by sigma."""
+    noise = cv2.GaussianBlur(np.random.default_rng(0).standard_normal((256, 256), np.float32), (0, 0), sigma)
+    std = np.array([_robust_std(_band(noise, lo, hi)[16:-16, 16:-16].reshape(-1, 1))[0] for lo, hi in FREQ_BANDS])
+    return np.concatenate([[np.inf], std[1:] / std[:-1]])
+
+
+def plausible_grain(profile: np.ndarray) -> np.ndarray:
+    """Real film / sensor grain loses energy towards coarser bands, at most like white noise blurred by
+    GRAIN_MAX_SIGMA. What a coarser band has beyond that is picture (skin pores, fabric, soft detail that slipped
+    into the flat pixels), and adding it as noise looks blotchy: each band is capped at the finer one times that ratio."""
+    out = profile.copy()
+    for f in range(1, len(FREQ_BANDS)):
+        out[f] = np.minimum(out[f], out[f - 1] * COARSE_RATIOS[f])
+    return out
+
+
+COARSE_RATIOS = _white_band_ratios(GRAIN_MAX_SIGMA)
 
 
 def grain_std(img: np.ndarray, where: np.ndarray) -> np.ndarray:
@@ -116,10 +142,10 @@ def grain_std(img: np.ndarray, where: np.ndarray) -> np.ndarray:
     return np.sqrt(sum(_robust_std(_band(img, lo, hi)[flat]) ** 2 for lo, hi in FREQ_BANDS))
 
 
-def grain_need(o: np.ndarray, src: np.ndarray, r: np.ndarray, new: np.ndarray, strength: float = 1.0) -> np.ndarray:
+def grain_need(o: np.ndarray, src: np.ndarray, r: np.ndarray, new: np.ndarray, strength: float = GRAIN_STRENGTH) -> np.ndarray:
     """Grain to add [frequency band, brightness band, channel]: what the original has (in src) minus what the result
-    still has (in new), per band, times strength."""
-    po, pr = grain_profile(o, src), grain_profile(r, new)
+    still has (in new), per band, times strength. The original's part is limited to a plausible grain spectrum."""
+    po, pr = plausible_grain(grain_profile(o, src)), grain_profile(r, new)
     return strength * np.sqrt(np.maximum(po ** 2 - pr ** 2, 0))
 
 
@@ -157,7 +183,7 @@ def grain_layer(o: np.ndarray, src: np.ndarray, need: np.ndarray, r: np.ndarray,
 
 
 def add_grain(original: Image.Image, result: Image.Image, seed: int = 0, mask: Image.Image | None = None,
-              strength: float = 1.0) -> Image.Image:
+              strength: float = GRAIN_STRENGTH) -> Image.Image:
     """Upscalers and edit models come out clean: give `result` (same picture as `original`, any size) back the
     original's grain, at the original's grain size (so it looks the same at the same print size). The strength is
     what the original has minus what the result still has, per frequency and brightness band (grain_profile), both
@@ -202,7 +228,7 @@ def size_for_megabytes(w: int, h: int, bpp: float, mb: float) -> tuple[int, int]
 
 
 def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: dict[str, int],
-           feather: float = 0, grain: bool = False, seed: int = 0, grain_strength: float = 1.0) -> Image.Image:
+           feather: float = 0, grain: bool = False, seed: int = 0, grain_strength: float = GRAIN_STRENGTH) -> Image.Image:
     """Paste the edited crop back into the original. mask is the full-size mask (source pixels);
     feather is a blur radius in source pixels. Pixels outside the (feathered) mask stay untouched.
     grain: the edit comes out clean, so add the original's grain (measured outside the mask in the crop)

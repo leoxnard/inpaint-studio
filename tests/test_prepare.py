@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import pytest
 from PIL import Image
@@ -96,7 +97,7 @@ def test_stitch_adds_the_originals_grain_inside_the_mask():
     clean = Image.new("RGB", (400, 400), (128, 128, 128))
     hp = lambda img: prepare.grain_std(np.asarray(img, np.float32), m > 127).mean()
     assert hp(prepare.stitch(grainy, clean, Image.fromarray(m), box)) < 0.5
-    with_grain = prepare.stitch(grainy, clean, Image.fromarray(m), box, grain=True)
+    with_grain = prepare.stitch(grainy, clean, Image.fromarray(m), box, grain=True, grain_strength=1.0)
     target = prepare.grain_std(np.asarray(grainy, np.float32), m == 0).mean()
     assert abs(hp(with_grain) - target) < 0.15 * target
     assert (np.asarray(with_grain)[m == 0] == np.asarray(grainy)[m == 0]).all()
@@ -142,7 +143,7 @@ def test_add_grain_gives_an_upscale_the_originals_grain_back():
     base = np.tile(np.linspace(40, 200, 96, dtype=np.float32)[None, :, None], (64, 1, 3))
     grainy = Image.fromarray(np.clip(base + rng.normal(0, 8, base.shape), 0, 255).astype(np.uint8))
     clean = Image.fromarray(base.astype(np.uint8)).resize((192, 128), Image.BICUBIC)   # a "clean" ×2 upscale
-    out = prepare.add_grain(grainy, clean, seed=3)
+    out = prepare.add_grain(grainy, clean, seed=3, strength=1.0)
     assert out.size == clean.size
     everywhere = np.ones((64, 96), bool)
     small = lambda img: np.asarray(img.resize((96, 64), Image.BOX), np.float32)
@@ -187,7 +188,20 @@ def test_grain_strength_scales_the_added_grain():
     original = Image.fromarray(np.clip(base + rng.normal(0, 6, base.shape), 0, 255).astype(np.uint8))
     clean = Image.fromarray(base.astype(np.uint8))
     ev = np.ones((160, 160), bool)
-    full = prepare.grain_std(np.asarray(prepare.add_grain(original, clean), np.float32), ev).mean()
+    full = prepare.grain_std(np.asarray(prepare.add_grain(original, clean, strength=1.0), np.float32), ev).mean()
     half = prepare.grain_std(np.asarray(prepare.add_grain(original, clean, strength=0.5), np.float32), ev).mean()
     assert abs(half / full - 0.5) < 0.1
     assert prepare.add_grain(original, clean, strength=0).tobytes() == clean.tobytes()
+
+
+def test_coarse_detail_beyond_a_grain_spectrum_is_not_added():
+    rng = np.random.default_rng(7)
+    base = np.full((200, 200, 3), 128, np.float32)
+    fine = rng.normal(0, 4, base.shape).astype(np.float32)
+    blobs = cv2.GaussianBlur(rng.normal(0, 1, (200, 200)).astype(np.float32), (0, 0), 2.5)[..., None]
+    original = Image.fromarray(np.clip(base + fine + blobs / blobs.std() * 6, 0, 255).astype(np.uint8))
+    need = prepare.grain_need(np.asarray(original, np.float32), np.ones((200, 200), bool),
+                              base, np.ones((200, 200), bool), 1.0)
+    profile = prepare.grain_profile(np.asarray(original, np.float32), np.ones((200, 200), bool))
+    assert (need[2] < profile[2] * 0.9).all()          # the blotchy coarse part is cut back
+    assert np.allclose(need[0], profile[0], rtol=0.05)  # the fine grain is added in full

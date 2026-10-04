@@ -27,13 +27,13 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   `/api/*`, `/data/*` and `/ws/jobs` only accept local Host/Origin (`local_origin`, extra hosts via
   `INPAINT_STUDIO_ALLOWED_HOSTS`).
 - `prepare.py` – crop & stitch (crop around the mask before the run, `stitch` back into the original after
-  it → `<run>_full.png`), outpaint padding (`pad`) and the grain (`add_grain`, global or only inside a mask → `<run>_grain.png`; measured on flat pixels per frequency × brightness band, `grain_profile`, rebuilt band by band, `grain_strength` scales it). Pure functions, unit-tested; used by `create_job`.
+  it → `<run>_full.png`), outpaint padding (`pad`) and the grain (`add_grain`, global or only inside a mask; measured on flat pixels per frequency × brightness band, `grain_profile`, rebuilt band by band, `grain_strength` scales it). Pure functions, unit-tested; used by `create_job`.
 - `align.py` – post-processing of a paste-mode free edit or a whole-image edit: shift/scale alignment (phase
   correlation), local warp fix (DIS optical flow), colour/exposure match (Lab offset field) and
   seamless edges (graph-cut seam in a band around the mask edge, paste only), measured outside the mask
   (whole image: on the pixels the edit did not change, `align.unchanged`). Runs → Post-processing picks the steps
   (fixes + grain, `POST /api/runs/{id}/post`, `server.post_process`); the Create options run automatically after
-  the job (`post_*` params; saved as `<run>_fixed.png`, grain on top as `<run>_grain.png`).
+  the job (`post_*` params). Everything that is on goes into one `<run>_fixed.png` (`run.fixed_url`), overwritten on every Apply and removed when all is off; `aligned.png` in the run dir holds the fixes alone.
 - `presets.py` – model presets (files, quants, sizes, defaults), components (encoders, VAEs,
   SAM3, upscalers, Viggle node, LoRAs with their `families`, grouped by `LORA_GROUPS`) and the RAM-fit estimate. `installer.py` – setup and the download queue (more items can be queued while one runs) and
   the headless ComfyUI process.
@@ -61,7 +61,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - Encoder resolution is matched to the working size by default (`graphs.matching_resolution`):
   a different reference size shifts/scales the free edit.
 - Uploads go to ComfyUI `input/inpaint-studio/`. Results: `output/InpaintStudio/<run>.png`,
-  `<run>_raw.png`, `<run>_fixed.png`, `<run>_x2.png`, `<run>_full.png` (crop & stitch), `<run>_grain.png` (grain added, `run.grain_url` when added afterwards); `<run>/before.png` and
+  `<run>_raw.png`, `<run>_x2.png`, `<run>_full.png` (crop & stitch), `<run>_fixed.png` holds all post-processing (fixes and grain; older runs may still have `<run>_grain.png`); `<run>/before.png` and
   `<run>/step_NN_TOTAL.png` (+ `raw_step_…`), `<run>/config.json` (all params, encoder prompt, graph). The server strips ComfyUI's `_00001_` counter.
 - Run history: `~/Library/Application Support/Inpaint Studio/runs/<id>/run.json` + live preview
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by

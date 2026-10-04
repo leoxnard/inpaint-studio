@@ -119,7 +119,7 @@ Free edit + paste and whole-image runs can be fixed automatically (Post-processi
 Runs: match colours & exposure (smooth Lab offset field measured outside the mask; whole image: on the pixels
 whose colour moved about as much as most, so the asked-for change is left alone), fix
 local warp (DIS optical flow, OpenCV) and seamless edges (graph-cut seam, OpenCV), on top of shift/scale alignment.
-The fixed result is saved as `<run>_fixed.png`. An optional upscaler from the Download Center
+Everything that is on (fixes and grain) is saved as one `<run>_fixed.png`, overwritten on every Apply. An optional upscaler from the Download Center
 (UltraSharp / RealESRGAN in pixel space, or SeedVR2) upscales the result and saves `<run>_x2.png` / `_x4.png`.
 SeedVR2 comes as 1.4B sharp (community distillation, needs a small pinned ComfyUI node), 3B, 7B and
 7B sharp in int8 / fp16; its memory estimate assumes a 4 MP result.
@@ -128,11 +128,13 @@ The **Upscale** tab upscales images on their own (one image or a whole folder, l
 factor (1–4×), a target width in px (each image of a folder gets that width) or a rough file size in MB
 (estimated from how well the original compresses as PNG, `prepare.size_for_megabytes`; usually within ±25 %). Upscalers come out clean and
 lose the camera's grain, so by default the original's grain is added back at its original size
-(`prepare.add_grain`, saved as `<run>_grain.png`; the clean upscale stays as `<run>.png`, "Clean" in Runs).
+(`prepare.add_grain`, saved as `<run>_fixed.png`; the clean upscale stays as `<run>.png`, "Clean" in Runs).
 The grain is measured only on flat areas (edges and texture are not grain), separately for three frequency
 bands and six brightness bands, and only what the result lacks per band is added: a VAE's fine pixel pattern
-does not count as grain, and grain that is strongest in the midtones stays that way. **Grain strength**
-(0–200 %, in Create, Upscale and Runs → Post-processing) scales it.
+does not count as grain, and grain that is strongest in the midtones stays that way. Brightness bands with few
+flat pixels are pulled towards the overall value, and coarser bands are capped at what grain can have (white noise
+blurred by 1 px), so picture detail that slipped into the flat areas is not added as blotchy noise. **Grain strength**
+(0–200 %, in Runs → Post-processing; runs start with 80 %) scales it.
 Any finished edit or upscale can also get the grain afterwards: Post-processing → Film grain in Runs
 (`POST /api/runs/{id}/post`, measured on the run's original; untick it to go back). Compare sorts the picked results by model, then
 parameter count and quantisation.

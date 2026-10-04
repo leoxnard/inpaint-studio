@@ -38,7 +38,7 @@ BASE_STEPS = [  # id, title, description
     ("gguf_node", "GGUF loader", "ComfyUI-GGUF custom node, patched for Qwen-Image 2.1"),
 ]
 MODEL_FOLDERS = ["checkpoints", "clip", "clip_vision", "diffusion_models", "unet", "text_encoders", "vae",
-                 "vae_approx", "loras", "upscale_models", "embeddings", "controlnet"]
+                 "vae_approx", "loras", "upscale_models", "embeddings", "controlnet", "model_patches"]
 
 
 # ---------------------------------------------------------------- config
@@ -151,11 +151,11 @@ def item_title(item: str) -> str:
 
 def valid_item(item: str) -> bool:
     kind, _, rest = item.partition(":")
-    if kind == "component":
-        return rest in presets.COMPONENTS
+    if kind == "component":   # imported files are linked, never downloaded
+        return rest in presets.COMPONENTS and not presets.COMPONENTS[rest].get("imported")
     if kind == "model":
         pid, _, q = rest.partition(":")
-        return pid in presets.PRESETS and q in presets.PRESETS[pid]["quants"]
+        return pid in presets.PRESETS and q in presets.PRESETS[pid]["quants"] and not presets.PRESETS[pid].get("imported")
     return item in dict((s, t) for s, t, _ in BASE_STEPS)
 
 

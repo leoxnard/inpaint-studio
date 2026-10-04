@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field, ValidationError
 import align
 import graphs
 import prepare
+import imports
 import installer
 import presets
 
@@ -49,6 +50,7 @@ INSTALLER = installer.Installer()
 COMFY_PROC = installer.ComfyProcess()
 RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or installer.APP_SUPPORT) / "runs"
 RUNS.mkdir(parents=True, exist_ok=True)
+imports.apply()   # own files from the Download Center become components / presets
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
@@ -264,7 +266,8 @@ async def setup_status():
     comps = [{"id": f"component:{cid}", "key": cid, "title": c["title"], "size": c["size"], "file": presets.file_name(c),
              "installed": have[f"component:{cid}"], "kind": c.get("kind"), "scale": c.get("scale"),
              "engine": c.get("engine"), "group": c.get("group"), "needs": c.get("needs", []), "families": c.get("families"),
-             "strength": c.get("strength"), "repo": c["repo"], "description": c.get("description", "")}
+             "strength": c.get("strength"), "repo": c["repo"], "description": c.get("description", ""),
+             "imported": bool(c.get("imported"))}
              for cid, c in presets.COMPONENTS.items()]
     ram = system_ram()
     for c in comps:
@@ -277,7 +280,7 @@ async def setup_status():
         models.append({
             "id": pid, "title": pr["title"], "family": pr["family"], "modes": pr["modes"], "note": pr["note"],
             "experimental": bool(pr.get("experimental")), "default_quant": pr["default_quant"], "defaults": pr["defaults"],
-            "good_for": pr.get("good_for", ""), "recommended": bool(pr.get("recommended")),
+            "good_for": pr.get("good_for", ""), "recommended": bool(pr.get("recommended")), "imported": bool(pr.get("imported")),
             "recommended_quant": presets.recommended_quant(pid, ram),
             "text_encoder": pr["text_encoder"], "vae": pr["vae"], "nodes": pr.get("nodes", []), **st,
             "quants": [{"id": f"model:{pid}:{q}", "quant": q, "size": f["size"], "file": f["file"], "installed": have[f"model:{pid}:{q}"],
@@ -285,8 +288,59 @@ async def setup_status():
                        for q, f in pr["quants"].items()]})
     return {"ready": installer.ready(have), "mask_available": have["component:sam3"], "config": cfg,
             "system": {"ram": ram, "gpu_budget": int(ram * presets.GPU_SHARE), "seedvr2_ref_mp": presets.SEEDVR2_REF_MP},
-            "base": base, "components": comps, "lora_groups": presets.LORA_GROUPS, "presets": models, "default_preset": presets.DEFAULT_PRESET,
+            "base": base, "components": comps, "lora_groups": presets.LORA_GROUPS, "imports": imports.load(),
+            "import_kinds": {k: label for k, (_, label) in imports.KINDS.items()}, "presets": models, "default_preset": presets.DEFAULT_PRESET,
             "comfy": {"up": await comfy_up(), "managed": COMFY_PROC.managed}, "install": INSTALLER.state()}
+
+
+class ImportReq(BaseModel):
+    path: str
+    kind: str
+    title: str = ""
+    base: str = ""                 # diffusion model: the preset whose text encoder, VAE and settings it uses
+    families: list[str] = []       # LoRA: the model families it works with
+    scale: int | None = Field(None, ge=1, le=8)   # upscaler
+
+
+@app.post("/api/imports/pick")
+async def pick_import_file():
+    """Opens the macOS file dialog on this Mac (the server runs here) and returns the chosen path with a guess
+    of what it is. Cancelled: path null."""
+    script = 'POSIX path of (choose file with prompt "Import a model file into Inpaint Studio")'
+    proc = await asyncio.create_subprocess_exec("osascript", "-e", script, stdout=asyncio.subprocess.PIPE,
+                                                stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    path = out.decode().strip()
+    if proc.returncode != 0 or not path:
+        return {"path": None}
+    return await import_guess(path)
+
+
+@app.get("/api/imports/guess")
+async def import_guess(path: str):
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise HTTPException(400, f"{p} is not a file")
+    return {"path": str(p), "name": p.name, "size": p.stat().st_size, "kind": imports.guess_kind(p.name),
+            "scale": imports.guess_scale(p.name), "supported": p.suffix.lower() in imports.EXTENSIONS}
+
+
+@app.post("/api/imports")
+async def add_import(req: ImportReq):
+    try:
+        item = imports.add(installer.load_config(), req.path, req.kind, req.title, req.base, req.families, req.scale)
+    except (imports.ImportError_, OSError) as e:
+        raise HTTPException(400, str(e)) from e
+    return {"item": item, "setup": await setup_status()}
+
+
+@app.delete("/api/imports/{import_id}")
+async def remove_import(import_id: str):
+    try:
+        imports.remove(installer.load_config(), import_id)
+    except KeyError as e:
+        raise HTTPException(404, "import not found") from e
+    return await setup_status()
 
 
 @app.post("/api/setup/config")

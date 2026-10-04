@@ -51,7 +51,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
   const needKeys = (p) => [p.text_encoder, p.vae, ...(p.nodes || [])];
   const missingKeys = (p) => needKeys(p).filter((k) => !comp(k)?.installed);
   const recQuant = (p) => p.recommended_quant || p.default_quant;
-  const sorted = () => [...data.presets].sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0));
+  const sorted = () => data.presets.filter((p) => !p.imported).sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0));
   const FIT = {
     good: ["ok", "Fits"], tight: ["warn", "Tight – may swap, slow"], no: ["bad", "Too large"],
   };
@@ -113,6 +113,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
       inner.appendChild(buildComponents());
       inner.appendChild(buildModels());
       inner.appendChild(buildLoras());
+      inner.appendChild(buildImports());
     } else {
       seedFirstRun();
       inner.appendChild(buildGuided());
@@ -325,7 +326,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
         onDelete: () => confirmDelete(sam.id, "Masking (SAM3)", sam.size, "The masking tools will be hidden afterwards."),
       }));
     }
-    for (const u of data.components.filter((c) => c.kind === "upscaler" && !c.group)) {
+    for (const u of data.components.filter((c) => c.kind === "upscaler" && !c.group && !c.imported)) {
       sec.appendChild(itemRow({
         id: u.id, title: u.title, desc: u.description, size: u.size, installed: u.installed, deletable: true, optional: true,
         onDelete: () => confirmDelete(u.id, u.title, u.size, ""),
@@ -549,7 +550,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
   function buildLoras() {
     const sec = section("LoRAs");
     sec.appendChild(el("div", "hint", "Small add-ons for one model line (speed, styles, camera angles). Pick them under Advanced → LoRAs; a LoRA only works with the models of its group."));
-    const loras = data.components.filter((c) => c.kind === "lora");
+    const loras = data.components.filter((c) => c.kind === "lora" && !c.imported);
     for (const [group, families] of Object.entries(data.lora_groups || {})) {
       const items = loras.filter((l) => l.families.some((f) => families.includes(f)));
       if (!items.length) continue;
@@ -753,6 +754,89 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
   }
 
   // ---------------------------------------------------------------- updates
+  // ---------------------------------------------------------------- own files (ready mode)
+  // A file already on the Mac is linked into the matching models/ folder (not copied); Remove deletes the link only.
+  let importDraft = null;   // the picked file while its kind etc. are being chosen
+  function buildImports() {
+    const sec = section("Your files");
+    sec.id = "setupImports";
+    sec.appendChild(el("div", "hint", "Use a model, LoRA, upscaler or other model file that is already on this Mac. It is linked into the models folder, not copied."));
+    for (const i of data.imports || []) {
+      const what = data.import_kinds?.[i.kind] || i.kind;
+      const base = i.kind === "model" ? data.presets.find((p) => p.id === i.base)?.title : "";
+      const groups = i.kind === "lora" ? Object.entries(data.lora_groups || {}).filter(([, f]) => f.some((x) => (i.families || []).includes(x))).map(([g]) => g) : [];
+      const r = el("div", "irow");
+      const name = el("div", "name");
+      name.append(el("span", null, i.title), el("span", "tag-opt", what));
+      r.append(name, el("div", "desc", [base && `runs like ${base}`, groups.length && `for ${groups.join(", ")}`,
+        i.kind === "upscaler" && `${i.scale}×`, i.source].filter(Boolean).join(" · ")));
+      const side = el("div", "side");
+      side.append(el("span", "hint", fmtBytes(i.size)), actBtn("Remove", "danger", async () => {
+        showErr("");
+        try { data = await api(`/api/imports/${encodeURIComponent(i.id)}`, { method: "DELETE" }); structural(); onChanged(data); }
+        catch (e) { showErr(e.message); }
+      }, "Removes the link; your file stays where it is"));
+      r.appendChild(side);
+      sec.appendChild(r);
+    }
+    if (importDraft) sec.appendChild(importForm(importDraft));
+    else {
+      const pick = actBtn("Import file…", "", async () => {
+        showErr(""); pick.disabled = true;
+        try {
+          const g = await postJson("/api/imports/pick", {});
+          if (g.path) { importDraft = g; structural(); }
+        } catch (e) { showErr(e.message); }
+        finally { pick.disabled = false; }
+      });
+      const row = el("div", "row");
+      row.appendChild(pick);
+      sec.appendChild(row);
+    }
+    return sec;
+  }
+
+  function importForm(g) {
+    const f = el("div", "irow import-form");
+    const top = el("div", "name");
+    top.append(el("span", null, g.name), el("span", "hint", fmtBytes(g.size)));
+    f.appendChild(top);
+    const fields = el("div", "grid2");
+    const field = (label, input) => { const l = el("label"); l.append(el("span", "lbl", label), input); fields.appendChild(l); return input; };
+    const kind = field("What is it?", el("select"));
+    for (const [k, label] of Object.entries(data.import_kinds || {})) kind.add(new Option(label, k, false, k === g.kind));
+    const title = field("Name", el("input"));
+    title.type = "text";
+    title.value = g.name.replace(/\.[^.]+$/, "");
+    const base = field("Runs like", el("select"));
+    for (const p of data.presets.filter((p) => !p.imported)) base.add(new Option(p.title, p.id));
+    const group = field("Works with", el("select"));
+    for (const name of Object.keys(data.lora_groups || {})) group.add(new Option(name, name));
+    const scale = field("Scale", el("select"));
+    for (const s of [1, 2, 4, 8]) scale.add(new Option(`${s}×`, s, false, s === g.scale));
+    const sync = () => {
+      base.parentElement.hidden = kind.value !== "model";
+      group.parentElement.hidden = kind.value !== "lora";
+      scale.parentElement.hidden = kind.value !== "upscaler";
+    };
+    kind.onchange = sync; sync();
+    f.appendChild(fields);
+    if (!g.supported) f.appendChild(el("div", "warn", "Only .safetensors, .gguf, .sft, .pth, .pt, .ckpt and .bin files can be imported."));
+    const actions = el("div", "row");
+    actions.append(actBtn("Import", "primary", async () => {
+      showErr("");
+      try {
+        const r = await postJson("/api/imports", {
+          path: g.path, kind: kind.value, title: title.value, base: base.value,
+          families: data.lora_groups?.[group.value] || [], scale: parseInt(scale.value, 10),
+        });
+        importDraft = null; data = r.setup; structural(); onChanged(data);
+      } catch (e) { showErr(e.message); }
+    }), actBtn("Cancel", "", () => { importDraft = null; structural(); }));
+    f.appendChild(actions);
+    return f;
+  }
+
   function showErr(msg) {
     if (!ui) return;
     ui.error.textContent = msg || "";

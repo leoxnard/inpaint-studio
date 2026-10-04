@@ -60,6 +60,37 @@ def grain_std(img: np.ndarray, where: np.ndarray) -> np.ndarray:
     return hp[where].std(axis=0) if where.any() else np.zeros(img.shape[-1], np.float32)
 
 
+def grain_noise(o: np.ndarray, where: np.ndarray, shape: tuple, seed: int = 0) -> np.ndarray:
+    """Unit-strength noise shaped like the grain of `o` (measured where True). Film / sensor grain is mostly
+    the same in all channels: shared and per-channel noise are mixed like in the original."""
+    hp = (o - cv2.GaussianBlur(o, (0, 0), 1.5))[where]
+    c = np.corrcoef(hp.T) if len(hp) > 10 else np.eye(3)
+    corr = float(np.clip(np.nan_to_num((c[0, 1] + c[0, 2] + c[1, 2]) / 3), 0, 1))
+    rng = np.random.default_rng(seed)
+    noise = (np.sqrt(corr) * rng.standard_normal(shape[:2] + (1,), np.float32)
+             + np.sqrt(1 - corr) * rng.standard_normal(shape, np.float32))
+    noise = cv2.GaussianBlur(noise, (0, 0), 0.6)   # grain is a little coarser than single pixels
+    return noise / grain_std(noise, np.ones(noise.shape[:2], bool)).clip(1e-6)
+
+
+def add_grain(original: Image.Image, result: Image.Image, seed: int = 0) -> Image.Image:
+    """Upscalers come out clean: give `result` (an upscale of `original`) back the original's grain, at the
+    original's grain size (so it looks the same at the same print size). The strength is what the original
+    has minus what the result still has, both measured at the original's size."""
+    o = np.asarray(original.convert("RGB"), np.float32)
+    r = np.asarray(result.convert("RGB"), np.float32)
+    h, w = o.shape[:2]
+    everywhere = np.ones((h, w), bool)
+    small = cv2.resize(r, (w, h), interpolation=cv2.INTER_AREA)
+    need = np.sqrt(np.maximum(grain_std(o, everywhere) ** 2 - grain_std(small, everywhere) ** 2, 0))
+    if need.max() <= 0.5:
+        return result.convert("RGB")
+    noise = cv2.resize(grain_noise(o, everywhere, o.shape, seed), (r.shape[1], r.shape[0]), interpolation=cv2.INTER_CUBIC)
+    noise /= grain_std(cv2.resize(noise, (w, h), interpolation=cv2.INTER_AREA), everywhere).clip(1e-6)
+    r += noise * need
+    return Image.fromarray(np.clip(r, 0, 255).astype(np.uint8))
+
+
 def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: dict[str, int],
            feather: float = 0, grain: bool = False, seed: int = 0) -> Image.Image:
     """Paste the edited crop back into the original. mask is the full-size mask (source pixels);
@@ -78,16 +109,7 @@ def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: d
         hard = np.asarray(crop(mask, box)) > 127
         need = np.sqrt(np.maximum(grain_std(o, ~hard) ** 2 - grain_std(r, hard) ** 2, 0))
         if need.max() > 0.5:
-            # film / sensor grain is mostly the same in all channels: mix shared and per-channel noise like the original
-            hp = (o - cv2.GaussianBlur(o, (0, 0), 1.5))[~hard]
-            c = np.corrcoef(hp.T) if len(hp) > 10 else np.eye(3)
-            corr = float(np.clip((c[0, 1] + c[0, 2] + c[1, 2]) / 3, 0, 1))
-            rng = np.random.default_rng(seed)
-            noise = (np.sqrt(corr) * rng.standard_normal(r.shape[:2] + (1,))
-                     + np.sqrt(1 - corr) * rng.standard_normal(r.shape)).astype(np.float32)
-            noise = cv2.GaussianBlur(noise, (0, 0), 0.6)   # grain is a little coarser than single pixels
-            noise /= grain_std(noise, np.ones(noise.shape[:2], bool)).clip(1e-6)
-            region = Image.fromarray(np.clip(r + noise * need, 0, 255).astype(np.uint8))
+            region = Image.fromarray(np.clip(r + grain_noise(o, ~hard, r.shape, seed) * need, 0, 255).astype(np.uint8))
     out = original.copy()
     out.paste(region, (box["x"], box["y"]), m)
     return out

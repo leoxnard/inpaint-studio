@@ -135,3 +135,17 @@ def test_pad_masks_and_fills_erased_holes():
     assert (m[250:290, 20:80] == 0).all()                     # far from hole and border: kept
     assert (c[250:290, 20:80] == o[250:290, 20:80]).all()
     assert np.abs(c[110:190, 110:190].astype(int) - o[110:190, 110:190]).mean() > 20   # old content is gone
+
+
+def test_add_grain_gives_an_upscale_the_originals_grain_back():
+    rng = np.random.default_rng(1)
+    base = np.tile(np.linspace(40, 200, 96, dtype=np.float32)[None, :, None], (64, 1, 3))
+    grainy = Image.fromarray(np.clip(base + rng.normal(0, 8, base.shape), 0, 255).astype(np.uint8))
+    clean = Image.fromarray(base.astype(np.uint8)).resize((192, 128), Image.BICUBIC)   # a "clean" ×2 upscale
+    out = prepare.add_grain(grainy, clean, seed=3)
+    assert out.size == clean.size
+    everywhere = np.ones((64, 96), bool)
+    small = lambda img: np.asarray(img.resize((96, 64), Image.BOX), np.float32)
+    target = prepare.grain_std(np.asarray(grainy, np.float32), everywhere).mean()
+    assert abs(prepare.grain_std(small(out), everywhere).mean() - target) < 0.15 * target
+    assert prepare.add_grain(clean.resize((96, 64)), clean).tobytes() == clean.tobytes()   # nothing to add

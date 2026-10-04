@@ -1,79 +1,24 @@
-// Guide page: a drawn scene that "denoises" with scroll, the node graph that lights up per step,
-// and the quantisation bars. No dependencies.
+// Guide page: real sampler frames that "denoise" with scroll, the node graph that lights up per step,
+// the quantisation bars and the one-click download of the recommended model. No dependencies.
 "use strict";
 
-// ------------------------------------------------------------------ scene + noise frames
-const W = 360, H = 240, STEPS = 20;
-
-function drawScene(c) {
-  const sky = c.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, "#86BDEB"); sky.addColorStop(1, "#EAF3FA");
-  c.fillStyle = sky; c.fillRect(0, 0, W, H);
-  c.fillStyle = "#FFD66B"; c.beginPath(); c.arc(282, 58, 22, 0, Math.PI * 2); c.fill();
-  c.fillStyle = "#9DB2C6"; c.beginPath();
-  c.moveTo(0, 150); c.lineTo(60, 96); c.lineTo(110, 130); c.lineTo(175, 82); c.lineTo(250, 138); c.lineTo(310, 104); c.lineTo(360, 140);
-  c.lineTo(360, 240); c.lineTo(0, 240); c.fill();
-  c.fillStyle = "#6FA85A"; c.beginPath(); c.moveTo(0, 168); c.quadraticCurveTo(180, 132, 360, 160); c.lineTo(360, 240); c.lineTo(0, 240); c.fill();
-  c.fillStyle = "#4F8C3E"; c.beginPath(); c.moveTo(0, 206); c.quadraticCurveTo(200, 186, 360, 214); c.lineTo(360, 240); c.lineTo(0, 240); c.fill();
-  // turf house
-  c.fillStyle = "#F3EEE4"; c.fillRect(118, 142, 76, 36);
-  c.fillStyle = "#4A3A2A"; c.fillRect(146, 156, 15, 22);
-  c.fillStyle = "#6E8FAE"; c.fillRect(172, 151, 12, 11); c.fillRect(126, 151, 12, 11);
-  c.fillStyle = "#5C9A47"; c.strokeStyle = "#3F6E30"; c.lineWidth = 3;
-  c.beginPath(); c.moveTo(106, 146); c.quadraticCurveTo(156, 92, 206, 146); c.closePath(); c.fill(); c.stroke();
-  c.fillStyle = "#8A8A8A"; c.fillRect(178, 108, 8, 18);
-  // lake
-  c.fillStyle = "#7FB2DA"; c.beginPath(); c.ellipse(268, 196, 54, 10, 0, 0, Math.PI * 2); c.fill();
-}
-
-const frames = (() => {
-  const mk = (w, h) => { const cv = document.createElement("canvas"); cv.width = w; cv.height = h; return cv; };
-  const sharpCv = mk(W, H), sc = sharpCv.getContext("2d");
-  drawScene(sc);
-  const sharp = sc.getImageData(0, 0, W, H).data;
-  // a blob version: what the layout looks like in the first steps
-  const tiny = mk(12, 8); tiny.getContext("2d").drawImage(sharpCv, 0, 0, 12, 8);
-  const blurCv = mk(W, H), bc = blurCv.getContext("2d");
-  bc.imageSmoothingEnabled = true; bc.imageSmoothingQuality = "high"; bc.drawImage(tiny, 0, 0, W, H);
-  const blur = bc.getImageData(0, 0, W, H).data;
-  // fixed seed: the same noise on every load, like a fixed seed in the app
-  let s = 7;
-  const rnd = () => { s |= 0; s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  const noise = new Float32Array(W * H * 3);
-  for (let i = 0; i < noise.length; i++) noise[i] = 128 + (rnd() + rnd() + rnd() - 1.5) * 150;
-  const cache = new Map();
-  return (step) => {
-    if (cache.has(step)) return cache.get(step);
-    const t = step / STEPS, a = Math.pow(t, 1.25), d = Math.min(1, Math.max(0, (t - 0.2) / 0.6));
-    const cv = mk(W, H), cx = cv.getContext("2d"), img = cx.createImageData(W, H), o = img.data;
-    for (let p = 0, n = 0; p < o.length; p += 4, n += 3) {
-      for (let k = 0; k < 3; k++) {
-        const base = blur[p + k] * (1 - d) + sharp[p + k] * d;
-        o[p + k] = a * base + (1 - a) * noise[n + k];
-      }
-      o[p + 3] = 255;
-    }
-    cx.putImageData(img, 0, 0);
-    cache.set(step, cv);
-    return cv;
-  };
-})();
-
-for (const cv of document.querySelectorAll(".strip canvas")) {
-  cv.getContext("2d").drawImage(frames(+cv.dataset.step), 0, 0, cv.width, cv.height);
-}
+const STEPS = 20;
+// real frames (web/guide/): noisy_NN = the sampler's latent after step NN, decoded; guess_NN = the model's prediction
+const noisySrc = (k) => `/guide/noisy_${String(k).padStart(2, "0")}.jpg`;
+const guessSrc = (k) => `/guide/guess_${String(k).padStart(2, "0")}.jpg`;
+for (let k = 0; k <= STEPS; k++) { new Image().src = noisySrc(k); if (k) new Image().src = guessSrc(k); }
 
 // ------------------------------------------------------------------ the loop, driven by scroll
 const loopSec = document.getElementById("loop");
-const loopCv = document.getElementById("loopCanvas"), loopCx = loopCv.getContext("2d");
+const loopImg = document.getElementById("loopImg"), guess = document.getElementById("guess"), guessImg = document.getElementById("guessImg");
 const stepNum = document.getElementById("stepNum"), stepBar = document.getElementById("stepBar");
 const caption = document.getElementById("loopCaption");
 const cycle = [...document.querySelectorAll(".cycle li")];
 const CAPTIONS = [
   [0, "Step 0: only noise. The prompt decides what the noise will turn into."],
-  [1, "First the rough layout: light sky on top, dark ground below, something in the middle."],
-  [6, "Then shapes and colours come in: a hill, a house, a sun."],
-  [13, "The last steps add fine detail: edges, texture, small lights."],
+  [1, "First only light and dark: bright sky on top, dark ground below."],
+  [6, "Then the shapes appear: hills, a lake, a small turf house."],
+  [13, "The last steps add fine detail: grass on the roof, wooden boards, clouds."],
   [20, "Done. The translator turns the latent into the finished picture."],
 ];
 let shownStep = -1;
@@ -85,7 +30,9 @@ function onScroll() {
   cycle.forEach((li, i) => li.classList.toggle("on", i === k));
   if (step === shownStep) return;
   shownStep = step;
-  loopCx.drawImage(frames(step), 0, 0);
+  loopImg.src = noisySrc(step);
+  guess.classList.toggle("off", step === 0 || step === STEPS);
+  if (step > 0) guessImg.src = guessSrc(step);
   stepNum.textContent = step;
   stepBar.style.width = `${(100 * step) / STEPS}%`;
   caption.textContent = CAPTIONS.filter(([s]) => step >= s).pop()[1];
@@ -211,3 +158,61 @@ const tocObs = new IntersectionObserver((entries) => {
   }
 }, { rootMargin: "-40% 0px -55% 0px" });
 tocLinks.forEach((a) => { const s = document.querySelector(a.hash); if (s) tocObs.observe(s); });
+
+// ------------------------------------------------------------------ direct download of the recommended setup
+// same queue as the Download Center (POST /api/setup/install); base steps are added on a fresh install
+const REC = { preset: "qwen21_uc", quant: "Q4_K_M" };
+const dlBtn = document.getElementById("dlBtn"), dlBar = document.getElementById("dlBar"), dlNote = document.getElementById("dlNote");
+const gb = (b) => `${(b / 1e9).toFixed(1)} GB`;
+let dlItems = [], dlTimer = null;
+
+async function getJson(url, body) {
+  const r = await fetch(url, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+function recState(d) {
+  const p = d.presets.find((x) => x.id === REC.preset), q = p.quants.find((x) => x.quant === REC.quant);
+  const items = d.base.filter((b) => !b.installed).map((b) => b.id);
+  let bytes = 0;
+  if (!q.installed) { items.push(q.id); bytes += q.size; }
+  for (const key of [p.text_encoder, p.vae]) {
+    const c = d.components.find((x) => x.key === key);
+    if (c && !c.installed) { items.push(c.id); bytes += c.size; }
+  }
+  return { items, bytes, base: d.base.some((b) => !b.installed), done: !items.length };
+}
+async function refreshDl() {
+  let d, st;
+  try { [d, st] = await Promise.all([getJson("/api/setup"), getJson("/api/status")]); }
+  catch { dlNote.textContent = "The app is not running. Open Inpaint Studio to download."; return; }
+  const r = recState(d), running = !!d.install?.running;
+  dlItems = r.items;
+  dlNote.classList.toggle("err", !!d.install?.error && !running);
+  if (r.done) {
+    dlBtn.textContent = "Installed"; dlBtn.classList.add("done"); dlBtn.disabled = true; dlBar.hidden = true;
+    dlNote.innerHTML = 'Ready to go. <a href="/#create">Start editing</a>';
+  } else if (running) {
+    dlBtn.textContent = "Downloading…"; dlBtn.disabled = true; dlBar.hidden = false;
+    const p = st.download;
+    if (p?.total) {
+      dlBar.firstElementChild.style.width = `${(100 * p.done) / p.total}%`;
+      dlNote.textContent = `${gb(p.done)} of ${gb(p.total)}. You can close this page, it keeps going.`;
+    } else dlNote.textContent = "Installing…";
+  } else {
+    dlBtn.textContent = `Download · ${gb(r.bytes)}`; dlBtn.disabled = false; dlBar.hidden = true;
+    dlNote.textContent = d.install?.error ? `Stopped: ${d.install.error}. Press Download to try again.`
+      : r.base ? "Also installs ComfyUI, the engine (about 1.5 GB more)." : "Qwen-Image 2.1 UC Q4_K_M with its text encoder and VAE.";
+  }
+  clearTimeout(dlTimer);
+  if (running) dlTimer = setTimeout(refreshDl, 1500);
+}
+dlBtn.onclick = async () => {
+  dlBtn.disabled = true;
+  try { await getJson("/api/setup/install", { items: dlItems }); }
+  catch (e) { dlNote.textContent = e.message; dlNote.classList.add("err"); }
+  refreshDl();
+};
+refreshDl();
+// opening the guide once is enough: from now on "/" opens the app
+fetch("/api/guide/seen", { method: "POST" }).catch(() => {});

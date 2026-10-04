@@ -36,3 +36,13 @@ def test_ws_guard(client):
     for headers in ({}, {"Origin": "http://127.0.0.1:7380"}):
         with client.websocket_connect("/ws/jobs", headers=headers) as ws:
             assert ws.receive_json()["type"] == "snapshot"
+
+
+def test_guide_only_on_a_fresh_install(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "GUIDE_SEEN", tmp_path / "guide_seen")
+    monkeypatch.setattr(server, "FRESH_INSTALL", False)
+    assert "createView" in client.get("/").text            # existing install: the app
+    monkeypatch.setattr(server, "FRESH_INSTALL", True)
+    assert "A picture made" in client.get("/").text         # very first start: the guide
+    assert client.post("/api/guide/seen").status_code == 200
+    assert "createView" in client.get("/").text            # never again

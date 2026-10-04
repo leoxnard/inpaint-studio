@@ -27,8 +27,8 @@ function fmtEta(s) {
   return `~${Math.round(s / 60)} min left`;
 }
 
-// deps: { api, postJson, root, onReady(data), onBack(), onChanged(data) }
-export function createSetup({ api, postJson, root, onReady, onBack, onChanged }) {
+// deps: { api, postJson, root, onReady(data), onCanGoBack(ready), onChanged(data) }
+export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChanged }) {
   let data = null;
   let ui = null;
   let pollTimer = 0;
@@ -93,10 +93,6 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     const head = el("div", "row wrap");
     ui.title = el("h2", null, data.ready ? "Download Center" : "Welcome to Inpaint Studio");
     head.appendChild(ui.title);
-    ui.back = el("button", "small", "Back to app");
-    ui.back.style.marginLeft = "auto";
-    ui.back.onclick = () => onBack();   // downloads go on in the background
-    head.appendChild(ui.back);
     inner.appendChild(head);
     inner.appendChild(el("p", "lead", data.ready
       ? "Models and components are downloaded from GitHub and Hugging Face. Delete what you no longer need."
@@ -896,7 +892,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
       b.disabled = (canQueue ? queued(b.dataset.item) : busy) || b.dataset.locked === "1";
     }
     for (const i of root.querySelectorAll("input.act-input")) i.disabled = busy;
-    ui.back.hidden = !data.ready;
+    onCanGoBack?.(data.ready);   // the top bar button turns into "Back to app" (app.js)
     if (ui.installSel) {
       ui.installSel.disabled = busy || !guidedItems(false).length;
       ui.installAll.disabled = busy || !guidedItems(true).length;

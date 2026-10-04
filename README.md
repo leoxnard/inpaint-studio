@@ -15,7 +15,9 @@ It runs on top of **ComfyUI** (`http://127.0.0.1:8188`) and starts it for you if
 - Live preview of every step, a server-side queue and a full run history
 
 New to AI images? **How it works** in the top bar opens a visual guide (`/guide.html`): the parts, the three
-model files, the node graph, the sampling loop, quantisations, a model recommendation and a first edit.
+model files, the node graph, the sampling loop (real frames of a 20-step run), quantisations, a first edit and a
+**Download** button for the recommended model (Qwen-Image 2.1 UC Q4_K_M). On a fresh install it opens once instead
+of the app; after that only from the top bar.
 
 ## Contents
 
@@ -232,7 +234,7 @@ The × on a single result tile hides just that one.
 
 ## Models and Download Center
 
-The model picker is in the top bar. The **Download Center** installs and deletes models, upscalers and LoRAs.
+The model picker is in the top bar. The **Download Center** (top bar; while it is open the button reads **Back to app**) installs and deletes models, upscalers and LoRAs.
 For each model you pick a quantisation in an LM Studio style list (format, RAM fit, recommended for
 this Mac, downloaded, size). Q4 (Q4_K_M where there is one) is preselected; models without a Q4 file get the largest
 quantisation that fits. A bar at the top jumps between the sections (Components, Models, Upscalers, Control,

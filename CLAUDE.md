@@ -45,7 +45,10 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   (`#runsView`), switched by a hash router (`#create`, `#runs/<id>`). Hidden `#mode`, `#aspect`, `#viewRaw`
   stay the source of truth; the Area cards, aspect tiles and Pasted/Raw switch only write into them.
   Design tokens (Ollama style, see `design/`) are CSS variables at the top of `styles.css`. `guide.html` (+ `guide.css`, `guide.js`) is the
-  standalone beginner guide ("How it works" in the top bar; `/#downloads` opens the Download Center). `compare.js` renders the
+  standalone beginner guide ("How it works" in the top bar; `/#downloads` opens the Download Center). On a fresh install
+  (no config, no runs at server start) `/` serves it once until `POST /api/guide/seen` writes `guide_seen` in App Support.
+  Its loop frames in `web/guide/` come from a real Qwen-Image 2.1 UC run (guess_NN = step previews, noisy_NN = guess
+  mixed with pixel noise at the step's sigma). `compare.js` renders the
   multi-run Compare view (detail grid with synced zoom/pan, split strips); `app.js` handles picking and labels.
 - Testing vs. using: Claude tests changes in the Browser pane against the dev server (launch config
   `inpaint-studio-dev`, port 7381, code from the repo); Leonard uses the installed app (7380, bundled code).

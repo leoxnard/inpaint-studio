@@ -51,6 +51,9 @@ COMFY_OUTPUT = Path(os.environ["COMFY_OUTPUT_DIR"]).expanduser() if os.environ.g
 INSTALLER = installer.Installer()
 COMFY_PROC = installer.ComfyProcess()
 RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or installer.APP_SUPPORT) / "runs"
+# the very first start (no setup config, no runs yet) opens the beginner guide once; guide.html marks it seen
+GUIDE_SEEN = installer.APP_SUPPORT / "guide_seen"
+FRESH_INSTALL = not installer.CONFIG_FILE.exists() and not RUNS.exists()
 RUNS.mkdir(parents=True, exist_ok=True)
 imports.apply()   # own files from the Download Center become components / presets
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
@@ -1597,7 +1600,17 @@ async def reattach_runs():
 
 @app.get("/")
 async def index():
+    if FRESH_INSTALL and not GUIDE_SEEN.exists():
+        return FileResponse(WEB / "guide.html")
     return FileResponse(WEB / "index.html")
+
+
+@app.post("/api/guide/seen")
+async def guide_seen():
+    """The guide was shown: "/" opens the app from now on."""
+    GUIDE_SEEN.parent.mkdir(parents=True, exist_ok=True)
+    GUIDE_SEEN.touch()
+    return {"ok": True}
 
 
 app.mount("/data/runs", StaticFiles(directory=RUNS), name="runs")

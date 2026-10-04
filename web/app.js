@@ -3769,7 +3769,15 @@ function applyMaskTexts() {
 }
 
 let appStarted = false;
+// the top bar button opens the Download Center and, while it is open, leads back to the app (downloads go on)
+let setupOpen = false;
+function setSetupOpen(open) {
+  setupOpen = open;
+  $("setupBtn").textContent = open ? "Back to app" : "Download Center";
+  if (!open) $("setupBtn").hidden = false;
+}
 function showApp() {
+  setSetupOpen(false);
   setup.close();
   $("appLayout").hidden = false;
   $("viewSwitch").hidden = false;
@@ -3781,12 +3789,13 @@ function showApp() {
 function showSetup(opts = {}) {
   $("appLayout").hidden = true;
   $("viewSwitch").hidden = true;
+  setSetupOpen(true);
   setup.open(opts instanceof Event ? {} : opts).catch((e) => showError(e.message));
 }
 
 const setup = createSetup({
   api, postJson, root: $("setupView"),
-  onBack: showApp,
+  onCanGoBack: (ready) => { if (setupOpen) $("setupBtn").hidden = !ready; },   // first run: nothing to go back to
   onReady: (data) => {
     state.setup = data;
     // SAM3 was installed or removed: reload so the whole UI switches mode
@@ -3804,7 +3813,7 @@ const setup = createSetup({
     if (appStarted) { renderModelPicker(); renderUpscalers(); renderGuide(); if (lorasChanged) loadModels(); }
   },
 });
-$("setupBtn").onclick = showSetup;
+$("setupBtn").onclick = () => (setupOpen ? showApp() : showSetup());
 
 // optional upscaler: lists the installed upscale models, links to the downloads page otherwise
 function renderUpscalers() {

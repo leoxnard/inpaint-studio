@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postAlign", "postColors", "postWarp", "postPoisson", "postGrain", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
-  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole",
+  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg",
   "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "upscaleGrainStrength", "grainStrength", "colorCorrection", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -1205,7 +1205,8 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     clean_overlays: $("cleanOverlays").checked,
-    keep_whole: wholeImage() && $("keepWhole").checked,
+    keep_whole: wholeImage() && $("keepWhole").checked && !removeBgOn(),
+    remove_bg: removeBgOn() || undefined,
     loras: state.loras.filter((l) => l.name && l.strength),
     outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas()) : undefined,
     outpaint_colors: outpaintOn() ? $("postColors").checked : undefined,
@@ -1858,6 +1859,7 @@ function settingsRows(run) {
   if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
   if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
   if (p.clean_overlays) rows.push(["Watermarks", "Removed"]);
+  if (p.remove_bg) rows.push(["Background", "Removed (transparent)"]);
   if (p.loras?.length) rows.push(["LoRAs", p.loras.map((l) => `${l.name.replace(/\.safetensors$/, "")} (${l.strength})`).join(", ")]);
   if (p.crop_box) rows.push(["Crop", `${p.crop_box.w} × ${p.crop_box.h} of ${(p.orig_size || []).join(" × ")}`]);
   const took = runTook(run);
@@ -2368,7 +2370,7 @@ function loadRunSettings(run) {
   $("keepNote").value = p.keep_note ?? (p.keep_identical === false ? "" : KEEP_NOTE);
   const checks = { postAlign: p.post_align, postColors: p.outpaint ? p.outpaint_colors : p.post_colors, postWarp: p.post_warp,
     postPoisson: p.post_poisson, postGrain: p.post_grain ?? p.crop_grain,
-    cleanOverlays: p.clean_overlays, keepWhole: p.keep_whole };
+    cleanOverlays: p.clean_overlays, keepWhole: p.keep_whole, removeBg: !!p.remove_bg };
   for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
   if (p.grain_strength != null) $("grainStrength").value = Math.round(p.grain_strength * 100);
   syncRangeOutputs();
@@ -2587,6 +2589,7 @@ function initApp() {
 
 function syncModeUi() {
   document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
+  syncRemoveBg();
   refreshSizeDebounced();
   syncKeepNote();
   syncPostOptions();
@@ -2598,6 +2601,29 @@ $("keepWhole").addEventListener("change", syncModeUi);
 $("mode").addEventListener("change", refreshCropDebounced);
 $("cropStitch").addEventListener("change", refreshCrop);
 $("cropContext").addEventListener("input", refreshCropDebounced);
+
+// Remove background: Qwen-Image 2.1 decodes RGBA, so only its whole-image edits can return transparency.
+// Everything after the model works in RGB and would drop it: upscale, post-processing, the keep instruction.
+const REMOVE_BG_FAMILIES = ["qwen21", "qwen21_turbo"];
+function removeBgAvailable() { return state.task === "edit" && wholeImage() && REMOVE_BG_FAMILIES.includes(currentFamily()); }
+function removeBgOn() { return removeBgAvailable() && $("removeBg").checked; }
+function syncRemoveBg() {
+  const avail = removeBgAvailable(), on = removeBgOn();
+  $("removeBg").disabled = !avail;
+  $("removeBgRow").classList.toggle("dim", !avail);
+  $("removeBgRow").title = avail ? $("removeBgRow").dataset.title
+    : "Only for Qwen-Image 2.1 (or Turbo) with Area to change: Whole image.";
+  $("postFixRow").disabled = on;
+  $("postFixRow").classList.toggle("dim", on);
+  $("keepWhole").disabled = on;
+  $("keepWholeRow").classList.toggle("dim", on);
+  $("upscale").disabled = on;
+  $("upscale").closest("label").classList.toggle("dim", on);
+  syncUpscaler();
+  syncKeepNote();
+}
+$("removeBgRow").dataset.title = $("removeBgRow").title;
+$("removeBg").addEventListener("change", syncRemoveBg);
 
 // Post-processing in Create: each option lists the modes it works in (data-modes)
 function syncPostOptions() {
@@ -2891,6 +2917,7 @@ async function startSession() {
 // grain unless the run has it already (upscale or crop & stitch made with grain). null: nothing to offer.
 function postOptions(run) {
   const p = run.params || {};
+  if (p.remove_bg) return null;   // transparent PNG: the fixes and grain work in RGB
   const task = runTask(run);
   let fix = null;
   if (!p.outpaint && run.beforeUrl && run.rawUrl && run.maskUrl) fix = "paste";
@@ -3336,7 +3363,7 @@ function wholeImage() { return !maskOn() && $("mode").value !== "outpaint" && !u
 // the keep-identical instruction is used by free edit + paste and, when ticked, by whole-image edits
 function syncKeepNote() {
   const paste = maskOn() && $("mode").value === "paste";
-  $("keepNoteRow").hidden = !paste && !(wholeImage() && $("keepWhole").checked);
+  $("keepNoteRow").hidden = !paste && !(wholeImage() && $("keepWhole").checked && !removeBgOn());
 }
 
 
@@ -3418,7 +3445,7 @@ function renderUpscalers() {
 $("getUpscalers").onclick = showSetup;
 // the upscaler only matters with Upscale on
 function syncUpscaler() {
-  const off = $("upscale").value === "0";
+  const off = $("upscale").value === "0" || $("upscale").disabled;
   $("upscaler").disabled = off;
   $("upscalerRow").classList.toggle("dim", off);
 }
@@ -3667,6 +3694,7 @@ function syncTaskUi() {
   $("mode").querySelector('[value="paste"]').disabled = zedit;
   if (zedit && $("mode").value === "paste") { $("mode").value = "inpaint"; syncModeUi(); }
   syncAreaCards();
+  syncRemoveBg();
   // turbo models: fixed 5-7 steps, no CFG; the server clamps and forces, the form just follows
   const turbo = fam === "qwen21_turbo";
   document.body.classList.toggle("fam-turbo", turbo);

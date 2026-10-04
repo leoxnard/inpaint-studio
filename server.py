@@ -50,7 +50,7 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
                   "upscale", "upscale_width", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -694,6 +694,8 @@ async def post_run(run_id: str, req: PostReq):
     if f.parent.parent != RUNS.resolve() or not f.is_file():
         raise HTTPException(404, "run not found")
     run = json.loads(f.read_text())
+    if (run.get("params") or {}).get("remove_bg"):  # everything here works in RGB and would drop the transparency
+        raise HTTPException(400, "transparent results (Remove background) have no post-processing")
     return await post_process(run, req, post_kind(run))
 
 
@@ -1178,6 +1180,13 @@ async def create_job(params: dict):
                           color_correction=params.get("color_correction") or "lab")
     else:
         params["upscale"] = 0
+    if params.get("remove_bg"):  # transparent PNG: whole image only, and nothing afterwards that works in RGB
+        if params.get("task", "edit") != "edit" or params.get("family") not in graphs.REMOVE_BG_FAMILIES:
+            raise HTTPException(400, "Remove background needs an edit with Qwen-Image 2.1")
+        if params.get("outpaint"):
+            raise HTTPException(400, "Remove background does not work with Extend canvas")
+        params.update(use_mask=False, mask=None, crop_stitch=False, upscale=0, keep_whole=False,
+                      **{f"post_{k}": False for k in ("align", "colors", "warp", "poisson", "grain")})
     if params.get("family") == "qwen21_turbo":  # fixed few-step schedule, no CFG
         params.update(steps=graphs.turbo_steps(params["steps"]), cfg=1.0)
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"

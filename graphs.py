@@ -113,6 +113,11 @@ OUTPAINT_NOTE = ("The blurred, smeared areas of the image are missing parts of t
                  "realistic content that continues the scene naturally, matching the perspective, light and detail of "
                  "the rest. Keep everything sharp in the image as it is.")
 
+# "Remove background" (p["remove_bg"], whole-image edits with Qwen-Image 2.1 only): the prompt of ComfyUI's
+# background removal template. The 2.1 VAE decodes RGBA, so the result is a PNG with a real alpha channel.
+REMOVE_BG_PROMPT = "Remove the background, and output a PNG image"
+REMOVE_BG_FAMILIES = ("qwen21", "qwen21_turbo")
+
 KEEP_IDENTICAL = ("Keep everything else in the image exactly identical to the original: same framing, "
                   "perspective, positions, people, objects, colors, lighting and fine details. "
                   "Only change what is described above.")
@@ -180,6 +185,8 @@ def edit_prompt(p: dict[str, Any]) -> str:
         prompt = f"{prompt}\n\n{CLEAN_NOTE_GENERATE if p.get('task') == 'generate' else CLEAN_NOTE}"
     if p.get("outpaint"):
         prompt = f"{prompt}\n\n{OUTPAINT_NOTE}"
+    if p.get("remove_bg"):  # alone it is exactly the template's prompt; the keep instruction would fight it
+        return f"{prompt.strip()}\n\n{REMOVE_BG_PROMPT}".strip()
     if p.get("mode") == "paste" or (p.get("keep_whole") and not p.get("use_mask")):
         # also for whole-image edits when asked (keep_whole); p["keep_note"] replaces the default (Advanced in the UI), empty turns it off;
         # keep_identical=False is the older way to turn it off
@@ -272,6 +279,11 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
     """
     family = p.get("family", "qwen21")
     generate = p.get("task") == "generate"
+    if p.get("remove_bg") and not generate:
+        if family not in REMOVE_BG_FAMILIES:
+            raise ValueError("Remove background needs Qwen-Image 2.1 (its VAE decodes transparency)")
+        # whole image only (pasting into the RGB original drops the alpha); upscalers work on RGB only
+        p = {**p, "use_mask": False, "mask": None, "upscale": 0}
     # empty when the page loaded before ComfyUI listed its options
     p = {**p, "sampler": p.get("sampler") or "euler", "scheduler": p.get("scheduler") or "simple"}
     g: dict[str, Any] = {

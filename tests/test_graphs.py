@@ -310,3 +310,19 @@ def test_outpaint_adds_the_fill_note():
     p = {"prompt": "x", "outpaint": {"canvas_w": 10, "canvas_h": 10, "x": 0, "y": 0}}
     assert graphs.edit_prompt(p).endswith(graphs.OUTPAINT_NOTE)
     assert graphs.OUTPAINT_NOTE not in graphs.edit_prompt({"prompt": "x"})
+
+
+def test_remove_background_is_a_whole_image_edit_with_the_template_prompt():
+    p = dict(image="a.png", mask="m.png", use_mask=True, upscale=2, upscale_model="up.pth",
+             megapixels=0.95, resolution=1008, prompt="", steps=4, denoise=1.0, seed=1, cfg=1.0,
+             sampler="euler", scheduler="simple", feather=12, unet="u.safetensors", clip="c", vae="v",
+             work_w=1312, work_h=736, family="qwen21", task="edit", mode="none", remove_bg=True, keep_whole=True)
+    assert graphs.edit_prompt(p) == graphs.REMOVE_BG_PROMPT
+    assert graphs.edit_prompt({**p, "prompt": "Keep the dog."}) == f"Keep the dog.\n\n{graphs.REMOVE_BG_PROMPT}"
+    g = graphs.build_edit_graph(p)
+    assert g["encode"]["inputs"]["prompt"] == graphs.REMOVE_BG_PROMPT
+    assert "mask_load" not in g and "up" not in g and "composite" not in g
+    assert g["sampler"]["inputs"]["latent_image"] == ["encode", 2]
+    import pytest
+    with pytest.raises(ValueError):
+        graphs.build_edit_graph({**p, "family": "qwen_edit"})

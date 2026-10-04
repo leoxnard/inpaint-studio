@@ -49,6 +49,9 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 ## Rules
 - Gray-noise limit: on MPS the edit breaks at >= 4096 latent tokens for target or reference
   (pixels/16 per side). `graphs.TOKEN_LIMIT`; the UI auto-fixes size by default.
+- Remove background (`remove_bg`, checkbox under the prompt): Qwen-Image 2.1 / Turbo, whole image only. Adds
+  `graphs.REMOVE_BG_PROMPT` (ComfyUI's `image_qwen_image_2_1_background_removal` template) after the prompt; the 2.1 VAE
+  decodes RGBA, so `<run>.png` is transparent. Upscale, post-processing and the keep note are off (they work in RGB).
 - Extra reference images (`refs` in a job): `graphs.MAX_REFS` per family (Qwen 2.1: 3, Edit 2511: 2), mirrored
   in `web/app.js` `MAX_REFS`. The edited image stays image 1 (its size sets the latent). `ref_takes` (one
   text per ref, turned into "Replace the X in <image1> with the X from <image2>." after the prompt) and `graphs.REF_NOTE` name the images the encoder's way (`<image2>` / "Picture 2").

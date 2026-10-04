@@ -1,7 +1,7 @@
 // Compare several runs side by side (Runs view). Two modes:
 //  - "detail" (default): a grid where every tile shows the same part of its image; wheel / drag / pinch in any
 //    tile zoom and pan all tiles together.
-//  - "split": one frame cut into equal fixed vertical strips, strip k shows run k.
+//  - "split": one frame cut into vertical strips, strip k shows run k; drag a border to move it.
 // In both modes the labels can be dragged onto another one to change the order.
 // The view is kept relative to the first image (centre and width as fractions), so images of different sizes
 // show the same spot; images with another aspect ratio are fitted around the same centre, never stretched.
@@ -25,6 +25,7 @@ export function createMultiCompare(root, { onExit }) {
   let tiles = [];          // {item, box, img} of the detail grid
   let dragKey = null;
   let fresh = true;        // next detail layout starts with the largest part
+  let bounds = [];         // split: the n+1 strip borders as fractions of the frame width (0 … 1)
 
   root.innerHTML = "";
   const bar = el("div", "mc-bar");
@@ -34,7 +35,7 @@ export function createMultiCompare(root, { onExit }) {
   seg.setAttribute("aria-label", "Compare mode");
   const modeBtns = {};
   for (const [m, label, tip] of [["detail", "Detail", "Every tile shows the same part of its image"],
-                                 ["split", "Split", "One frame cut into fixed strips, one per run"]]) {
+                                 ["split", "Split", "One frame cut into strips, one per run; drag a border to move it"]]) {
     const b = el("button", null, label);
     b.type = "button";
     b.title = tip;
@@ -215,21 +216,51 @@ export function createMultiCompare(root, { onExit }) {
     const frame = el("div", "mc-split");
     Object.assign(frame.style, { width: `${fw}px`, height: `${fh}px`, left: `${(W - fw) / 2}px`, top: `${(H - fh) / 2}px` });
     const n = items.length;
-    items.forEach((it, i) => {
+    if (bounds.length !== n + 1) bounds = Array.from({ length: n + 1 }, (_, i) => i / n);
+    const imgs = items.map((it) => {
       const img = el("img");
       img.src = it.url;
       img.alt = it.label;
       img.draggable = false;
-      img.style.clipPath = `inset(0 ${100 - (100 * (i + 1)) / n}% 0 ${(100 * i) / n}%)`;
       frame.append(img);
+      return img;
     });
-    items.forEach((it, i) => {
+    const strips = items.map((it) => {
       const strip = el("div", "mc-strip");
-      Object.assign(strip.style, { left: `${(100 * i) / n}%`, width: `${100 / n}%` });
       strip.append(label(it));
       dropTarget(strip, it);
       frame.append(strip);
+      return strip;
     });
+    const place = () => items.forEach((_, i) => {
+      const a = bounds[i] * 100, b = bounds[i + 1] * 100;
+      imgs[i].style.clipPath = `inset(0 ${100 - b}% 0 ${a}%)`;
+      Object.assign(strips[i].style, { left: `${a}%`, width: `${b - a}%` });
+      if (handles[i - 1]) handles[i - 1].style.left = `${a}%`;
+    });
+    // a handle on every inner border; it stops 1 % before its neighbours
+    const handles = bounds.slice(1, -1).map((_, j) => {
+      const h = el("div", "mc-handle");
+      h.title = "Drag to move this border";
+      h.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        h.setPointerCapture(e.pointerId);
+        h.classList.add("active");
+      });
+      h.addEventListener("pointermove", (e) => {
+        if (!h.hasPointerCapture(e.pointerId)) return;
+        const r = frame.getBoundingClientRect();
+        const x = (e.clientX - r.left) / r.width;
+        bounds[j + 1] = Math.max(bounds[j] + 0.01, Math.min(bounds[j + 2] - 0.01, x));
+        place();
+      });
+      const up = () => h.classList.remove("active");
+      h.addEventListener("pointerup", up);
+      h.addEventListener("pointercancel", up);
+      frame.append(h);
+      return h;
+    });
+    place();
     stage.append(frame);
   }
 
@@ -243,7 +274,7 @@ export function createMultiCompare(root, { onExit }) {
   function render() {
     for (const [m, b] of Object.entries(modeBtns)) b.setAttribute("aria-pressed", String(m === mode));
     title.textContent = `Comparing ${items.length} runs`;
-    hint.textContent = [note, mode === "detail" ? "Scroll or pinch to zoom, drag to pan" : "", "drag a label to reorder"]
+    hint.textContent = [note, mode === "detail" ? "Scroll or pinch to zoom, drag to pan" : "", mode === "split" ? "drag a border to move it" : "", "drag a label to reorder"]
       .filter(Boolean).join(" · ");
     layout();
   }
@@ -253,6 +284,7 @@ export function createMultiCompare(root, { onExit }) {
       items = list.slice();
       note = n;
       view.cx = 0.5; view.cy = 0.5; view.w = 1;
+      bounds = [];
       fresh = true;
       await loadSizes();
       render();

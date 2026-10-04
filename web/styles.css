@@ -705,7 +705,7 @@ button.busy::before {
 .pipeline li.now > span { color: var(--canvas); background: var(--ink); border-color: var(--ink); animation: pulse-text 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .pipeline li.now > span { animation: none; } }
 
-/* Upscaler picked in the model selector: everything but the image, model and upscale options hides */
+/* Upscale task: everything but the image, model and upscale options hides */
 body:not(.mode-upscale) .upscale-only, body:not(.up-seedvr2) .seedvr2-only { display: none !important; }
 body.mode-upscale #refsSec, body.mode-upscale #sizeSec, body.mode-upscale #modeCard, body.mode-upscale .maskpanel,
 body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !important; }
@@ -721,7 +721,45 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 .variants button.active { border-color: var(--ink); }
 .variants img { width: 100%; height: 100%; object-fit: cover; }
 .runbox .row #variants { flex: none; width: auto; min-height: 44px; }
-.rtile.picking { outline: 2px dashed var(--ink); outline-offset: 2px; }
+/* Compare: pickable tiles get a dashed outline, picked ones a stronger one and their number */
+.rtile.picking { outline: 2px dashed var(--mute); outline-offset: 2px; }
+.rtile.picked { outline-color: var(--ink); }
+.rtile .pick-no { position: absolute; top: 4px; left: 4px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+  background: var(--ink); color: var(--on-ink); font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+.rtile .same-src { font-size: 11px; color: var(--muted); }
+
+/* Compare view (web/compare.js): replaces the single-run viewer */
+body.cmp-active #runsView .runhead, body.cmp-active #viewerTools, body.cmp-active #pipeline, body.cmp-active #variantStrip,
+body.cmp-active #progressWrap, body.cmp-active #alignPanel, body.cmp-active #stepsBar,
+body.cmp-active #bigArea > :not(#multiCmp) { display: none !important; }
+body.cmp-active .runs-center .bigarea { height: max(360px, calc(100vh - 330px)); background: none; }
+.mcmp { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px; }
+.mc-bar { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.mc-bar .spacer { flex: 1; }
+.mc-title { font-size: 15px; }
+.mc-hint { font-size: 12px; }
+.mc-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; user-select: none; -webkit-user-select: none; }
+.mc-tile { position: absolute; overflow: hidden; border-radius: var(--r-img); background: var(--surface); cursor: grab; touch-action: none; }
+.mc-tile:active { cursor: grabbing; }
+.mc-tile img { position: absolute; left: 0; top: 0; max-width: none; transform-origin: 0 0; pointer-events: none; }
+.mc-label { position: absolute; top: 6px; left: 6px; max-width: calc(100% - 12px); padding: 2px 8px; border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--canvas) 82%, transparent); color: var(--ink); font-size: 12px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: move; z-index: 2; }
+.mc-tile.drop, .mc-strip.drop { box-shadow: inset 0 0 0 3px var(--ink); }
+.mc-mini { position: absolute; left: 10px; bottom: 10px; z-index: 5; touch-action: none; cursor: crosshair; }
+.mc-clip { position: absolute; inset: 0; overflow: hidden; border-radius: 6px; border: 1px solid var(--hairline-strong);
+  background: var(--canvas); box-shadow: 0 4px 16px rgba(0,0,0,.3); pointer-events: none; }
+.mc-clip img { width: 100%; height: 100%; display: block; }
+.mc-shade { position: absolute; box-shadow: 0 0 0 9999px rgba(0,0,0,.4); }
+.mc-rect { position: absolute; border: 2px solid var(--ink); cursor: move; box-sizing: border-box; }
+.mc-h { position: absolute; width: 12px; height: 12px; background: var(--ink); border: 2px solid var(--canvas); border-radius: 50%; }
+.mc-h.nw { left: -7px; top: -7px; cursor: nwse-resize; } .mc-h.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.mc-h.ne { right: -7px; top: -7px; cursor: nesw-resize; } .mc-h.sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.mc-split { position: absolute; border-radius: var(--r-img); overflow: hidden; background: var(--surface); }
+.mc-split img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.mc-strip { position: absolute; top: 0; bottom: 0; border-left: 1px solid rgba(255,255,255,.85); }
+.mc-strip:first-of-type { border-left: 0; }
+.mc-strip .mc-label { left: 50%; transform: translateX(-50%); }
 
 /* crop & stitch options under the area cards */
 .crop-opts { display: grid; gap: 8px; margin-top: 12px; }

@@ -3,6 +3,7 @@
 
 import { createSetup } from "/setup.js";
 import { initPromptPresets } from "/promptpresets.js";
+import { createMultiCompare } from "/compare.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -1218,7 +1219,7 @@ async function uploadMaskBlob(blob) {
   return (await api("/api/upload-mask", { method: "POST", body: fd })).name;
 }
 
-// Upscaler picked in the model selector: the image is upscaled as its own run (no prompt, no mask)
+// Upscale task: the image is upscaled as its own run (no prompt, no mask)
 async function runUpscale() {
   setSubmitting(true);
   try {
@@ -1671,17 +1672,6 @@ function showFinal() {
   for (const img of $("filmstrip").children) img.classList.remove("active");
   $("resultEmpty").hidden = true;
   const after = $("viewRaw").checked && run.rawUrl ? run.rawUrl : (run.aligned?.url || run.resultUrl);
-  const other = comparing(run);
-  $("cmpTagL").textContent = other ? "Other" : "Before";
-  $("cmpTagR").textContent = other ? "This" : "After";
-  if (other) {   // compare with another run: its result on the left, this one on the right
-    $("cmpBefore").src = other.aligned?.url || other.resultUrl;
-    $("cmpAfter").src = after;
-    $("liveImg").hidden = true;
-    $("compare").hidden = false;
-    setDivider(50);
-    return;
-  }
   if (!run.beforeUrl || !$("compareToggle").checked) {
     $("liveImg").src = after;
     $("liveImg").hidden = false;
@@ -1836,28 +1826,91 @@ function settingsRows(run) {
   return rows.filter(([, v]) => v !== "" && v != null);
 }
 
-// ------------------------------------------------------------------ compare two runs, variations
-const comparing = (run) => (state.compare && run && state.compare.base === run ? state.compare.other : null);
+// ------------------------------------------------------------------ compare several runs
+// "Compare" next to the result filters: pick two or more results (dashed tiles), then they are shown side by
+// side in the viewer (web/compare.js). Runs from different source images can be mixed; the bar says so.
+state.cmp = { picking: false, keys: [], active: false };
+const cmpRuns = () => state.cmp.keys.map((k) => state.runs.find((r) => r.serverId === k)).filter(Boolean);
+const cmpPickable = (run) => !!run.resultUrl && run.status !== "error" && !!run.serverId;
+// the input image a run started from ("" for text-to-image)
+const cmpSource = (r) => (runTask(r) === "generate" ? "" : r.params?.image || r.beforeUrl || "");
+const multiCmp = createMultiCompare($("multiCmp"), { onExit: () => exitCompare() });
 
-// settings that differ between this run and the one it is compared with
-function renderDiff(run) {
-  const other = comparing(run);
-  $("detDiffSec").hidden = !other;
-  if (!other) return;
-  const dl = $("detDiff");
-  dl.innerHTML = "";
-  const a = run.params || {}, b = other.params || {};
-  const show = (v) => (v == null || v === "" ? "–" : typeof v === "object" ? JSON.stringify(v) : String(v));
-  const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !["group", "variant"].includes(k));
-  let n = 0;
-  for (const k of keys.sort()) {
-    if (show(a[k]) === show(b[k])) continue;
-    const dt = document.createElement("dt"); dt.textContent = k.replace(/_/g, " ");
-    const dd = document.createElement("dd"); dd.textContent = `${show(a[k])} → ${show(b[k])}`;
-    dl.append(dt, dd);
-    n++;
+// tile label: the model, plus every setting that differs between the compared runs
+const CMP_KEYS = [["steps", "steps"], ["cfg", "CFG"], ["sampler", ""], ["scheduler", ""], ["denoise", "denoise"],
+  ["megapixels", "MP"], ["mode", ""], ["seed", "seed"], ["loras", ""], ["upscaler", ""], ["prompt", ""]];
+function cmpLabels(runs) {
+  const val = (r, k) => {
+    const v = r.params?.[k];
+    if (runTask(r) === "upscale" && ["seed", "prompt", "upscaler"].includes(k)) return "";   // in the title already
+    if (k === "loras") return (v || []).map((l) => `${l.name.replace(/\.safetensors$/, "")} ${l.strength}`).join(", ");
+    return v == null ? "" : String(v);
+  };
+  const differs = CMP_KEYS.filter(([k]) => new Set(runs.map((r) => val(r, k))).size > 1);
+  return runs.map((r) => {
+    const p = r.params || {};
+    const up = runTask(r) === "upscale" && (state.setup?.components || []).find((c) => c.key === p.upscaler);
+    const model = up ? `${up.title} ×${p.upscale}`
+      : presetById(p.preset)?.title || (p.unet || "").replace(/\.(gguf|safetensors)$/, "") || runTask(r);
+    const parts = [p.quant ? `${model} · ${p.quant}` : model];
+    for (const [k, name] of differs) {
+      let v = val(r, k);
+      if (!v) continue;
+      if (k === "prompt") v = `"${v.length > 28 ? `${v.slice(0, 27)}…` : v}"`;
+      parts.push(name ? `${name} ${v}` : v);
+    }
+    return { label: parts.join(" · "), title: `${parts.join("\n")}\n\n${r.prompt || ""}` };
+  });
+}
+
+function syncCompareUi() {
+  const c = state.cmp, n = c.keys.length;
+  $("compareRunsBtn").textContent = c.picking ? `Done (${n})` : "Compare";
+  $("compareRunsBtn").classList.toggle("primary", c.picking);
+  $("compareRunsBtn").disabled = c.picking && n < 2;
+  $("compareRunsBtn").title = c.picking ? (n < 2 ? "Pick at least two results" : "Compare the picked results")
+    : "Pick two or more results and compare them side by side";
+  $("compareCancel").hidden = !c.picking;
+}
+$("compareRunsBtn").onclick = () => {
+  const c = state.cmp;
+  if (!c.picking) {   // start picking; an open comparison keeps its runs picked
+    c.picking = true;
+    if (!c.active) c.keys = [];
+    if (state.resultFilter === "removed") setResultFilter("all");
+    showToast("Pick the results to compare");
+  } else if (c.keys.length >= 2) {
+    c.picking = false;
+    startCompare();
   }
-  if (!n) { const dd = document.createElement("dd"); dd.className = "hint"; dd.textContent = "Same settings."; dl.append(dd); }
+  syncCompareUi();
+  renderHistory();
+};
+$("compareCancel").onclick = () => {
+  state.cmp.picking = false;
+  if (!state.cmp.active) state.cmp.keys = [];
+  syncCompareUi();
+  renderHistory();
+};
+function startCompare() {
+  const runs = cmpRuns();
+  if (runs.length < 2) return;
+  const labels = cmpLabels(runs);
+  const sources = new Set(runs.map(cmpSource));
+  state.cmp.active = true;
+  document.body.classList.add("cmp-active");
+  $("multiCmp").hidden = false;
+  multiCmp.show(runs.map((r, i) => ({ key: r.serverId, url: r.aligned?.url || r.upscaledUrl || r.resultUrl, ...labels[i] })),
+    { note: sources.size > 1 ? "Different source images" : "" });
+}
+function exitCompare() {
+  state.cmp.active = false;
+  state.cmp.keys = [];
+  document.body.classList.remove("cmp-active");
+  $("multiCmp").hidden = true;
+  syncCompareUi();
+  renderHistory();
+  renderViewer();
 }
 
 // the other variations of the same queued batch, as thumbnails under the viewer
@@ -1936,22 +1989,12 @@ function renderDetails(run, status) {
   $("removeRun").textContent = run.cancelling ? "Removing…" : "Remove from queue";
   $("deleteRun").hidden = !(done || status === "error");
   $("retryRun").hidden = status !== "error";
-  $("compareBtn").hidden = !(done && run.resultUrl);
-  $("compareBtn").textContent = comparing(run) ? "Exit compare" : state.picking ? "Pick a result…" : "Compare with…";
-  renderDiff(run);
   $("matchInfo").textContent = run.match || "";
 }
 
 $("cancelRun").onclick = () => { if (state.run && state.jobs.has(state.run.id)) cancelJob(state.run); };
 $("removeRun").onclick = $("cancelRun").onclick;
 $("deleteRun").onclick = () => { if (state.run) deleteRun(state.run); };
-$("compareBtn").onclick = () => {
-  if (comparing(state.run) || state.picking) { state.compare = null; state.picking = false; showRun(state.run); renderHistory(); return; }
-  state.picking = true;
-  renderViewer();
-  renderHistory();
-  showToast("Pick a result to compare with");
-};
 $("retryRun").onclick = async () => {
   const run = state.run;
   if (!run?.serverId) return;
@@ -2093,8 +2136,11 @@ function renderHistory() {
   }
   for (const run of list) {
     const b = document.createElement("button");
-    b.className = "rtile" + (run === state.run ? " active" : "") + (run.status === "error" ? " failed" : "")
-      + (state.picking && run !== state.run && run.resultUrl ? " picking" : "");
+    const pickable = state.cmp.picking && cmpPickable(run);
+    const picked = pickable && state.cmp.keys.includes(run.serverId);
+    b.className = "rtile" + (run === state.run && !state.cmp.picking ? " active" : "") + (run.status === "error" ? " failed" : "")
+      + (pickable ? " picking" : "") + (picked ? " picked" : "");
+    if (pickable) b.setAttribute("aria-pressed", String(picked));
     b.setAttribute("aria-label", `Open run: ${run.prompt || "untitled"}`);
     const pic = document.createElement("span"); pic.className = "rpic";
     if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
@@ -2107,6 +2153,13 @@ function renderHistory() {
     b.title = run.status === "error" && run.error ? `${run.prompt}\n\nFailed: ${run.error}` : run.prompt;
     b.onclick = () => selectRun(run);
     // × removes the run from the history only; its files stay (a sibling: buttons cannot nest)
+    if (pickable) {   // which picks share the source image of the first pick
+      const first = cmpRuns()[0];
+      if (first && first !== run && cmpSource(first) && cmpSource(first) === cmpSource(run)) {
+        const t = document.createElement("span"); t.className = "same-src"; t.textContent = "same source"; meta.append(t);
+      }
+      if (picked) { const no = document.createElement("span"); no.className = "pick-no"; no.textContent = state.cmp.keys.indexOf(run.serverId) + 1; pic.append(no); }
+    }
     const x = document.createElement("button");
     x.className = "rtile-x"; x.textContent = "×";
     x.title = "Remove from history (files are kept)";
@@ -2282,15 +2335,16 @@ function route() {
 window.addEventListener("hashchange", route);
 const findRun = (id) => state.jobs.get(id) || state.runs.find((r) => r.serverId === id) || null;
 function selectRun(run) {
-  if (state.picking && state.run && run !== state.run && run.resultUrl) {   // "Compare with…": this tile is the other run
-    state.picking = false;
-    state.compare = { base: state.run, other: run };
-    showRun(state.run);
+  if (state.cmp.picking) {   // picking for Compare: a tile toggles
+    if (!cmpPickable(run)) return;
+    const k = state.cmp.keys;
+    const i = k.indexOf(run.serverId);
+    if (i >= 0) k.splice(i, 1); else k.push(run.serverId);
+    syncCompareUi();
     renderHistory();
     return;
   }
-  state.picking = false;
-  state.compare = null;
+  if (state.cmp.active) exitCompare();
   if (state.jobs.has(run.id)) { state.follow = true; viewJob(run); return; }
   state.follow = false;
   showRun(run);
@@ -3303,14 +3357,10 @@ function renderModelSel(list) {
     }
     sel.appendChild(grp);
   }
-  const ups = state.task === "edit" ? installedUpscalers() : [];
-  if (ups.length) {
-    const grp = document.createElement("optgroup");
-    grp.label = "Upscaler";
-    for (const u of ups) grp.appendChild(new Option(u.title, `up|${u.key}`));
-    sel.appendChild(grp);
-  }
-  if (state.setup && state.task === "edit" && !ups.some((u) => u.key === $("upscaleModel").value)) $("upscaleModel").value = "";
+  // Upscale task: only the upscalers; the edit models stay picked in #preset / #quant meanwhile
+  const ups = state.task === "upscale" ? installedUpscalers() : [];
+  for (const u of ups) sel.add(new Option(u.title, `up|${u.key}`));
+  if (state.setup && state.task === "upscale" && !ups.some((u) => u.key === $("upscaleModel").value)) $("upscaleModel").value = ups[0]?.key || "";
   sel.value = upscaling() ? `up|${$("upscaleModel").value}` : `${$("preset").value}|${$("quant").value}`;
   sel.disabled = !list.length && !ups.length;
   sel.title = sel.selectedOptions[0]?.textContent || "";
@@ -3343,7 +3393,7 @@ function initModelPicker() {
     if (pid !== $("preset").value) { $("preset").value = pid; $("preset").dispatchEvent(new Event("change")); }
     $("quant").value = q;
     $("quant").dispatchEvent(new Event("change"));
-    syncTaskUi();   // leaves upscale mode also when the same model is picked again
+    syncTaskUi();
     $("modelSel").title = $("modelSel").selectedOptions[0]?.textContent || "";
   });
 }
@@ -3388,7 +3438,7 @@ $("upscaleFactor").addEventListener("input", updateUpscaleSizes);
 function syncTaskUi() {
   const gen = state.task === "generate";
   $("task").value = state.task;
-  // an upscaler picked: only the image, the model picker and the upscale options stay visible
+  // Upscale task: only the image, the model picker and the upscale options stay visible
   const up = upscaling() ? installedUpscalers().find((u) => u.key === $("upscaleModel").value) : null;
   document.body.classList.toggle("mode-upscale", !!up);
   document.body.classList.toggle("up-seedvr2", up?.engine === "seedvr2");

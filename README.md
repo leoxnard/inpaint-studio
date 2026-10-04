@@ -76,8 +76,11 @@ Runs have no numbers: a run is labelled with what it is doing ("Running · 1m 23
 
 The ×1 … ×8 menu next to the queue button adds **variations**: the same run several times, each with its
 own seed (random, or seed, seed + 1, …). In Runs the variations of one batch show as a strip under the
-image. **Compare with…** (Runs → Actions) puts two results into the before/after slider and lists the
-settings that differ.
+image. **Compare** (next to the result filters) picks two or more results (dashed tiles, click to toggle)
+and shows them side by side (`web/compare.js`): **Detail** (default) is a grid where every tile shows the
+same part of its image, moved and resized with the minimap at the bottom left or by scrolling/pinching and
+dragging in a tile; **Split** cuts one frame into fixed strips. Drag a label to change the order. Labels name
+the model plus every setting that differs; results from different source images can be mixed.
 
 If the server restarts while ComfyUI keeps running (e.g. Comfy Desktop), unfinished runs are followed
 again (without live progress, ComfyUI only reports that to the original connection). A run that crashed

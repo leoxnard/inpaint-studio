@@ -383,6 +383,7 @@
           <span class="tag tl" id="cmpTagL">Before</span><span class="tag tr" id="cmpTagR">After</span>
         </div>
       </div>
+        <div class="mcmp" id="multiCmp" hidden></div>
       <div class="variants" id="variantStrip" hidden></div>
       <div class="progress-wrap" id="progressWrap" hidden>
         <div class="progress"><div class="bar" id="progressBar"></div></div>
@@ -433,6 +434,8 @@
           </div>
           <span class="spacer"></span>
           <span class="hint" id="resultCount"></span>
+          <button id="compareRunsBtn" title="Pick two or more results and compare them side by side">Compare</button>
+          <button id="compareCancel" hidden>Cancel</button>
         </div>
         <div class="results-grid" id="history"></div>
       </section>
@@ -453,10 +456,6 @@
           <h2 class="h">Settings</h2>
           <dl class="dl" id="detSettings"></dl>
         </section>
-        <section class="sec" id="detDiffSec" hidden>
-          <h2 class="h">Differences (this → other)</h2>
-          <dl class="dl" id="detDiff"></dl>
-        </section>
         <section class="sec actions">
           <h2 class="h">Actions</h2>
           <button class="primary" id="loadSettings" title="Switch to Create with this run's settings (the image stays)">Load settings in Create</button>
@@ -467,7 +466,6 @@
           <button id="downloadSteps">Download shown steps</button>
           <button id="cancelRun">Cancel run</button>
           <button id="removeRun">Remove from queue</button>
-          <button id="compareBtn" hidden title="Compare this result with another one in the slider">Compare with…</button>
           <button id="retryRun" class="primary" hidden title="Queue this run again with the same settings">Retry</button>
           <button id="deleteRun" class="danger">Delete run</button>
           <span class="hint" id="matchInfo"></span>

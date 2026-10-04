@@ -37,7 +37,8 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - `web/` – vanilla HTML/JS/CSS, no build step. Two views in one page: Create (`#createView`) and Runs
   (`#runsView`), switched by a hash router (`#create`, `#runs/<id>`). Hidden `#mode`, `#aspect`, `#viewRaw`
   stay the source of truth; the Area cards, aspect tiles and Pasted/Raw switch only write into them.
-  Design tokens (Ollama style, see `design/`) are CSS variables at the top of `styles.css`.
+  Design tokens (Ollama style, see `design/`) are CSS variables at the top of `styles.css`. `compare.js` renders the
+  multi-run Compare view (detail grid with minimap, split strips); `app.js` handles picking and labels.
 - Testing vs. using: Claude tests changes in the Browser pane against the dev server (launch config
   `inpaint-studio-dev`, port 7381, code from the repo); Leonard uses the installed app (7380, bundled code).
   Never test in or quit the app; only rebuild it at the end (`GET :7380/api/jobs` empty first).

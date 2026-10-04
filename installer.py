@@ -110,7 +110,7 @@ def item_path(cfg: dict, item: str) -> Path | None:
             f = Path(cfg["comfy_dir"]) / "custom_nodes" / Path(c["path"]).name
             return f if f.is_file() else None
         folders = [c["folder"], "clip"] if c["folder"] == "text_encoders" else [c["folder"]]
-        return _model_file(cfg, folders, Path(c["path"]).name)
+        return _model_file(cfg, folders, presets.file_name(c))
     pid, _, q = rest.partition(":")
     return _model_file(cfg, ["diffusion_models", "unet"], presets.PRESETS[pid]["quants"][q]["file"])
 
@@ -121,7 +121,7 @@ def item_target(cfg: dict, item: str) -> tuple[str, Path, int]:
     if kind == "component":
         c = presets.COMPONENTS[rest]
         base = Path(cfg["comfy_dir"]) / "custom_nodes" if c["folder"] == "custom_node" else Path(cfg["models_dir"]) / c["folder"]
-        return HF.format(repo=c["repo"], path=c["path"]), base / Path(c["path"]).name, c["size"]
+        return HF.format(repo=c["repo"], path=c["path"]), base / presets.file_name(c), c["size"]
     pid, _, q = rest.partition(":")
     pr = presets.PRESETS[pid]
     f = pr["quants"][q]

@@ -208,10 +208,10 @@ async def setup_status():
     cfg = installer.load_config()
     have = installer.installed(cfg)
     base = [{"id": s, "title": t, "description": d, "installed": have[s]} for s, t, d in installer.BASE_STEPS]
-    comps = [{"id": f"component:{cid}", "key": cid, "title": c["title"], "size": c["size"], "file": c["path"].rsplit("/", 1)[-1],
+    comps = [{"id": f"component:{cid}", "key": cid, "title": c["title"], "size": c["size"], "file": presets.file_name(c),
              "installed": have[f"component:{cid}"], "kind": c.get("kind"), "scale": c.get("scale"),
-             "engine": c.get("engine"), "needs": c.get("needs", []),
-              "description": c.get("description", "")}
+             "engine": c.get("engine"), "needs": c.get("needs", []), "families": c.get("families"),
+             "strength": c.get("strength"), "repo": c["repo"], "description": c.get("description", "")}
              for cid, c in presets.COMPONENTS.items()]
     ram = system_ram()
     models = []
@@ -228,7 +228,7 @@ async def setup_status():
                        for q, f in pr["quants"].items()]})
     return {"ready": installer.ready(have), "mask_available": have["component:sam3"], "config": cfg,
             "system": {"ram": ram, "gpu_budget": int(ram * presets.GPU_SHARE)},
-            "base": base, "components": comps, "presets": models, "default_preset": presets.DEFAULT_PRESET,
+            "base": base, "components": comps, "lora_groups": presets.LORA_GROUPS, "presets": models, "default_preset": presets.DEFAULT_PRESET,
             "comfy": {"up": await comfy_up(), "managed": COMFY_PROC.managed}, "install": INSTALLER.state()}
 
 

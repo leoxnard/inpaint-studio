@@ -32,7 +32,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   seamless edges (graph-cut seam in a band around the mask edge), all measured outside the mask. `POST /api/runs/{id}/align`; also run
   automatically after paste jobs (saved as `<run>_fixed.png`).
 - `presets.py` – model presets (files, quants, sizes, defaults), components (encoders, VAEs,
-  SAM3, upscalers, Viggle node) and the RAM-fit estimate. `installer.py` – setup and the download queue (more items can be queued while one runs) and
+  SAM3, upscalers, Viggle node, LoRAs with their `families`, grouped by `LORA_GROUPS`) and the RAM-fit estimate. `installer.py` – setup and the download queue (more items can be queued while one runs) and
   the headless ComfyUI process.
 - `web/` – vanilla HTML/JS/CSS, no build step. Two views in one page: Create (`#createView`) and Runs
   (`#runsView`), switched by a hash router (`#create`, `#runs/<id>`). Hidden `#mode`, `#aspect`, `#viewRaw`

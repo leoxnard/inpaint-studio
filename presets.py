@@ -48,6 +48,85 @@ COMPONENTS: dict[str, dict[str, Any]] = {
 }
 
 
+def file_name(c: dict[str, Any]) -> str:
+    """Local file name of a component: `save_as` when the repo's name is too generic, else the repo file name."""
+    return c.get("save_as") or c["path"].rsplit("/", 1)[-1]
+
+
+def _lora(title: str, repo: str, path: str, size: int, families: list[str], description: str,
+          strength: float = 1.0, save_as: str | None = None) -> dict[str, Any]:
+    """A LoRA only works with the model family it was trained for; `strength` is the suggested start value."""
+    c = {"title": title, "kind": "lora", "repo": repo, "path": path, "folder": "loras", "size": size,
+         "families": families, "strength": strength, "description": description}
+    return {**c, "save_as": save_as} if save_as else c
+
+
+# Groups of the LoRA section in Downloads: model line -> families it covers (in PRESETS order).
+LORA_GROUPS: dict[str, list[str]] = {
+    "Qwen-Image 2.1": ["qwen21", "qwen21_turbo"],
+    "Qwen-Image-Edit 2511": ["qwen_edit"],
+    "Qwen-Image 2512": ["qwen"],
+    "Z-Image Turbo": ["zimage"],
+}
+
+COMPONENTS.update({
+    # Qwen-Image 2.1. The speed LoRAs are not for Viggle Turbo (already step-distilled).
+    "lora_q21_acc4": _lora("Fun-Acc 4-step (official)", "alibaba-pai/Qwen-Image-2.1-Fun-Acc-LoRAs",
+                           "models/Qwen-Image-2.1-Fun-Acc-4Step.safetensors", 345_632_504, ["qwen21"],
+                           "Speed: 4 steps, CFG 1."),
+    "lora_q21_turbo8": _lora("Turbo8", "chriswritescode/Turbo8-LoRA-Qwen-Image-2.1",
+                             "turbo8_lora_step2500.safetensors", 1_359_148_744, ["qwen21"],
+                             "Speed: 8 steps, CFG 1, euler/simple."),
+    "lora_q21_anime": _lora("Anime consistency", "WarmBloodAban/Qwen-Image-2.1-LoRAs",
+                            "Qwen2.1_Anime_consistency.safetensors", 167_830_408, ["qwen21", "qwen21_turbo"],
+                            "Keeps an anime style consistent across edits.", 0.7),
+    "lora_q21_anything2real": _lora("Anything2Real characters", "WarmBloodAban/Qwen-Image-2.1-LoRAs",
+                                    "Qwen2.1_Anything2RealCharacters.safetensors", 318_820_200, ["qwen21", "qwen21_turbo"],
+                                    "Turns drawn or anime characters into realistic people.", 0.7),
+    # Qwen-Image-Edit 2511
+    "lora_e2511_light4": _lora("Lightning 4-step", "lightx2v/Qwen-Image-Edit-2511-Lightning",
+                               "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors", 849_608_296, ["qwen_edit"],
+                               "Speed: 4 steps, CFG 1 (about 10x faster)."),
+    "lora_e2511_light8": _lora("Lightning 8-step", "lightx2v/Qwen-Image-Edit-2511-Lightning",
+                               "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors", 849_608_296, ["qwen_edit"],
+                               "Speed: 8 steps, CFG 1. Steadier than 4-step."),
+    "lora_e2511_angles": _lora("Multiple angles", "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA",
+                               "qwen-image-edit-2511-multiple-angles-lora.safetensors", 295_140_688, ["qwen_edit"],
+                               'New camera angle. Prompt: "<sks> front-left quarter view low-angle shot close-up".', 0.9),
+    "lora_e2511_unblur": _lora("Unblur & upscale", "prithivMLmods/Qwen-Image-Edit-2511-Unblur-Upscale",
+                               "Qwen-Image-Edit-Unblur-Upscale_20.safetensors", 236_117_064, ["qwen_edit"],
+                               'Sharpens blurry photos. Prompt: "unblur and upscale".'),
+    "lora_e2511_upscale2k": _lora("Upscale 2K", "starsfriday/Qwen-Image-Edit-2511-Upscale2K",
+                                  "qwen_image_edit_2511_upscale.safetensors", 590_057_176, ["qwen_edit"],
+                                  'Adds detail at a higher size. Prompt: "Upscale this picture to 4K resolution."'),
+    # Qwen-Image 2512
+    "lora_q2512_light4": _lora("Lightning 4-step", "lightx2v/Qwen-Image-2512-Lightning",
+                               "Qwen-Image-2512-Lightning-4steps-V1.0-bf16.safetensors", 849_608_296, ["qwen"],
+                               "Speed: 4 steps, CFG 1."),
+    "lora_q2512_light8": _lora("Lightning 8-step", "lightx2v/Qwen-Image-2512-Lightning",
+                               "Qwen-Image-2512-Lightning-8steps-V1.0-bf16.safetensors", 849_608_296, ["qwen"],
+                               "Speed: 8 steps, CFG 1. Better detail than 4-step."),
+    "lora_q2512_pixel": _lora("Pixel art", "prithivMLmods/Qwen-Image-2512-Pixel-Art-LoRA",
+                              "Qwen-Image-2512-Master-Pixel-Art-LoRA.safetensors", 1_179_885_016, ["qwen"],
+                              "Pixel art style."),
+    # Z-Image Turbo (already 8 steps, so no speed LoRA)
+    "lora_zi_realism": _lora("Realism", "suayptalha/Z-Image-Turbo-Realism-LoRA",
+                             "pytorch_lora_weights.safetensors", 85_094_800, ["zimage"],
+                             'More realistic photos. Put "Realism" in the prompt.', save_as="z_image_turbo_realism.safetensors"),
+    "lora_zi_dejpeg": _lora("DeJPEG v3", "wcde/Z-Image-Turbo-DeJPEG-Lora", "dejpeg_v3.safetensors", 680_326_512,
+                            ["zimage"], "Removes JPEG artefacts and noise in img2img/inpaint."),
+    "lora_zi_pixel": _lora("Pixel art", "tarn59/pixel_art_style_lora_z_image_turbo",
+                           "pixel_art_style_z_image_turbo.safetensors", 170_128_328, ["zimage"],
+                           'Pixel art style. Put "Pixel art style." in the prompt.'),
+    "lora_zi_painting": _lora("Classic painting", "renderartist/Classic-Painting-Z-Image-Turbo-LoRA",
+                              "Classic_Painting_Z_Image_Turbo_v1_renderartist_1750.safetensors", 170_128_288, ["zimage"],
+                              'Old-master oil painting look. Start the prompt with "class1cpa1nt".'),
+    "lora_zi_coloring": _lora("Coloring book", "renderartist/Coloring-Book-Z-Image-Turbo-LoRA",
+                              "Coloring_Book_Z_Image_Turbo_v1_renderartist_2000.safetensors", 31_948_552, ["zimage"],
+                              'Black and white line art. Put "c0l0ringb00k" in the prompt.', 0.7),
+})
+
+
 def _quants(stem: str, sizes: dict[str, int]) -> dict[str, dict[str, Any]]:
     """GGUF files are '<stem>-<quant>.gguf'; int8 convrot is a safetensors file (normal UNet loader)."""
     return {q: {"file": f"{stem}-{q}.{'safetensors' if q == 'int8_convrot' else 'gguf'}", "size": s} for q, s in sizes.items()}

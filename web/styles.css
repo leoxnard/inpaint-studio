@@ -491,6 +491,25 @@ button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad)
 .pstate { font-size: 11px; color: var(--muted); }
 .pstate.error { color: var(--bad); }
 .pstate.running { color: var(--accent); }
+.lgroup { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.lgroup[open] { display: flex; flex-direction: column; gap: 8px; }
+.lgroup summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; cursor: pointer; list-style: none; }
+.lgroup summary::-webkit-details-marker { display: none; }
+.lgroup summary::before { content: "▸"; color: var(--muted); width: 10px; }
+.lgroup[open] summary::before { content: "▾"; }
+.lgroup summary b { font-size: 15px; }
+.lgroup .lcount { margin-left: auto; }
+.lrow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-top: 1px solid var(--border); font-size: 13px; }
+.lrow:first-child { border-top: 0; }
+.lrow .linfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lrow .lname { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-weight: 600; }
+.lrow .lname a { color: inherit; text-decoration: none; }
+.lrow .lname a:hover { text-decoration: underline; }
+.lrow .desc { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.lrow .side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.lrow .sz { color: var(--muted); font-size: 12px; }
+.lrow button { padding: 0 12px; min-height: 30px; font-size: 13px; }
+@media (max-width: 560px) { .lrow { flex-wrap: wrap; } .lrow .side { width: 100%; } }
 .plist { display: flex; flex-direction: column; gap: 6px; }
 .prow { display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 8px; align-items: start; padding: 6px 4px; border-top: 1px solid var(--border); }
 .prow:first-child { border-top: 0; }
@@ -701,3 +720,4 @@ body.mode-outpaint:not(.task-generate) .outpaint-only { display: flex; }
 .op-tools .op-brush { display: grid; grid-template-columns: auto auto; gap: 2px 8px; align-items: center; min-width: 160px; }
 .op-tools .op-brush input { grid-column: 1 / -1; width: 100%; }
 body.mode-outpaint:not(.task-generate) #display.op-paint { cursor: crosshair; }
+.hint.warn-text { color: var(--bad); }

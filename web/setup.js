@@ -39,6 +39,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
   let builtReady = null;          // mode of the current skeleton (ready or first run)
   let pathsOpen = false;
   const expanded = new Set();     // preset ids with the full quant list open
+  const loraOpen = new Set(), loraClosed = new Set();   // LoRA groups opened / closed by hand
   const baseSel = new Set();      // first run: base steps to install
   let pick = { preset: null, quant: null };
   let sam3Pick = false;
@@ -112,6 +113,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     if (data.ready) {
       inner.appendChild(buildComponents());
       inner.appendChild(buildModels());
+      inner.appendChild(buildLoras());
     } else {
       seedFirstRun();
       inner.appendChild(buildGuided());
@@ -429,6 +431,68 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     if (sl) sec.appendChild(sl);
     for (const p of sorted()) sec.appendChild(buildCard(p));
     return sec;
+  }
+
+  // ---------------------------------------------------------------- LoRAs (ready mode)
+  // One collapsible group per model line; a group is open when one of its models is installed or it has a LoRA.
+  function buildLoras() {
+    const sec = section("LoRAs");
+    sec.appendChild(el("div", "hint", "Small add-ons for one model line (speed, styles, camera angles). Pick them under Advanced → LoRAs; a LoRA only works with the models of its group."));
+    const loras = data.components.filter((c) => c.kind === "lora");
+    for (const [group, families] of Object.entries(data.lora_groups || {})) {
+      const items = loras.filter((l) => l.families.some((f) => families.includes(f)));
+      if (!items.length) continue;
+      const models = data.presets.filter((p) => families.includes(p.family));
+      const det = el("details", "lgroup");
+      const used = models.some((p) => p.installed_quants.length) || items.some((l) => l.installed);
+      det.open = loraOpen.has(group) || (!loraClosed.has(group) && used);
+      det.ontoggle = () => {
+        if (det.open) { loraOpen.add(group); loraClosed.delete(group); } else { loraClosed.add(group); loraOpen.delete(group); }
+      };
+      const sum = el("summary");
+      sum.appendChild(el("b", null, group));
+      if (models.length > 1) sum.appendChild(el("span", "hint", models.map((p) => shortTitle(p, group)).join(" · ")));
+      const n = items.filter((l) => l.installed).length;
+      sum.appendChild(el("span", "hint lcount", n ? `${n}/${items.length} installed` : `${items.length} LoRAs`));
+      det.appendChild(sum);
+      const table = el("div", "qtable");
+      for (const l of items) table.appendChild(loraRow(l, models, group));
+      det.appendChild(table);
+      sec.appendChild(det);
+    }
+    return sec;
+  }
+
+  // "Qwen-Image 2.1 UC" in group "Qwen-Image 2.1" -> "UC"; the plain group model -> "official"
+  const shortTitle = (p, group) => (p.title.startsWith(group) ? p.title.slice(group.length).trim() : p.title) || "official";
+
+  function loraRow(l, models, group) {
+    const row = el("div", "lrow");
+    const info = el("div", "linfo");
+    const name = el("div", "lname");
+    const a = el("a", null, l.title);
+    a.href = `https://huggingface.co/${l.repo}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.title = `${l.repo} on Hugging Face`;
+    name.appendChild(a);
+    const not = models.filter((p) => !l.families.includes(p.family));
+    if (not.length) name.appendChild(el("span", "chip", `not for ${not.map((p) => shortTitle(p, group)).join(", ")}`));
+    if (l.strength !== 1) name.appendChild(el("span", "hint", `strength ${l.strength}`));
+    name.appendChild(stateTag(l.id));
+    info.appendChild(name);
+    info.appendChild(el("div", "desc", l.description));
+    row.appendChild(info);
+    const side = el("div", "side");
+    side.appendChild(el("span", "sz", fmtBytes(l.size)));
+    if (l.installed) {
+      side.appendChild(installedBadge());
+      side.appendChild(actBtn("Delete", "danger", () => confirmDelete(l.id, `LoRA ${l.title}`, l.size)));
+    } else {
+      side.appendChild(queueBtn(l.id, actBtn("Download", "primary", () => startInstall([l.id]))));
+    }
+    row.appendChild(side);
+    return row;
   }
 
   // ---------------------------------------------------------------- first run

@@ -177,4 +177,6 @@ the mask (strength and how much it is the same in all colour channels) and adds 
 The mask canvas zooms with ⌘/Ctrl + scroll or a pinch (1–8×); scroll or Space + drag pans, `0` resets.
 
 **LoRAs** (Advanced): up to 3 LoRA files from ComfyUI's `models/loras`, each with a strength; they are
-applied to the diffusion model in this order.
+applied to the diffusion model in this order. Downloads → LoRAs offers a picked set per model line (speed,
+styles, camera angles, upscale; `presets.LORA_GROUPS`). Known LoRAs show their model line in the picker,
+start with their suggested strength, and a hint warns when one does not fit the selected model.

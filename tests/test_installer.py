@@ -1,6 +1,7 @@
 import zipfile
 
 import installer
+import presets
 
 
 def test_patch_gguf_loader(tmp_path):
@@ -81,3 +82,15 @@ def test_queue_runs_items_in_order_and_accepts_more_while_running(monkeypatch):
     assert states == {"component:a": "done", "component:skip": "cancelled", "component:bad": "error",
                       "component:slow": "cancelled", "component:c": "done"}
     assert error == "boom"
+
+
+def test_loras_belong_to_a_group_of_known_families():
+    families = {p["family"] for p in presets.PRESETS.values()}
+    grouped = {f for fams in presets.LORA_GROUPS.values() for f in fams}
+    assert grouped <= families
+    loras = {k: c for k, c in presets.COMPONENTS.items() if c.get("kind") == "lora"}
+    assert loras
+    for key, c in loras.items():
+        assert c["folder"] == "loras" and c["path"].endswith(".safetensors"), key
+        assert c["families"] and set(c["families"]) <= grouped, key
+        assert installer.valid_item(f"component:{key}")

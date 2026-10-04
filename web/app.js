@@ -2640,7 +2640,7 @@ function selectRun(run, shift = false) {
 // Drag the handle between columns; widths are kept per view. Double-click resets.
 const COLS_KEY = "inpaint-studio-cols-v1";
 const COL_MIN = { left: 260, right: 280 }, COL_MAX = 640, CENTER_MIN = 420;
-const COL_DEFAULT = { createView: { left: 300, right: 340 }, runsView: { left: 300, right: 320 } };
+const COL_DEFAULT = { createView: { left: 330, right: 340 }, runsView: { left: 300, right: 320 } };
 
 function readCols() { try { return JSON.parse(localStorage.getItem(COLS_KEY) || "{}"); } catch { return {}; } }
 function colLimit(view, side, w) {
@@ -2922,8 +2922,28 @@ const isDefaultRefNote = (v) => ["qwen21", "qwen_edit"].some((f) => [1, 2, 3].so
 $("refNote").value = refNoteFor("qwen21", 1);   // before loadForm: a stored text wins
 $("refNoteReset").onclick = () => { $("refNote").value = defaultRefNote(); $("refNote").dispatchEvent(new Event("change")); };
 
+// Fold sections in the Create sidebar by clicking their heading; kept per browser. Reference images start folded.
+const FOLD_KEY = "inpaint-studio-folds-v1", FOLD_DEFAULT = { refs: true };
+const readFolds = () => { try { return { ...FOLD_DEFAULT, ...JSON.parse(localStorage.getItem(FOLD_KEY) || "{}") }; } catch { return { ...FOLD_DEFAULT }; } };
+function setFold(sec, folded, save = true) {
+  sec.classList.toggle("folded", folded);
+  sec.querySelector("h2.h").setAttribute("aria-expanded", String(!folded));
+  if (!save) return;
+  const all = readFolds(); all[sec.dataset.fold] = folded;
+  try { localStorage.setItem(FOLD_KEY, JSON.stringify(all)); } catch { /* a convenience */ }
+}
+for (const sec of document.querySelectorAll(".sec[data-fold]")) {
+  const h = sec.querySelector("h2.h");
+  h.tabIndex = 0; h.setAttribute("role", "button");
+  const toggle = () => setFold(sec, !sec.classList.contains("folded"));
+  h.addEventListener("click", toggle);
+  h.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+  setFold(sec, !!readFolds()[sec.dataset.fold], false);
+}
+
 function renderRefs() {
   const max = maxRefs();
+  if (state.refs.length) setFold($("refsSec"), false, false);   // added references are never hidden
   $("refNoteRow").hidden = !(max && state.task === "edit" && state.refs.length);   // only with a reference image
   if (isDefaultRefNote($("refNote").value)) $("refNote").value = defaultRefNote();
   $("refsSec").hidden = !max;

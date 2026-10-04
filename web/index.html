@@ -74,14 +74,14 @@
         </div>
       </section>
 
-      <section class="sec" id="refsSec" hidden>
+      <section class="sec" id="refsSec" data-fold="refs" hidden>
         <h2 class="h">Reference images <span class="badge" title="Works, but results with reference images are not always reliable yet">Experimental</span></h2>
         <p class="hint" id="refsHint"></p>
         <div class="ref-list" id="refGrid"></div>
         <input type="file" id="refInput" accept="image/*" multiple hidden>
       </section>
 
-      <section class="sec" id="sizeSec">
+      <section class="sec" id="sizeSec" data-fold="size">
         <h2 class="h">Size</h2>
         <div class="aspect-tiles gen-only" id="aspectTiles" role="radiogroup" aria-label="Aspect ratio"></div>
         <select id="aspect" hidden>
@@ -102,7 +102,7 @@
         <div class="tokenbar" id="tokenBar" hidden><i></i></div>
       </section>
 
-      <section class="sec needs-sam edit-only" id="modeCard">
+      <section class="sec needs-sam edit-only" id="modeCard" data-fold="area">
         <h2 class="h">Area to change</h2>
         <div class="area-cards" id="areaCards" role="radiogroup" aria-label="Area to change">
           <button role="radio" data-mode="none"><b>Whole image</b><span>No mask. The prompt can change everything.</span></button>

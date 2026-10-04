@@ -29,8 +29,9 @@
   <div class="layout" id="createView">
     <aside class="sidebar col-left" id="sidebar" aria-label="Model, image and area">
       <div class="seg seg-task" id="taskTabs" role="group" aria-label="What do you want to do?">
-        <button data-task="edit" class="active">Edit a photo</button>
-        <button data-task="generate">Generate new</button>
+        <button data-task="edit" class="active">Edit</button>
+        <button data-task="generate">Generate</button>
+        <button data-task="upscale">Upscale</button>
       </div>
       <input type="hidden" id="task" value="edit">
 
@@ -40,7 +41,7 @@
         <select id="modelSel" aria-label="Model and quantisation"></select>
         <select id="preset" hidden></select>
         <select id="quant" hidden></select>
-        <input type="hidden" id="upscaleModel" value=""><!-- component key while an upscaler is picked -->
+        <input type="hidden" id="upscaleModel" value=""><!-- component key of the picked upscaler (Upscale task) -->
         <div class="row between hint"><span id="modelListHint"></span><button id="moreModels" class="linkbtn" title="Open the download centre">Get more</button></div>
         <div class="hint" id="modelHint" hidden></div>
       </section>
@@ -382,8 +383,8 @@
           <div class="divider" id="cmpDivider"><span></span></div>
           <span class="tag tl" id="cmpTagL">Before</span><span class="tag tr" id="cmpTagR">After</span>
         </div>
-      </div>
         <div class="mcmp" id="multiCmp" hidden></div>
+      </div>
       <div class="variants" id="variantStrip" hidden></div>
       <div class="progress-wrap" id="progressWrap" hidden>
         <div class="progress"><div class="bar" id="progressBar"></div></div>
@@ -429,13 +430,14 @@
             <button data-filter="all" aria-pressed="true">All</button>
             <button data-filter="edit" aria-pressed="false">Edits</button>
             <button data-filter="generate" aria-pressed="false">Generated</button>
+            <button data-filter="upscale" aria-pressed="false">Upscaled</button>
             <button data-filter="failed" aria-pressed="false" title="Runs that crashed (cancelled runs are not kept)">Failed</button>
             <button data-filter="removed" aria-pressed="false" title="Runs removed with ×; their files are kept">Removed</button>
           </div>
-          <span class="spacer"></span>
-          <span class="hint" id="resultCount"></span>
           <button id="compareRunsBtn" title="Pick two or more results and compare them side by side">Compare</button>
           <button id="compareCancel" hidden>Cancel</button>
+          <span class="spacer"></span>
+          <span class="hint" id="resultCount"></span>
         </div>
         <div class="results-grid" id="history"></div>
       </section>

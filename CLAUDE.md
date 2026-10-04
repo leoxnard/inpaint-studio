@@ -3,7 +3,8 @@ Brain note: ~/brain/Projects/inpaint-studio.md
 # Inpaint Studio
 
 Local UI on top of ComfyUI (127.0.0.1:8188): optional SAM3 mask (tune + brush-paint), then an
-edit (inpaint / free edit + paste / no mask) or text-to-image generate with model presets
+edit (inpaint / free edit + paste / no mask), text-to-image generate or upscale (own task, upscale
+models only; edits can still upscale their result) with model presets
 (Qwen-Image 2.1 UC/official/Viggle Turbo, Edit 2511, 2512, Z-Image) and live per-step previews.
 Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy.
 

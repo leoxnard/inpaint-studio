@@ -112,7 +112,7 @@ body.resizing iframe, body.resizing canvas { pointer-events: none; }
 .stack { display: flex; flex-direction: column; gap: 8px; }
 .row.between { justify-content: space-between; }
 .modelbar label { display: contents; }
-.seg.seg-task { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: none; }
+.seg.seg-task { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); flex: none; }
 .seg.seg-task button { min-height: 44px; font-weight: 600; color: var(--ink); padding: 0 10px; }
 /* option cards (radio group) */
 .area-cards { display: flex; flex-direction: column; gap: 6px; }

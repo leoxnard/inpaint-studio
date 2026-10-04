@@ -49,7 +49,7 @@ const state = {
   view: "create",             // "create" | "runs" (from the location hash)
   run: null,                  // current/last run object
   runs: [],
-  task: "edit",               // "edit" | "generate"
+  task: "edit",               // "edit" | "generate" | "upscale"
   setup: null,                // last /api/setup report (presets, components)
   models: null,               // last /api/models report
   maskAvailable: true,        // false when SAM3 is not installed: the UI hides everything about masks
@@ -1233,7 +1233,10 @@ async function runEdit({ thenNext = false } = {}) {
   if (state.submitting) return;
   const generate = state.task === "generate";
   if (!generate && !state.imageName) { showError("Load an image first."); return; }
-  if (upscaling()) { await runUpscale(); return; }
+  if (state.task === "upscale") {
+    if (!upscaling()) { showError("No upscaler installed. Open the Download Center to get one."); return; }
+    await runUpscale(); return;
+  }
   if (!presetById($("preset").value)) { showError("No model installed. Open the Download Center to get one."); return; }
   const useMask = !generate && maskOn();
   setSubmitting(true);
@@ -1809,7 +1812,7 @@ function settingsRows(run) {
   const size = run.size || {};
   const rows = [
     ["Run ID", run.serverId || run.id],   // the folder name in the data dir, e.g. to point Claude at a run
-    ["Task", !task ? "" : task === "generate" ? "Generate" : p.mode || p.use_mask != null ? `Edit, ${area}` : "Edit"],
+    ["Task", !task ? "" : task === "generate" ? "Generate" : task === "upscale" ? "Upscale" : p.mode || p.use_mask != null ? `Edit, ${area}` : "Edit"],
     ["Model", preset ? `${preset.title}${p.quant ? ` · ${p.quant}` : ""}` : p.unet || ""],
     ["Size", size.work_w ? `${size.work_w} × ${size.work_h}` : ""],
     ["Steps", p.steps ?? run.steps ?? ""],
@@ -2100,6 +2103,7 @@ function syncResultFilters() {
   const count = {
     edit: state.runs.filter((r) => runTask(r) === "edit").length,
     generate: state.runs.filter((r) => runTask(r) === "generate").length,
+    upscale: state.runs.filter((r) => runTask(r) === "upscale").length,
     failed: state.runs.filter((r) => r.status === "error").length,
     removed: (state.removed || []).length,
   };
@@ -2149,10 +2153,6 @@ function renderHistory() {
     const l = document.createElement("span"); sizeLabel(l, run, img);
     meta.append(l);
     if (run.status === "error") { const st = document.createElement("span"); st.className = "strong"; st.textContent = "Failed"; meta.append(st); }
-    b.append(pic, meta);
-    b.title = run.status === "error" && run.error ? `${run.prompt}\n\nFailed: ${run.error}` : run.prompt;
-    b.onclick = () => selectRun(run);
-    // × removes the run from the history only; its files stay (a sibling: buttons cannot nest)
     if (pickable) {   // which picks share the source image of the first pick
       const first = cmpRuns()[0];
       if (first && first !== run && cmpSource(first) && cmpSource(first) === cmpSource(run)) {
@@ -2160,6 +2160,10 @@ function renderHistory() {
       }
       if (picked) { const no = document.createElement("span"); no.className = "pick-no"; no.textContent = state.cmp.keys.indexOf(run.serverId) + 1; pic.append(no); }
     }
+    b.append(pic, meta);
+    b.title = run.status === "error" && run.error ? `${run.prompt}\n\nFailed: ${run.error}` : run.prompt;
+    b.onclick = () => selectRun(run);
+    // × removes the run from the history only; its files stay (a sibling: buttons cannot nest)
     const x = document.createElement("button");
     x.className = "rtile-x"; x.textContent = "×";
     x.title = "Remove from history (files are kept)";
@@ -2258,8 +2262,18 @@ $("useResult").onclick = async () => {
 // "Load settings in Create": the run's parameters back into the form (the current image stays)
 function loadRunSettings(run) {
   const p = run.params;
-  const task = p.task === "generate" ? "generate" : "edit";
+  const task = ["generate", "upscale"].includes(p.task) ? p.task : "edit";
   if (task !== state.task) setTask(task);
+  if (task === "upscale") {
+    if (installedUpscalers().some((u) => u.key === p.upscaler)) $("upscaleModel").value = p.upscaler;
+    if (p.upscale != null) $("upscaleFactor").value = p.upscale;
+    if (p.color_correction) $("colorCorrection").value = p.color_correction;
+    renderModelPicker();
+    saveForm();
+    setView("create");
+    showToast("Settings loaded.");
+    return;
+  }
   const pick = `${p.preset}|${p.quant}`;
   if (p.preset && [...$("modelSel").options].some((o) => o.value === pick)) {
     $("modelSel").value = pick;
@@ -2464,7 +2478,7 @@ function initApp() {
   syncModeUi();   // the stored mode decides which paste-only fields show
   $("aspect").dispatchEvent(new Event("change"));
   syncUpscaler();
-  state.task = $("task").value === "generate" ? "generate" : "edit";
+  state.task = ["generate", "upscale"].includes($("task").value) ? $("task").value : "edit";
   initModelPicker();
   promptPresets = initPromptPresets({ getTask: () => state.task });
   syncTaskUi();
@@ -3325,10 +3339,12 @@ function fillQuant(p, keep, stored) {
 function renderModelPicker({ applyDefaults = false } = {}) {
   const done = completePresets();
   const avail = ["edit", "generate"].filter((t) => done.some((p) => p.modes.includes(t)));
+  if (installedUpscalers().length) avail.push("upscale");
   if (avail.length && !avail.includes(state.task)) state.task = avail[0];
   for (const b of $("taskTabs").children) b.hidden = !avail.includes(b.dataset.task);
   $("taskTabs").hidden = avail.length < 2;
-  const list = done.filter((p) => p.modes.includes(state.task)).sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0));
+  const listTask = state.task === "upscale" ? "edit" : state.task;   // #preset keeps an edit model meanwhile
+  const list = done.filter((p) => p.modes.includes(listTask)).sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0));
   const sel = $("preset");
   const prev = sel.value || storedForm().preset;
   sel.innerHTML = "";
@@ -3340,7 +3356,7 @@ function renderModelPicker({ applyDefaults = false } = {}) {
   fillQuant(want, true, storedForm().quant);
   if (applyDefaults && want) applyPresetDefaults(want);
   updateOverrideLabels();
-  renderModelSel(list);
+  renderModelSel(state.task === "upscale" ? [] : list);
   syncTaskUi();
 }
 
@@ -3362,9 +3378,9 @@ function renderModelSel(list) {
   for (const u of ups) sel.add(new Option(u.title, `up|${u.key}`));
   if (state.setup && state.task === "upscale" && !ups.some((u) => u.key === $("upscaleModel").value)) $("upscaleModel").value = ups[0]?.key || "";
   sel.value = upscaling() ? `up|${$("upscaleModel").value}` : `${$("preset").value}|${$("quant").value}`;
-  sel.disabled = !list.length && !ups.length;
+  sel.disabled = state.task === "upscale" ? !ups.length : !list.length;
   sel.title = sel.selectedOptions[0]?.textContent || "";
-  $("modelListHint").textContent = state.task === "generate" ? "Text-to-image models only" : "Edit models only";
+  $("modelListHint").textContent = { generate: "Text-to-image models only", upscale: "Upscale models only" }[state.task] || "Edit models only";
 }
 // upscalers whose files (incl. the ones they need, e.g. the SeedVR2 VAE) are all installed
 function installedUpscalers() {
@@ -3372,7 +3388,7 @@ function installedUpscalers() {
   const ok = (k) => comps.some((c) => c.key === k && c.installed);
   return comps.filter((c) => c.kind === "upscaler" && c.installed && (c.needs || []).every(ok));
 }
-function upscaling() { return state.task === "edit" && !!$("upscaleModel").value; }
+function upscaling() { return state.task === "upscale" && !!$("upscaleModel").value; }
 
 function initModelPicker() {
   renderModelPicker({ applyDefaults: !storedForm().preset });
@@ -3440,7 +3456,7 @@ function syncTaskUi() {
   $("task").value = state.task;
   // Upscale task: only the image, the model picker and the upscale options stay visible
   const up = upscaling() ? installedUpscalers().find((u) => u.key === $("upscaleModel").value) : null;
-  document.body.classList.toggle("mode-upscale", !!up);
+  document.body.classList.toggle("mode-upscale", state.task === "upscale");
   document.body.classList.toggle("up-seedvr2", up?.engine === "seedvr2");
   $("upscaleHint").textContent = up ? (up.engine === "seedvr2"
     ? "SeedVR2 redraws fine detail in one step. Slow and memory-hungry at large sizes."
@@ -3477,9 +3493,9 @@ function syncTaskUi() {
   promptPresets?.refresh();
 }
 
-// A new image always belongs to Edit: switch there (false if no installed model can edit)
+// A new image belongs to Edit or Upscale: from Generate switch to Edit (false if no installed model can edit)
 function ensureEditTask() {
-  if (state.task === "edit") return true;
+  if (state.task !== "generate") return true;
   if (!completePresets().some((p) => p.modes.includes("edit"))) { showError("None of the installed models can edit images."); return false; }
   setTask("edit");
   return true;

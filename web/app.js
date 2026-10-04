@@ -1923,35 +1923,128 @@ function cmpLabels(runs) {
   });
 }
 
+// Results: "Select" picks tiles; the icon actions next to it work on the picked runs (Compare needs two)
 function syncCompareUi() {
-  const c = state.cmp, n = c.keys.length;
-  $("compareRunsBtn").textContent = c.picking ? `Done (${n})` : "Compare";
-  $("compareRunsBtn").classList.toggle("primary", c.picking);
-  $("compareRunsBtn").disabled = c.picking && n < 2;
-  $("compareRunsBtn").title = c.picking ? (n < 2 ? "Pick at least two results" : "Compare the picked results")
-    : "Pick two or more results and compare them side by side";
-  $("compareCancel").hidden = !c.picking;
+  const c = state.cmp, n = c.picking ? c.keys.length : 0;
+  $("selectBtn").textContent = c.picking ? (n ? `Cancel (${n})` : "Cancel") : "Select";
+  $("selectBtn").title = c.picking ? "Stop selecting" : "Select results to compare, post-process, reuse, download or remove";
+  $("selAll").hidden = !c.picking;
+  const all = shownRuns().filter(cmpPickable);
+  $("selAll").textContent = all.length && all.every((r) => c.keys.includes(r.serverId)) ? "None" : "All";
+  $("selCompare").disabled = n < 2;
+  for (const id of ["selPost", "selInput", "selDownload", "selRemove"]) $(id).disabled = n < 1;
+  if (n < 1) closeRemoveMenu();
 }
-$("compareRunsBtn").onclick = () => {
-  const c = state.cmp;
-  if (!c.picking) {   // start picking; an open comparison keeps its runs picked
-    c.picking = true;
-    if (!c.active) c.keys = [];
-    if (state.resultFilter === "removed") setResultFilter("all");
-    showToast("Pick the results to compare");
-  } else if (c.keys.length >= 2) {
-    c.picking = false;
-    startCompare();
-  }
-  syncCompareUi();
-  renderHistory();
-};
-$("compareCancel").onclick = () => {
+const selectedRuns = () => state.cmp.keys.map((k) => state.runs.find((r) => r.serverId === k)).filter(Boolean);
+function stopSelecting() {
   state.cmp.picking = false;
   if (!state.cmp.active) state.cmp.keys = [];
   syncCompareUi();
   renderHistory();
+}
+$("selectBtn").onclick = () => {
+  const c = state.cmp;
+  if (c.picking) { stopSelecting(); return; }
+  c.picking = true;   // an open comparison keeps its runs picked
+  c.anchor = null;
+  if (!c.active) c.keys = [];
+  if (state.resultFilter === "removed") setResultFilter("all");
+  showToast("Click the results to select them");
+  syncCompareUi();
+  renderHistory();
 };
+// All: every result of the current filter (None when they all are)
+$("selAll").onclick = () => {
+  const c = state.cmp, all = shownRuns().filter(cmpPickable);
+  if (all.length && all.every((r) => c.keys.includes(r.serverId))) c.keys = c.keys.filter((k) => !all.some((r) => r.serverId === k));
+  else for (const r of all) if (!c.keys.includes(r.serverId)) c.keys.push(r.serverId);
+  syncCompareUi();
+  renderHistory();
+};
+$("selCompare").onclick = () => {
+  if (state.cmp.keys.length < 2) return;
+  state.cmp.picking = false;
+  startCompare();
+  syncCompareUi();
+  renderHistory();
+};
+// every fix that fits the run (as in Runs → Post-processing), plus grain, saved into <run>_fixed.png
+$("selPost").onclick = async () => {
+  const runs = selectedRuns().filter((r) => r.status === "done" && postOptions(r));
+  if (!runs.length) { showError("None of the selected results can be post-processed."); return; }
+  $("selPost").disabled = true;
+  let n = 0, failed = 0;
+  for (const run of runs) {
+    showToast(`Post-processing ${++n} / ${runs.length}…`);
+    const { fix, grain } = postOptions(run);
+    const body = { save: true, grain, grain_strength: run.grainStrength ?? GRAIN_STRENGTH,
+      colors: !!fix, auto: fix === "paste" || fix === "whole", warp: fix === "paste" || fix === "whole", poisson: fix === "paste" };
+    try {
+      const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, body);
+      run.aligned = res.aligned || null; run.fixedUrl = res.fixed_url || null; run.grainUrl = null; run.grain = !!res.grain;
+    } catch (e) { failed++; showError(`${run.prompt || run.serverId}: ${e.message}`); }
+  }
+  showToast(failed ? `Post-processed ${runs.length - failed} of ${runs.length}.` : `Post-processed ${runs.length} result${runs.length > 1 ? "s" : ""}.`);
+  syncCompareUi();
+  renderHistory();
+  if (state.run && runs.includes(state.run)) renderViewer();
+};
+$("selInput").onclick = async () => {
+  const runs = selectedRuns().filter((r) => r.resultUrl);
+  if (!runs.length || !ensureEditTask()) return;
+  try {
+    const files = await Promise.all(runs.map(async (run) => {
+      const blob = await (await fetch(shownResult(run))).blob();
+      return new File([blob], run.filename || `${run.serverId}.png`, { type: blob.type || "image/png" });
+    }));
+    if (state.batch.length) $("batchClear").click();   // a new batch, not added to an open one
+    stopSelecting();
+    if (files.length === 1) await setImageFile(files[0]); else openFiles(files);
+    setView("create");
+  } catch (e) { showError(e.message); }
+};
+$("selDownload").onclick = async () => {
+  for (const run of selectedRuns().filter((r) => r.resultUrl)) {
+    const a = document.createElement("a");
+    a.href = shownResult(run);
+    a.download = (run.filename || `${run.serverId}.png`).replace(/\.png$/, run.fixedUrl ? "_fixed.png" : ".png");
+    document.body.appendChild(a); a.click(); a.remove();
+    await new Promise((r) => setTimeout(r, 200));
+  }
+};
+// Remove: one button, a small menu with "hide" (files kept) and "delete files" (asks first)
+function closeRemoveMenu() {
+  $("selRemoveMenu").hidden = true;
+  $("selRemove").setAttribute("aria-expanded", "false");
+}
+$("selRemove").onclick = (e) => {
+  e.stopPropagation();
+  const open = $("selRemoveMenu").hidden;
+  $("selRemoveMenu").hidden = !open;
+  $("selRemove").setAttribute("aria-expanded", String(open));
+};
+document.addEventListener("click", (e) => { if (!e.target.closest?.(".sel-remove")) closeRemoveMenu(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRemoveMenu(); });
+async function removeSelected(deleteFiles) {
+  closeRemoveMenu();
+  const runs = selectedRuns();
+  if (!runs.length) return;
+  if (deleteFiles && !confirm(`Delete ${runs.length} run${runs.length > 1 ? "s" : ""} and all their files? This cannot be undone.`)) return;
+  for (const run of runs) {
+    try {
+      if (deleteFiles) await api(`/api/runs/${encodeURIComponent(run.serverId)}`, { method: "DELETE" });
+      else { await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/hide`, {}); state.removed.unshift(run); }
+      state.runs = state.runs.filter((r) => r !== run);
+    } catch (e) { showError(`${run.prompt || run.serverId}: ${e.message}`); }
+  }
+  if (state.cmp.active) exitCompare();
+  state.cmp.keys = [];
+  stopSelecting();
+  showToast(deleteFiles ? `Deleted ${runs.length}.` : `Hidden ${runs.length} (see Removed).`);
+  if (state.run && runs.includes(state.run)) { state.follow = false; showLatest(); }
+}
+$("selHide").onclick = () => removeSelected(false);
+$("selDelete").onclick = () => removeSelected(true);
 // Compare starts sorted: runs of the same model side by side (models in the order they were picked),
 // within a model by parameter count (1.4B < 3B < 7B), then quantisation (Q4 < Q8 < fp16; _S < _M < _L)
 function cmpModelKey(r) {
@@ -2210,13 +2303,20 @@ function sizeLabel(el, run, img) {
   img?.addEventListener("load", () => set(img.naturalWidth, img.naturalHeight));
 }
 
+// the runs the results grid shows for the current filter, in its order
+function shownRuns() {
+  const f = state.resultFilter;
+  return state.runs.filter((r) => f === "all" || (f === "failed" ? r.status === "error" : runTask(r) === f));
+}
+
 function renderHistory() {
   syncResultFilters();
+  syncCompareUi();   // All / None depends on the filter
   const box = $("history");
   box.innerHTML = "";
   const f = state.resultFilter;
   if (f === "removed") { renderRemoved(box); return; }
-  const list = state.runs.filter((r) => f === "all" || (f === "failed" ? r.status === "error" : runTask(r) === f));
+  const list = shownRuns();
   $("resultCount").textContent = `${list.length} result${list.length === 1 ? "" : "s"}`;
   if (!list.length) {
     box.innerHTML = `<div class="hint">${state.runs.length ? "No results for this filter." : "No results yet."}</div>`;
@@ -2248,7 +2348,7 @@ function renderHistory() {
     }
     b.append(pic, meta);
     b.title = run.status === "error" && run.error ? `${run.prompt}\n\nFailed: ${run.error}` : run.prompt;
-    b.onclick = () => selectRun(run);
+    b.onclick = (e) => selectRun(run, e.shiftKey);
     // × removes the run from the history only; its files stay (a sibling: buttons cannot nest)
     const x = document.createElement("button");
     x.className = "rtile-x"; x.textContent = "×";
@@ -2445,12 +2545,20 @@ function route() {
 }
 window.addEventListener("hashchange", route);
 const findRun = (id) => state.jobs.get(id) || state.runs.find((r) => r.serverId === id) || null;
-function selectRun(run) {
-  if (state.cmp.picking) {   // picking for Compare: a tile toggles
+function selectRun(run, shift = false) {
+  if (state.cmp.picking) {   // selecting: a tile toggles; Shift+click selects everything from the last click to here
     if (!cmpPickable(run)) return;
     const k = state.cmp.keys;
-    const i = k.indexOf(run.serverId);
-    if (i >= 0) k.splice(i, 1); else k.push(run.serverId);
+    const list = shownRuns(), from = list.indexOf(state.cmp.anchor), to = list.indexOf(run);
+    if (shift && from >= 0 && to >= 0) {
+      for (const r of list.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+        if (cmpPickable(r) && !k.includes(r.serverId)) k.push(r.serverId);
+      }
+    } else {
+      const i = k.indexOf(run.serverId);
+      if (i >= 0) k.splice(i, 1); else k.push(run.serverId);
+    }
+    state.cmp.anchor = run;
     syncCompareUi();
     renderHistory();
     return;

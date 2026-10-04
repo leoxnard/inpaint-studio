@@ -821,3 +821,21 @@ body.mode-outpaint:not(.task-generate) #display.op-paint { cursor: crosshair; }
 .size-presets { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
 .size-presets button { padding: 4px 10px; font-size: 12px; }
 .size-presets button[aria-pressed="true"] { border-color: var(--text); }
+
+/* Results: Select + icon actions for the selected results */
+.sel-actions { display: inline-flex; align-items: center; gap: 4px; }
+.icon-btn { width: 32px; height: 32px; min-height: 32px; padding: 0; display: inline-grid; place-items: center; border-radius: 8px; }
+.icon-btn svg, .sel-menu svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn:disabled { opacity: .45; }
+.sel-sep { width: 1px; height: 20px; background: var(--hairline); margin: 0 4px; }
+.sel-remove { position: relative; }
+.sel-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 250px; display: flex; flex-direction: column; gap: 2px;
+  padding: 4px; background: var(--canvas, var(--surface)); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .14); }
+.sel-menu[hidden] { display: none; }
+.sel-menu button { display: flex; gap: 10px; align-items: flex-start; text-align: left; border: 0; border-radius: 7px; padding: 8px 10px; min-height: 0; background: transparent; }
+.sel-menu button svg { margin-top: 2px; flex: none; }
+.sel-menu button span { display: flex; flex-direction: column; gap: 2px; }
+.sel-menu button small { color: var(--mute); font-size: 12px; font-weight: 400; }
+.sel-menu button:hover { background: var(--surface); }
+.sel-menu button.danger { color: var(--bad); }
+.sel-menu button.danger:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); color: var(--bad); }

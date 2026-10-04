@@ -78,8 +78,10 @@ Runs have no numbers: a run is labelled with what it is doing ("Running · 1m 23
 
 The ×1 … ×8 menu next to the queue button adds **variations**: the same run several times, each with its
 own seed (random, or seed, seed + 1, …). In Runs the variations of one batch show as a strip under the
-image. **Compare** (next to the result filters) picks two or more results (dashed tiles, click to toggle)
-and shows them side by side (`web/compare.js`): **Detail** (default) is a grid where every tile shows the
+image. **Select** (next to the result filters) picks results (dashed tiles, click to toggle, Shift+click selects a range, **All** / **None** the whole filter); the icons next to it
+work on the picked ones: compare (two or more), post-process (every fix that fits each run plus grain, saved into
+`<run>_fixed.png`), use as input (a new batch in Create), download, and remove (a menu: hide from the results with
+the files kept, or delete the files after a confirmation). **Compare** shows them side by side (`web/compare.js`): **Detail** (default) is a grid where every tile shows the
 same part of its image (scroll/pinch to zoom, drag to pan, all tiles follow); **Split** cuts one frame into fixed strips. Drag a label to change the order. Labels name
 the model plus every setting that differs; results from different source images can be mixed.
 

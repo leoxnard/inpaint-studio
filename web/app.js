@@ -2948,7 +2948,8 @@ async function postRequest(body) {
   $("postInfo").textContent = "Working...";
   try {
     const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, body);
-    if (res.dx != null) setPostValues(res);
+    // only the shift Auto-align found: everything else stays as the user set it (the response carries the run's saved values)
+    if (res.dx != null) setPostValues({ dx: res.dx, dy: res.dy, scale: res.scale });
     if (res.saved) {
       run.aligned = res.aligned || null;
       run.grainUrl = res.grain_url || null;

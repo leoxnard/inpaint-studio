@@ -102,3 +102,24 @@ def test_progress_sums_the_whole_queue(monkeypatch):
     inst.steps = {"a": {"state": "done", "size": 100}, "b": {"state": "running", "size": 200, "done": 50},
                   "c": {"state": "pending", "size": 700}, "d": {"state": "cancelled", "size": 999}}
     assert inst.progress() == {"done": 150, "total": 1000}
+
+
+def test_comfy_boot_steps_from_log(tmp_path, monkeypatch):
+    log = tmp_path / "comfy.log"
+    log.write_text("old run\nStarting server\n")
+    monkeypatch.setattr(installer, "COMFY_LOG", log)
+
+    class Proc:
+        returncode = None
+        def poll(self): return self.returncode
+
+    cp = installer.ComfyProcess()
+    assert cp.boot() is None                      # not started by us
+    cp.proc, cp.log_start, cp.started_at = Proc(), log.stat().st_size, 0.0
+    assert cp.boot()["step"] == 0                 # lines of an earlier run do not count
+    with log.open("a") as f:
+        f.write("Prestartup times for custom nodes:\nDevice: mps\n")
+    b = cp.boot()
+    assert b["steps"][b["step"]] == "Loading ComfyUI" and "exited" not in b
+    cp.proc.returncode = 1
+    assert cp.boot()["exited"] == 1 and cp.boot()["log"][-1] == "Device: mps"

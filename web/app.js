@@ -158,7 +158,7 @@ async function pollStatus() {
       if (appStarted && !$("sampler").options.length) loadModels();
     } else {
       pill.className = "pill offline";
-      $("statusText").textContent = "ComfyUI offline";
+      $("statusText").textContent = s.boot && s.boot.exited == null ? "ComfyUI starting" : "ComfyUI offline";
     }
   } catch {
     pill.className = "pill offline";
@@ -3459,8 +3459,59 @@ $("upscale").addEventListener("change", syncUpscaler);
   try { info = await api("/api/setup"); } catch { /* old server without setup: just start the app */ }
   if (info) { state.setup = info; applyMaskMode(info.mask_available); renderUpscalers(); renderLoras(); }
   if (info && !info.ready) showSetup();
-  else showApp();
+  else { await waitForComfy(); showApp(); }
 })();
+
+// Loading screen while the ComfyUI this server started is still booting (phases read from its log by the server).
+// Returns at once when ComfyUI is up or was not started by us (then the app shows "ComfyUI offline" as before).
+async function waitForComfy() {
+  const view = $("bootView");
+  const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  for (;;) {
+    let s;
+    try { s = await api("/api/status"); } catch { s = null; }
+    if (!s || s.comfy || !s.boot) break;
+    const b = s.boot;
+    const n = b.steps.length;
+    if (b.exited != null) {
+      view.innerHTML = `<div class="boot-card">
+        <h2>ComfyUI stopped</h2>
+        <p class="lead">It exited with code ${b.exited} before it was ready. Last lines of ~/Library/Logs/InpaintStudio-ComfyUI.log:</p>
+        <pre class="boot-log">${esc(b.log.join("\n"))}</pre>
+        <div class="setup-actions"><button class="primary" id="bootContinue">Open anyway</button></div></div>`;
+      view.hidden = false;
+      await new Promise((r) => { $("bootContinue").onclick = r; });
+      break;
+    }
+    // each phase owns an equal slice of the bar; inside it the bar creeps towards the next slice
+    const inStep = 1 - Math.exp(-(b.elapsed - (view._stepAt?.[b.step] ?? b.elapsed)) / 4);
+    view._stepAt = { ...view._stepAt, [b.step]: view._stepAt?.[b.step] ?? b.elapsed };
+    const pct = (100 * (b.step + 0.9 * inStep)) / n;
+    if (view.hidden) {
+      view.innerHTML = `<div class="boot-card">
+        <h2>Starting ComfyUI</h2>
+        <p class="lead"><span id="bootStep"></span><span class="boot-time" id="bootTime"></span></p>
+        <div class="pbar boot-bar"><i id="bootBar"></i></div>
+        <ul class="boot-steps" id="bootSteps"></ul></div>`;
+      view.hidden = false;
+    }
+    $("bootStep").textContent = `${b.steps[b.step]}…`;
+    $("bootTime").textContent = `${Math.round(b.elapsed)} s`;
+    $("bootBar").style.width = `${pct.toFixed(1)}%`;
+    $("bootSteps").innerHTML = b.steps.map((label, i) => {
+      const icon = i < b.step ? '<i class="icon-check static">✓</i>' : i === b.step ? '<i class="icon-spin"></i>' : '<i class="icon-wait"></i>';
+      return `<li class="${i < b.step ? "done" : i === b.step ? "now" : ""}"><span class="ic">${icon}</span>${esc(label)}</li>`;
+    }).join("");
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  if (!view.hidden) {
+    const bar = $("bootBar");
+    if (bar) { bar.style.width = "100%"; await new Promise((r) => setTimeout(r, 350)); }
+    view.hidden = true;
+    view.innerHTML = "";
+    pollStatus();   // refresh the pill right away
+  }
+}
 
 // ------------------------------------------------------------------ model picker, edit | generate
 let promptPresets = null;

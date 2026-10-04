@@ -459,12 +459,26 @@ def find_uv() -> str:
 
 # ---------------------------------------------------------------- run ComfyUI
 
+COMFY_LOG = Path.home() / "Library/Logs/InpaintStudio-ComfyUI.log"
+# startup phases of a headless ComfyUI: (log line that ends the phase before, label of the phase that follows)
+BOOT_STEPS = [
+    ("", "Starting Python"),
+    ("Prestartup times for custom nodes", "Loading PyTorch"),
+    ("Device:", "Loading ComfyUI"),
+    ("[Prompt Server] web root", "Loading custom nodes"),
+    ("Import times for custom nodes", "Opening database"),
+    ("Starting server", "Starting server"),
+]
+
+
 class ComfyProcess:
     """ComfyUI started by this server (headless). A ComfyUI that is already running, e.g.
     Comfy Desktop, is used as is and never stopped."""
 
     def __init__(self) -> None:
         self.proc: subprocess.Popen | None = None
+        self.log_start = 0          # log size when this process was started: only newer lines count for boot()
+        self.started_at = 0.0
 
     @property
     def managed(self) -> bool:
@@ -480,13 +494,33 @@ class ComfyProcess:
         paths.write_text("\n".join(lines) + "\n")
         for d in (cfg["input_dir"], cfg["output_dir"]):
             Path(d).mkdir(parents=True, exist_ok=True)
-        log = open(Path.home() / "Library/Logs/InpaintStudio-ComfyUI.log", "ab")
+        log = open(COMFY_LOG, "ab")
+        self.log_start = log.tell()
+        self.started_at = time.time()
         self.proc = subprocess.Popen(
             [str(venv_python(cfg)), "-s", "main.py", "--port", str(COMFY_PORT), "--extra-model-paths-config", str(paths),
              "--input-directory", cfg["input_dir"], "--output-directory", cfg["output_dir"]],
             cwd=cfg["comfy_dir"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         log.close()
+
+    def boot(self) -> dict | None:
+        """Startup progress read from the log: None unless this server started ComfyUI. `step` indexes BOOT_STEPS;
+        `exited` with the last log lines when the process died before it answered."""
+        if self.proc is None:
+            return None
+        try:
+            with open(COMFY_LOG, "rb") as f:
+                f.seek(self.log_start)
+                text = f.read().decode("utf-8", "replace")
+        except OSError:
+            text = ""
+        step = max(i for i, (marker, _) in enumerate(BOOT_STEPS) if marker in text)
+        out = {"step": step, "steps": [label for _, label in BOOT_STEPS], "elapsed": round(time.time() - self.started_at, 1)}
+        if self.proc.poll() is not None:
+            out["exited"] = self.proc.returncode
+            out["log"] = text.strip().splitlines()[-8:]
+        return out
 
     def stop(self) -> None:
         if not self.managed:

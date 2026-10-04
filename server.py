@@ -175,7 +175,8 @@ async def status():
     try:
         q = await comfy_json("GET", "/queue")
     except HTTPException as e:
-        return {"comfy": False, "error": e.detail, "download": download}
+        # boot: startup progress while the ComfyUI this server started is not answering yet (the loading screen)
+        return {"comfy": False, "error": e.detail, "download": download, "boot": COMFY_PROC.boot()}
     return {"comfy": True, "running": len(q["queue_running"]), "pending": len(q["queue_pending"]), "download": download}
 
 

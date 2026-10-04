@@ -364,6 +364,21 @@ body.no-sam .needs-sam { display: none !important; }
 button.small { padding: 0 14px; min-height: 32px; font-size: 13px; }
 
 /* setup page */
+.boot { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+.boot[hidden] { display: none; }
+.boot-card { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 14px; }
+.boot-card h2 { font: 600 24px/1.2 var(--font-head); margin: 0; }
+.boot-card .lead { color: var(--muted); margin: 0; display: flex; gap: 10px; }
+.boot-time { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--mute); }
+.boot-bar { height: 6px; }
+.boot-steps { list-style: none; margin: 0; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--panel); }
+.boot-steps li { display: flex; align-items: center; gap: 10px; color: var(--mute); }
+.boot-steps li.done { color: var(--charcoal); }
+.boot-steps li.now { color: var(--ink); font-weight: 600; }
+.boot-steps .ic { width: 20px; display: flex; justify-content: center; }
+.boot-log { margin: 0; padding: 10px 12px; max-height: 220px; overflow: auto; font-size: 11px; white-space: pre-wrap;
+  border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
 .setup { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 16px 48px; }
 .setup-inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
 .setup h2 { font: 600 24px/1.2 var(--font-head); margin: 0; }

@@ -125,7 +125,8 @@ SeedVR2 comes as 1.4B sharp (community distillation, needs a small pinned ComfyU
 7B sharp in int8 / fp16; its memory estimate assumes a 4 MP result.
 
 The **Upscale** tab upscales images on their own (one image or a whole folder, like in Edit). The size is a
-factor (1–4×), a target width in px (each image of a folder gets that width) or a rough file size in MB
+factor (1–4×), a target long side in px (the width of a landscape image, the height of a portrait one; presets from
+Full HD 1920 to 8K 7680; each image of a folder gets it) or a rough file size in MB
 (estimated from how well the original compresses as PNG, `prepare.size_for_megabytes`; usually within ±25 %). Upscalers come out clean and
 lose the camera's grain, so by default the original's grain is added back at its original size
 (`prepare.add_grain`, saved as `<run>_fixed.png`; the clean upscale stays as `<run>.png`, "Clean" in Runs).

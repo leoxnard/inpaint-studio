@@ -49,7 +49,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscale_width", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
+                  "upscale", "upscale_width", "upscale_long_side", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
                   "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg")
 
 @asynccontextmanager
@@ -710,7 +710,7 @@ class UpscaleReq(BaseModel):
     image: str                    # ComfyUI input name (as returned by /api/upload)
     upscaler: str                 # component key of an installed upscaler
     factor: float = 2
-    width: int | None = None      # target width in px instead of the factor (height follows the aspect ratio)
+    long_side: int | None = None  # target length of the longer side in px instead of the factor (the other follows)
     megabytes: float | None = None  # or a rough target file size (prepare.size_for_megabytes)
     color_correction: str = "lab"  # SeedVR2 only
     grain: bool = True            # give the result the original's grain back (prepare.add_grain)
@@ -753,12 +753,14 @@ async def upscale(req: UpscaleReq):
         raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Download Center)")
     src = await _fetch_view(input_mask_url(req.image))
     w, h = src.size
-    size = (req.width, max(1, round(h * req.width / w))) if req.width else None
-    if req.megabytes and not req.width:
+    size = None
+    if req.long_side:   # the longer of width / height gets it
+        size = (req.long_side, max(1, round(h * req.long_side / w))) if w >= h else (max(1, round(w * req.long_side / h)), req.long_side)
+    if req.megabytes and not req.long_side:
         size = await megabytes_size(req.image, src, req.megabytes)
     factor = size[0] / w if size else req.factor
     if not 1 <= round(factor, 3) <= 4:
-        raise HTTPException(400, f"{w} px to {size[0]} px would be ×{factor:.2f}; the factor must be between 1 and 4"
+        raise HTTPException(400, f"{w} × {h} px to {size[0]} × {size[1]} px would be ×{factor:.2f}; the factor must be between 1 and 4"
                             if size else "factor must be between 1 and 4")
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     files = {"model": presets.file_name(comp)}
@@ -767,10 +769,10 @@ async def upscale(req: UpscaleReq):
     seed = int.from_bytes(os.urandom(4), "big")
     graph = graphs.build_upscale_graph(req.image, comp, files, factor, f"InpaintStudio/{run_id}",
                                        req.color_correction, seed, size)
-    what = (f"to {req.width} px wide" if req.width else f"to about {req.megabytes:g} MB ({size[0]} px wide)"
+    what = (f"to {req.long_side} px on the long side" if req.long_side else f"to about {req.megabytes:g} MB ({size[0]} px wide)"
             if req.megabytes else f"×{factor:g}")
     params = {"task": "upscale", "prompt": f"Upscale {what} with {comp['title']}", "upscale": round(factor, 3),
-              "upscale_width": req.width, "upscale_mb": None if req.width else req.megabytes, "grain": req.grain, "grain_strength": req.grain_strength, "image": req.image,
+              "upscale_long_side": req.long_side, "upscale_mb": None if req.long_side else req.megabytes, "grain": req.grain, "grain_strength": req.grain_strength, "image": req.image,
               "upscaler": req.upscaler, "color_correction": req.color_correction if comp.get("engine") == "seedvr2" else None,
               "seed": seed, "steps": 1, "save_every": 0, "save_last": 0, "refs": [], "use_mask": False, "mask": None}
     size = {"work_w": size[0], "work_h": size[1]} if size else {"work_w": round(w * factor), "work_h": round(h * factor)}

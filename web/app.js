@@ -12,7 +12,7 @@ const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postAlign", "postColors", "postWarp", "postPoisson", "postGrain", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg",
-  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "colorCorrection", "cropStitch", "cropContext",
+  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleLong", "upscaleMB", "upscaleGrain", "colorCorrection", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 // Post-processing options start at the HTML default (on) and keep a stored value only once the user clicked them
@@ -1242,10 +1242,14 @@ async function uploadMaskBlob(blob) {
 }
 
 // Upscale task: the image is upscaled as its own run (no prompt, no mask)
-const upscaleByWidth = () => $("upscaleBy").value === "width";
+const upscaleByLong = () => $("upscaleBy").value === "long";
+// result size for a target long side: the longer of width / height gets it, the other follows the aspect ratio
+function longSideSize(w, h, long) {
+  return w >= h ? [long, Math.max(1, Math.round(h * long / w))] : [Math.max(1, Math.round(w * long / h)), long];
+}
 function upscaleParams(image) {
   const by = $("upscaleBy").value;
-  const size = by === "width" ? { width: parseInt($("upscaleWidth").value, 10) || 0 }
+  const size = by === "long" ? { long_side: parseInt($("upscaleLong").value, 10) || 0 }
     : by === "mb" ? { megabytes: parseFloat($("upscaleMB").value) || 0 } : { factor: parseFloat($("upscaleFactor").value) || 2 };
   return { image, upscaler: $("upscaleModel").value, color_correction: $("colorCorrection").value, grain: $("upscaleGrain").checked, ...size };
 }
@@ -2347,8 +2351,9 @@ function loadRunSettings(run) {
   if (task !== state.task) setTask(task);
   if (task === "upscale") {
     if (installedUpscalers().some((u) => u.key === p.upscaler)) $("upscaleModel").value = p.upscaler;
-    $("upscaleBy").value = p.upscale_width ? "width" : p.upscale_mb ? "mb" : "factor";
-    if (p.upscale_width) $("upscaleWidth").value = p.upscale_width;
+    $("upscaleBy").value = p.upscale_long_side ? "long" : p.upscale_mb ? "mb" : "factor";
+    if (p.upscale_long_side) $("upscaleLong").value = p.upscale_long_side;
+    else if (p.upscale_width) { $("upscaleBy").value = "factor"; $("upscaleFactor").value = p.upscale; }   // older runs: by width
     else if (p.upscale_mb) $("upscaleMB").value = p.upscale_mb;
     else if (p.upscale != null) $("upscaleFactor").value = p.upscale;
     if (p.grain != null) $("upscaleGrain").checked = !!p.grain;
@@ -3669,11 +3674,12 @@ function updateUpscaleSizes() {
   if (!upscaling()) return;
   const [w, h] = state.srcW ? [state.srcW, state.srcH] : [1024, 1024];
   if ($("upscaleBy").value === "mb") { updateUpscaleMB(w, h); return; }
-  if (upscaleByWidth()) {
-    const W = parseInt($("upscaleWidth").value, 10) || w, H = Math.round(h * W / w), f = W / w;
+  if (upscaleByLong()) {
+    const L = parseInt($("upscaleLong").value, 10) || Math.max(w, h), [W, H] = longSideSize(w, h, L), f = W / w;
     const ok = f >= 1 && f <= 4.0005;
+    for (const b of $("upscaleLongPresets").children) b.setAttribute("aria-pressed", String(+b.dataset.px === L));
     $("upscaleSizes").innerHTML = `${state.srcW ? "Now" : "Example"}: ${w} × ${h} px<br><b>→ ${W} × ${H} px (${(W * H / 1e6).toFixed(1)} MP, ×${f.toFixed(2)})</b>`
-      + (ok ? "" : `<br>Out of range: the factor must be 1–4 (${Math.ceil(w)}–${4 * w} px wide).`);
+      + (ok ? "" : `<br>Out of range: the factor must be 1–4 (${Math.max(w, h)}–${4 * Math.max(w, h)} px on the long side).`);
     updateUpscaleWarn(w, h, f);
     return;
   }
@@ -3724,11 +3730,19 @@ function updateUpscaleWarn(w, h, f) {
   warn.hidden = false;
 }
 $("upscaleFactor").addEventListener("input", updateUpscaleSizes);
-$("upscaleWidth").addEventListener("input", updateUpscaleSizes);
+$("upscaleLong").addEventListener("input", updateUpscaleSizes);
+$("upscaleLongPresets").addEventListener("click", (e) => {
+  const px = e.target.closest("button")?.dataset.px;
+  if (!px) return;
+  $("upscaleLong").value = px;
+  updateUpscaleSizes();
+  saveForm();
+});
 $("upscaleMB").addEventListener("input", updateUpscaleSizes);
 // "Factor / Width" is a view of the hidden #upscaleBy select
 function syncUpscaleBy() {
-  for (const by of ["factor", "width", "mb"]) document.body.classList.toggle(`up-by-${by}`, $("upscaleBy").value === by);
+  if (!$("upscaleBy").value) $("upscaleBy").value = "long";   // a stored "width" (older version) is now the long side
+  for (const by of ["factor", "long", "mb"]) document.body.classList.toggle(`up-by-${by}`, $("upscaleBy").value === by);
   for (const b of $("upscaleBySeg").children) b.setAttribute("aria-pressed", String(b.dataset.by === $("upscaleBy").value));
   updateUpscaleSizes();
 }

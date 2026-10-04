@@ -211,17 +211,22 @@
         <h2 class="h">Upscale</h2>
         <div class="seg" id="upscaleBySeg" role="group" aria-label="Target size by">
           <button data-by="factor" aria-pressed="true">Factor</button>
-          <button data-by="width" aria-pressed="false">Width</button>
+          <button data-by="long" aria-pressed="false">Long side</button>
           <button data-by="mb" aria-pressed="false">File size</button>
         </div>
-        <select id="upscaleBy" hidden><option value="factor" selected>factor</option><option value="width">width</option><option value="mb">mb</option></select>
+        <select id="upscaleBy" hidden><option value="factor" selected>factor</option><option value="long">long side</option><option value="mb">mb</option></select>
         <div class="grid2">
           <label class="by-factor" title="How much larger the result is (1–4). Upscalers with a fixed scale are resized to it.">Factor
             <input type="number" id="upscaleFactor" min="1" max="4" step="0.5" value="2">
           </label>
-          <label class="by-width" title="Width of the result in px; the height follows the aspect ratio. Every image of a folder gets this width (1–4× its own size).">Width (px)
-            <input type="number" id="upscaleWidth" min="64" max="16384" step="1" value="3840">
+          <label class="by-long" title="Length of the longer side of the result in px (the width for landscape, the height for portrait); the other side follows the aspect ratio. Every image of a folder gets it (1–4× its own size).">Long side (px)
+            <input type="number" id="upscaleLong" min="64" max="16384" step="1" value="3840">
           </label>
+          <div class="by-long size-presets" id="upscaleLongPresets" role="group" aria-label="Long side presets">
+            <button data-px="1920" title="Full HD">1920</button><button data-px="2560" title="QHD / 2K">2560</button>
+            <button data-px="3840" title="4K UHD">3840</button><button data-px="5120" title="5K">5120</button>
+            <button data-px="6144" title="6K">6144</button><button data-px="7680" title="8K">7680</button>
+          </div>
           <label class="by-mb" title="Rough size of the result PNG in MB. Estimated from how well the original compresses; the real file is usually within ±25 %. Every image of a folder is sized for it.">Size (MB, approx.)
             <input type="number" id="upscaleMB" min="0.1" max="500" step="0.5" value="20">
           </label>

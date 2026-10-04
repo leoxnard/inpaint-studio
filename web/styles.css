@@ -726,7 +726,7 @@ button.busy::before {
 
 /* Upscale task: everything but the image, model and upscale options hides */
 body:not(.mode-upscale) .upscale-only, body:not(.up-seedvr2) .seedvr2-only { display: none !important; }
-body:not(.up-by-factor) .by-factor, body:not(.up-by-width) .by-width, body:not(.up-by-mb) .by-mb { display: none !important; }
+body:not(.up-by-factor) .by-factor, body:not(.up-by-long) .by-long, body:not(.up-by-mb) .by-mb { display: none !important; }
 #upscaleBySeg { align-self: flex-start; }
 /* Upscale task with several images: no Batch… menu, its two plain buttons sit in the row */
 body.mode-upscale #variants { display: none !important; }   /* an upscale has no seeds to vary */
@@ -816,3 +816,8 @@ body.mode-outpaint:not(.task-generate) #display.op-paint { cursor: crosshair; }
 .range-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; }
 .range-row input { grid-column: 1 / -1; width: 100%; }
 #postPanel .range-row { min-width: 180px; }
+
+/* Upscale: preset values for the long side */
+.size-presets { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.size-presets button { padding: 4px 10px; font-size: 12px; }
+.size-presets button[aria-pressed="true"] { border-color: var(--text); }

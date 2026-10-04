@@ -56,29 +56,112 @@ def crop(img: Image.Image, box: dict[str, int]) -> Image.Image:
     return img.crop((box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"]))
 
 
+FREQ_BANDS = ((0.0, 0.7), (0.7, 1.5), (1.5, 3.0))   # grain is measured and rebuilt per spatial frequency band (DoG sigmas)
+LUMA_EDGES = np.array([0, 40, 80, 120, 160, 200, 256], np.float32)   # ... and per brightness band
+LUMA_CENTERS = (LUMA_EDGES[:-1] + LUMA_EDGES[1:]) / 2
+
+
+def _band(img: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """Difference of Gaussians: the detail between sigma lo and hi (lo 0 = from single pixels up)."""
+    return (cv2.GaussianBlur(img, (0, 0), lo) if lo else img) - cv2.GaussianBlur(img, (0, 0), hi)
+
+
+def _robust_std(x: np.ndarray) -> np.ndarray:
+    """Std per channel from the median absolute deviation: the few edges left in flat areas do not count."""
+    if len(x) > 200_000:
+        x = x[np.random.default_rng(0).choice(len(x), 200_000, replace=False)]
+    return 1.4826 * np.median(np.abs(x - np.median(x, axis=0)), axis=0)
+
+
+def _luma(img: np.ndarray) -> np.ndarray:
+    return cv2.GaussianBlur(img.mean(axis=-1).astype(np.float32), (0, 0), 2)
+
+
+def flat_pixels(img: np.ndarray, where: np.ndarray) -> np.ndarray:
+    """Pixels where fine detail is grain and not picture: the quarter of `where` with the weakest local structure
+    (gradient of the smoothed image, which the grain itself barely moves), without clipped highlights or shadows."""
+    lum = _luma(img)
+    grad = np.hypot(cv2.Sobel(lum, cv2.CV_32F, 1, 0), cv2.Sobel(lum, cv2.CV_32F, 0, 1))
+    ok = where & (lum > 6) & (lum < 249)
+    if ok.sum() < 400:
+        return where
+    return ok & (grad <= np.percentile(grad[ok], 25))
+
+
+def grain_profile(img: np.ndarray, where: np.ndarray) -> np.ndarray:
+    """Grain strength [frequency band, brightness band, channel], measured on the flat pixels of `where`.
+    Per frequency band, because grain and the fine patterns a VAE or upscaler leaves behind sit at different
+    scales (a total would let one stand in for the other); per brightness band, because film grain is strongest
+    in the midtones and sensor noise in the shadows. Bands with too few pixels get the overall value."""
+    out = np.zeros((len(FREQ_BANDS), len(LUMA_CENTERS), img.shape[-1]), np.float32)
+    flat = flat_pixels(img, where)
+    if not flat.any():
+        return out
+    lum = _luma(img)[flat]
+    sel = [(lum >= LUMA_EDGES[i]) & (lum < LUMA_EDGES[i + 1]) for i in range(len(LUMA_CENTERS))]
+    for f, (lo, hi) in enumerate(FREQ_BANDS):
+        d = _band(img, lo, hi)[flat]
+        out[f] = _robust_std(d)
+        for i, m in enumerate(sel):
+            if m.sum() >= 300:
+                out[f, i] = _robust_std(d[m])
+    return out
+
+
 def grain_std(img: np.ndarray, where: np.ndarray) -> np.ndarray:
-    """Strength of the fine noise (film grain, sensor noise) per channel: std of the high-pass where True."""
-    hp = img - cv2.GaussianBlur(img, (0, 0), 1.5)
-    return hp[where].std(axis=0) if where.any() else np.zeros(img.shape[-1], np.float32)
+    """Overall grain strength per channel (all frequency bands, all brightness)."""
+    flat = flat_pixels(img, where)
+    if not flat.any():
+        return np.zeros(img.shape[-1], np.float32)
+    return np.sqrt(sum(_robust_std(_band(img, lo, hi)[flat]) ** 2 for lo, hi in FREQ_BANDS))
 
 
-def grain_noise(o: np.ndarray, where: np.ndarray, shape: tuple, seed: int = 0) -> np.ndarray:
-    """Unit-strength noise shaped like the grain of `o` (measured where True). Film / sensor grain is mostly
-    the same in all channels: shared and per-channel noise are mixed like in the original."""
-    hp = (o - cv2.GaussianBlur(o, (0, 0), 1.5))[where]
-    c = np.corrcoef(hp.T) if len(hp) > 10 else np.eye(3)
+def grain_need(o: np.ndarray, src: np.ndarray, r: np.ndarray, new: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """Grain to add [frequency band, brightness band, channel]: what the original has (in src) minus what the result
+    still has (in new), per band, times strength."""
+    po, pr = grain_profile(o, src), grain_profile(r, new)
+    return strength * np.sqrt(np.maximum(po ** 2 - pr ** 2, 0))
+
+
+def need_map(need: np.ndarray, r: np.ndarray) -> np.ndarray:
+    """Per-pixel strength for one frequency band: the brightness band values interpolated at each pixel."""
+    lum = _luma(r)
+    return np.stack([np.interp(lum, LUMA_CENTERS, need[:, c]).astype(np.float32) for c in range(need.shape[1])], -1)
+
+
+def grain_layer(o: np.ndarray, src: np.ndarray, need: np.ndarray, r: np.ndarray, seed: int = 0) -> np.ndarray:
+    """Noise to add to r: white noise with the original's channel mix (film / sensor grain is mostly the same in
+    all channels), split into the frequency bands, each scaled to what is missing there at each pixel's brightness.
+    Built at the original's size (same grain at the same print size) and resized to r."""
+    flat = flat_pixels(o, src)
+    d = _band(o, *FREQ_BANDS[1])[flat]
+    if len(d) > 200_000:
+        d = d[np.random.default_rng(0).choice(len(d), 200_000, replace=False)]
+    c = np.corrcoef(d.T) if len(d) > 10 else np.eye(3)
     corr = float(np.clip(np.nan_to_num((c[0, 1] + c[0, 2] + c[1, 2]) / 3), 0, 1))
     rng = np.random.default_rng(seed)
-    noise = (np.sqrt(corr) * rng.standard_normal(shape[:2] + (1,), np.float32)
-             + np.sqrt(1 - corr) * rng.standard_normal(shape, np.float32))
-    noise = cv2.GaussianBlur(noise, (0, 0), 0.6)   # grain is a little coarser than single pixels
-    return noise / grain_std(noise, np.ones(noise.shape[:2], bool)).clip(1e-6)
+    white = (np.sqrt(corr) * rng.standard_normal(o.shape[:2] + (1,), np.float32)
+             + np.sqrt(1 - corr) * rng.standard_normal(o.shape, np.float32))
+    out = np.zeros(r.shape, np.float32)
+    for f, (lo, hi) in enumerate(FREQ_BANDS):
+        if need[f].max() <= 0.05:
+            continue
+        nb = _band(white, lo, hi)
+        nb /= _robust_std(nb.reshape(-1, nb.shape[-1])).clip(1e-6)
+        if nb.shape != r.shape:   # resizing loses some of the finest band: unit strength again, seen at o's size
+            nb = cv2.resize(nb, (r.shape[1], r.shape[0]), interpolation=cv2.INTER_CUBIC)
+            seen = cv2.resize(nb, (o.shape[1], o.shape[0]), interpolation=cv2.INTER_AREA)
+            nb /= _robust_std(seen.reshape(-1, nb.shape[-1])).clip(1e-6)
+        out += nb * need_map(need[f], r)
+    return out
 
 
-def add_grain(original: Image.Image, result: Image.Image, seed: int = 0, mask: Image.Image | None = None) -> Image.Image:
+def add_grain(original: Image.Image, result: Image.Image, seed: int = 0, mask: Image.Image | None = None,
+              strength: float = 1.0) -> Image.Image:
     """Upscalers and edit models come out clean: give `result` (same picture as `original`, any size) back the
     original's grain, at the original's grain size (so it looks the same at the same print size). The strength is
-    what the original has minus what the result still has, both measured at the original's size.
+    what the original has minus what the result still has, per frequency and brightness band (grain_profile), both
+    measured at the original's size on flat areas only (edges and texture are not grain), times strength.
     mask (masked edits): only the masked area is new, so the grain is measured outside it in the original, inside
     it in the result, and added only there (feathered by the mask)."""
     o = np.asarray(original.convert("RGB"), np.float32)
@@ -91,14 +174,13 @@ def add_grain(original: Image.Image, result: Image.Image, seed: int = 0, mask: I
         if hard.any() and not hard.all():
             src, new = ~hard, hard
     small = cv2.resize(r, (w, h), interpolation=cv2.INTER_AREA)
-    need = np.sqrt(np.maximum(grain_std(o, src) ** 2 - grain_std(small, new) ** 2, 0))
-    if need.max() <= 0.5:
+    need = grain_need(o, src, small, new, strength)
+    if need.max() <= 0.5:   # below that it is 8-bit banding, not grain
         return result.convert("RGB")
-    noise = cv2.resize(grain_noise(o, src, o.shape, seed), (r.shape[1], r.shape[0]), interpolation=cv2.INTER_CUBIC)
-    noise /= grain_std(cv2.resize(noise, (w, h), interpolation=cv2.INTER_AREA), everywhere).clip(1e-6)
+    noise = grain_layer(o, src, need, r, seed)
     if mask is not None:
         noise *= (np.asarray(mask.convert("L").resize((r.shape[1], r.shape[0]), Image.BILINEAR), np.float32) / 255)[..., None]
-    r += noise * need
+    r += noise
     return Image.fromarray(np.clip(r, 0, 255).astype(np.uint8))
 
 
@@ -120,7 +202,7 @@ def size_for_megabytes(w: int, h: int, bpp: float, mb: float) -> tuple[int, int]
 
 
 def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: dict[str, int],
-           feather: float = 0, grain: bool = False, seed: int = 0) -> Image.Image:
+           feather: float = 0, grain: bool = False, seed: int = 0, grain_strength: float = 1.0) -> Image.Image:
     """Paste the edited crop back into the original. mask is the full-size mask (source pixels);
     feather is a blur radius in source pixels. Pixels outside the (feathered) mask stay untouched.
     grain: the edit comes out clean, so add the original's grain (measured outside the mask in the crop)
@@ -135,9 +217,10 @@ def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: d
         o = np.asarray(crop(original, box), np.float32)
         r = np.asarray(region, np.float32)
         hard = np.asarray(crop(mask, box)) > 127
-        need = np.sqrt(np.maximum(grain_std(o, ~hard) ** 2 - grain_std(r, hard) ** 2, 0))
+        need = grain_need(o, ~hard, r, hard, grain_strength)
         if need.max() > 0.5:
-            region = Image.fromarray(np.clip(r + grain_noise(o, ~hard, r.shape, seed) * need, 0, 255).astype(np.uint8))
+            noise = grain_layer(o, ~hard, need, r, seed)
+            region = Image.fromarray(np.clip(r + noise, 0, 255).astype(np.uint8))
     out = original.copy()
     out.paste(region, (box["x"], box["y"]), m)
     return out

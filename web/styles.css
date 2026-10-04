@@ -794,3 +794,8 @@ body.mode-outpaint:not(.task-generate) #display.op-paint { cursor: crosshair; }
 
 /* Post-processing: options that do not apply to the mode or run are hidden */
 #postFixRow [hidden], #postPanel [hidden] { display: none !important; }
+
+/* a labelled slider with its value on the right */
+.range-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; }
+.range-row input { grid-column: 1 / -1; width: 100%; }
+#postPanel .range-row { min-width: 180px; }

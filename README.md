@@ -129,6 +129,10 @@ factor (1–4×), a target width in px (each image of a folder gets that width) 
 (estimated from how well the original compresses as PNG, `prepare.size_for_megabytes`; usually within ±25 %). Upscalers come out clean and
 lose the camera's grain, so by default the original's grain is added back at its original size
 (`prepare.add_grain`, saved as `<run>_grain.png`; the clean upscale stays as `<run>.png`, "Clean" in Runs).
+The grain is measured only on flat areas (edges and texture are not grain), separately for three frequency
+bands and six brightness bands, and only what the result lacks per band is added: a VAE's fine pixel pattern
+does not count as grain, and grain that is strongest in the midtones stays that way. **Grain strength**
+(0–200 %, in Create, Upscale and Runs → Post-processing) scales it.
 Any finished edit or upscale can also get the grain afterwards: Post-processing → Film grain in Runs
 (`POST /api/runs/{id}/post`, measured on the run's original; untick it to go back). Compare sorts the picked results by model, then
 parameter count and quantisation.

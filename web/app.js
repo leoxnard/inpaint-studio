@@ -12,7 +12,7 @@ const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postAlign", "postColors", "postWarp", "postPoisson", "postGrain", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole",
-  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "colorCorrection", "cropStitch", "cropContext",
+  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "upscaleGrainStrength", "grainStrength", "colorCorrection", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -26,7 +26,17 @@ function loadForm() {
       else el.value = saved[id];
     }
   } catch { /* storage unavailable or corrupt */ }
+  syncRangeOutputs();
 }
+
+// sliders in a .range-row show their value (%) in the row's <output>
+function syncRangeOutputs() {
+  for (const row of document.querySelectorAll(".range-row")) {
+    const input = row.querySelector("input[type=range]"), out = row.querySelector("output");
+    if (input && out) out.textContent = `${input.value} %`;
+  }
+}
+document.addEventListener("input", (e) => { if (e.target.closest?.(".range-row")) syncRangeOutputs(); });
 function saveForm() {
   try {
     const out = {};
@@ -1202,7 +1212,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     crop_grain: cropOn() ? $("postGrain").checked : undefined,
     crop_stitch: cropOn() || undefined, crop_context: cropOn() ? num("cropContext") / 100 : undefined, match_ref: $("matchRef").checked,
     post_align: $("postAlign").checked, post_colors: $("postColors").checked, post_warp: $("postWarp").checked,
-    post_poisson: $("postPoisson").checked, post_grain: $("postGrain").checked,
+    post_poisson: $("postPoisson").checked, post_grain: $("postGrain").checked, grain_strength: num("grainStrength") / 100,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
     refs: state.refs.slice(0, maxRefs()).map((r) => r.name),
@@ -1227,7 +1237,8 @@ function upscaleParams(image) {
   const by = $("upscaleBy").value;
   const size = by === "width" ? { width: parseInt($("upscaleWidth").value, 10) || 0 }
     : by === "mb" ? { megabytes: parseFloat($("upscaleMB").value) || 0 } : { factor: parseFloat($("upscaleFactor").value) || 2 };
-  return { image, upscaler: $("upscaleModel").value, color_correction: $("colorCorrection").value, grain: $("upscaleGrain").checked, ...size };
+  return { image, upscaler: $("upscaleModel").value, color_correction: $("colorCorrection").value, grain: $("upscaleGrain").checked,
+    grain_strength: num("upscaleGrainStrength") / 100, ...size };
 }
 async function runUpscale() {
   setSubmitting(true);
@@ -2067,7 +2078,7 @@ function runFromStored(r) {
     frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
-    aligned: r.aligned || null, grainUrl: r.grain_url || null, task: r.params?.task || "edit", preset: r.params?.preset || null,
+    aligned: r.aligned || null, grainUrl: r.grain_url || null, grainStrength: r.grain_strength ?? r.params?.grain_strength ?? 1, task: r.params?.task || "edit", preset: r.params?.preset || null,
     value: r.params?.steps, max: r.params?.steps, created: r.created, finished: r.finished || null,
     started: r.started || null, took: r.took || null,
     status: r.status || "done", error: r.error || null, params: r.params || null, size: r.size || null,
@@ -2330,6 +2341,8 @@ function loadRunSettings(run) {
     else if (p.upscale_mb) $("upscaleMB").value = p.upscale_mb;
     else if (p.upscale != null) $("upscaleFactor").value = p.upscale;
     if (p.grain != null) $("upscaleGrain").checked = !!p.grain;
+    if (p.grain_strength != null) $("upscaleGrainStrength").value = Math.round(p.grain_strength * 100);
+    syncRangeOutputs();
     syncUpscaleBy();
     if (p.color_correction) $("colorCorrection").value = p.color_correction;
     renderModelPicker();
@@ -2357,6 +2370,8 @@ function loadRunSettings(run) {
     postPoisson: p.post_poisson, postGrain: p.post_grain ?? p.crop_grain,
     cleanOverlays: p.clean_overlays, keepWhole: p.keep_whole };
   for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
+  if (p.grain_strength != null) $("grainStrength").value = Math.round(p.grain_strength * 100);
+  syncRangeOutputs();
   $("randomSeed").checked = false;   // reproduce the run
   $("refNote").value = p.ref_note ?? defaultRefNote();
   state.refs = (p.refs || []).map((name, i) => ({ name, label: name.split("/").pop().replace(/^[0-9a-f]{8}_/, ""),
@@ -2888,7 +2903,7 @@ let postTimer = 0;
 function postValues() {
   return { dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100,
            colors: $("fixColors").checked, warp: $("fixWarp").checked, poisson: $("fixPoisson").checked,
-           grain: $("fixGrain").checked };
+           grain: $("fixGrain").checked, grain_strength: num("fixGrainStrength") / 100 };
 }
 function setPostValues(v) {
   if ("dx" in v) $("alignDx").value = Math.round(v.dx * 10) / 10;
@@ -2897,6 +2912,8 @@ function setPostValues(v) {
   for (const [id, k] of [["fixColors", "colors"], ["fixWarp", "warp"], ["fixPoisson", "poisson"], ["fixGrain", "grain"]]) {
     if (k in v) $(id).checked = !!v[k];
   }
+  if ("grain_strength" in v) $("fixGrainStrength").value = Math.round(v.grain_strength * 100);
+  syncRangeOutputs();
 }
 async function postRequest(body) {
   const run = state.run;
@@ -2908,6 +2925,7 @@ async function postRequest(body) {
     if (res.saved) {
       run.aligned = res.aligned || null;
       run.grainUrl = res.grain_url || null;
+      run.grainStrength = res.grain_strength ?? run.grainStrength;
       $("postPanel").hidden = true;
       showToast("Post-processing applied.");
       renderViewer();
@@ -2932,22 +2950,23 @@ $("postBtn").onclick = () => {
   if (!opt) return;
   for (const el of $("postPanel").querySelectorAll(".post-fix")) el.hidden = !opt.fix;
   for (const el of $("postPanel").querySelectorAll(".post-paste")) el.hidden = opt.fix !== "paste";
-  $("fixGrain").closest("label").hidden = !opt.grain;
+  for (const el of $("postPanel").querySelectorAll(".post-grain")) el.hidden = !opt.grain;
   // the panel starts at what the run has now
   const a = opt.fix && run.aligned ? run.aligned : {};
   setPostValues({ dx: a.dx || 0, dy: a.dy || 0, scale: a.scale || 1, colors: !!a.colors, warp: !!a.warp,
-                  poisson: !!a.poisson, grain: !!run.grainUrl });
+                  poisson: !!a.poisson, grain: !!run.grainUrl, grain_strength: run.grainStrength ?? 1 });
   $("postPanel").hidden = false;
   schedulePreview();
 };
 $("postClose").onclick = () => { $("postPanel").hidden = true; showFinal(); };
 $("alignAuto").onclick = () => postRequest({ ...postValues(), auto: true, save: false });
 $("postReset").onclick = () => {
-  setPostValues({ dx: 0, dy: 0, scale: 1, colors: false, warp: false, poisson: false, grain: false });
+  setPostValues({ dx: 0, dy: 0, scale: 1, colors: false, warp: false, poisson: false, grain: false, grain_strength: 1 });
   schedulePreview();
 };
 $("postSave").onclick = () => postRequest({ ...postValues(), save: true });
 for (const id of ["alignDx", "alignDy", "alignScale"]) $(id).addEventListener("input", schedulePreview);
+$("fixGrainStrength").addEventListener("input", () => { if ($("fixGrain").checked) schedulePreview(); });
 for (const id of ["fixColors", "fixWarp", "fixPoisson", "fixGrain"]) $(id).addEventListener("change", schedulePreview);
 for (const b of document.querySelectorAll("#postPanel [data-nudge]")) {
   b.onclick = (e) => {

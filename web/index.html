@@ -232,6 +232,8 @@
           </label>
         </div>
         <label class="check" title="Upscalers come out clean and lose the film or sensor grain. This adds the original's grain back at its original size, so the result keeps the camera look. The clean upscale stays available (Raw)."><input type="checkbox" id="upscaleGrain" checked> Keep the original's grain</label>
+        <label class="range-row" title="100 % adds what the upscale lacks compared with the original; less is subtler, more is coarser.">Grain strength <output id="upscaleGrainStrengthOut">100 %</output>
+          <input type="range" id="upscaleGrainStrength" min="0" max="200" step="10" value="100"></label>
         <div class="sizeinfo" id="upscaleSizes"></div>
         <p class="warn" id="upscaleWarn" hidden></p>
         <p class="hint" id="upscaleHint"></p>
@@ -285,6 +287,8 @@
         <label class="check" data-modes="paste none" title="Undo small local distortions (optical flow), measured where the edit should match the original."><input type="checkbox" id="postWarp"> Local warp</label>
         <label class="check" data-modes="paste" title="Moves the cut between original and edit, near the mask edge, to where both look alike."><input type="checkbox" id="postPoisson"> Seamless edges</label>
         <label class="check" data-modes="paste inpaint none outpaint" title="The model output is clean; this adds the original's film or sensor grain (with a mask: only inside it) so the edit does not look smoother than the rest."><input type="checkbox" id="postGrain" checked> Film grain</label>
+        <label class="range-row" data-modes="paste inpaint none outpaint" title="100 % adds what the edit lacks compared with the original; less is subtler, more is coarser.">Grain strength <output id="grainStrengthOut">100 %</output>
+          <input type="range" id="grainStrength" min="0" max="200" step="10" value="100"></label>
       </fieldset>
 
       <fieldset class="sec">
@@ -417,7 +421,9 @@
               <label class="check post-fix"><input type="checkbox" id="fixColors"> Colours &amp; exposure</label>
               <label class="check post-fix"><input type="checkbox" id="fixWarp"> Local warp</label>
               <label class="check post-paste"><input type="checkbox" id="fixPoisson"> Seamless edges</label>
-              <label class="check"><input type="checkbox" id="fixGrain"> Film grain</label>
+              <label class="check post-grain"><input type="checkbox" id="fixGrain"> Film grain</label>
+              <label class="range-row post-grain">Strength <output id="fixGrainStrengthOut">100 %</output>
+                <input type="range" id="fixGrainStrength" min="0" max="200" step="10" value="100"></label>
             </div>
             <div class="row wrap">
               <span class="hint" id="postInfo"></span>

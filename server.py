@@ -27,7 +27,7 @@ from PIL import Image, ImageFilter, ImageOps
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import align
 import graphs
@@ -49,7 +49,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscale_width", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
+                  "upscale", "upscale_width", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
                   "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes")
 
 @asynccontextmanager
@@ -551,7 +551,13 @@ class PostReq(BaseModel):
     warp: bool = False
     poisson: bool = False  # seamless edges (masked edits only)
     grain: bool = False    # the original's film / sensor grain (prepare.add_grain)
+    grain_strength: float = Field(1.0, ge=0, le=3)   # 1 = what the result lacks compared with the original
     save: bool = False
+
+
+def grain_strength(params: dict) -> float:
+    v = params.get("grain_strength")
+    return 1.0 if v is None else min(3.0, max(0.0, float(v)))
 
 
 def fix_kind(run: dict) -> str | None:
@@ -663,13 +669,14 @@ async def post_process(run: dict, req: PostReq, kind: str | None) -> dict:
         mask_url = _grain_mask_url(run)
         mask = await _fetch_view(mask_url) if mask_url else None
         seed = int((run.get("params") or {}).get("seed") or 0)
-        img = await asyncio.to_thread(prepare.add_grain, original, img, seed, mask)
+        img = await asyncio.to_thread(prepare.add_grain, original, img, seed, mask, req.grain_strength)
     if req.save:
         if req.grain:
             name = f"{run_id}_grain.png"
             (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
             await asyncio.to_thread(img.save, out_dir / "InpaintStudio" / name)
             run["grain_url"] = view_url({"filename": name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
+            run["grain_strength"] = req.grain_strength
         else:
             run.pop("grain_url", None)
         save_run(run)
@@ -677,7 +684,7 @@ async def post_process(run: dict, req: PostReq, kind: str | None) -> dict:
     else:
         await asyncio.to_thread(img.convert("RGB").save, RUNS / run_id / "post_preview.jpg", quality=92)
         result["url"] = f"/data/runs/{run_id}/post_preview.jpg?t={stamp}"
-    result.update(saved=req.save, aligned=run.get("aligned"), grain_url=run.get("grain_url"))
+    result.update(saved=req.save, aligned=run.get("aligned"), grain_url=run.get("grain_url"), grain_strength=run.get("grain_strength"))
     return result
 
 
@@ -698,6 +705,7 @@ class UpscaleReq(BaseModel):
     megabytes: float | None = None  # or a rough target file size (prepare.size_for_megabytes)
     color_correction: str = "lab"  # SeedVR2 only
     grain: bool = True            # give the result the original's grain back (prepare.add_grain)
+    grain_strength: float = Field(1.0, ge=0, le=3)
 
 
 _bpp_cache: dict[str, float] = {}
@@ -753,7 +761,7 @@ async def upscale(req: UpscaleReq):
     what = (f"to {req.width} px wide" if req.width else f"to about {req.megabytes:g} MB ({size[0]} px wide)"
             if req.megabytes else f"×{factor:g}")
     params = {"task": "upscale", "prompt": f"Upscale {what} with {comp['title']}", "upscale": round(factor, 3),
-              "upscale_width": req.width, "upscale_mb": None if req.width else req.megabytes, "grain": req.grain, "image": req.image,
+              "upscale_width": req.width, "upscale_mb": None if req.width else req.megabytes, "grain": req.grain, "grain_strength": req.grain_strength, "image": req.image,
               "upscaler": req.upscaler, "color_correction": req.color_correction if comp.get("engine") == "seedvr2" else None,
               "seed": seed, "steps": 1, "save_every": 0, "save_last": 0, "refs": [], "use_mask": False, "mask": None}
     size = {"work_w": size[0], "work_h": size[1]} if size else {"work_w": round(w * factor), "work_h": round(h * factor)}
@@ -926,7 +934,8 @@ async def complete_run(job: dict, pid: str) -> None:
     grain = bool(params.get("post_grain")) and (params.get("task") or "edit") == "edit" and not params.get("crop_box")
     if res and (fixes or grain):
         try:
-            await post_process(run, PostReq(save=True, grain=grain, **(post if fixes else {})), kind if fixes else None)
+            await post_process(run, PostReq(save=True, grain=grain, grain_strength=grain_strength(params),
+                                            **(post if fixes else {})), kind if fixes else None)
         except Exception as e:  # never fail the run because of the post-processing
             print(f"post-processing failed for {run_id}: {e!r}")
     if params.get("task") == "upscale" and params.get("grain") and res:
@@ -1117,7 +1126,8 @@ async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:
     orig = await load_input(params["orig_image"])
     mask = (await _fetch_view(input_mask_url(params["orig_mask"]))).convert("L")
     feather = float(params.get("feather") or 0) * box["w"] / max(1, params["work_w"])   # working px -> source px
-    full = await asyncio.to_thread(prepare.stitch, orig, result, mask, box, feather / 3, bool(params.get("crop_grain", True)))
+    full = await asyncio.to_thread(prepare.stitch, orig, result, mask, box, feather / 3, bool(params.get("crop_grain", True)),
+                                    grain_strength=grain_strength(params))
     out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
     (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(full.save, out_dir / "InpaintStudio" / f"{run_id}_full.png")
@@ -1128,7 +1138,7 @@ async def grain_result(run: dict, params: dict, res_url: str) -> dict:
     """Upscale task: the original's grain added to the clean upscale (prepare.add_grain) -> <run>_grain.png."""
     run_id = run["id"]
     orig, result = await _fetch_view(input_mask_url(params["image"])), await _fetch_view(res_url)
-    out = await asyncio.to_thread(prepare.add_grain, orig, result, int(params.get("seed") or 0))
+    out = await asyncio.to_thread(prepare.add_grain, orig, result, int(params.get("seed") or 0), None, grain_strength(params))
     out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
     (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(out.save, out_dir / "InpaintStudio" / f"{run_id}_grain.png")

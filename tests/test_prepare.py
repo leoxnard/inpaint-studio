@@ -170,3 +170,24 @@ def test_add_grain_with_mask_only_touches_the_masked_area():
     out = np.asarray(prepare.add_grain(original, Image.fromarray(result), mask=Image.fromarray(m)), np.float32)
     assert (out[:40] == result[:40]).all()                 # outside the mask nothing changes
     assert 5 < out[60:140, 60:140].std() < 11              # inside it gets about the original's grain back
+
+
+def test_texture_is_not_mistaken_for_grain():
+    rng = np.random.default_rng(5)
+    flat = np.full((240, 240, 3), 120, np.float32)
+    flat[:, :120] += np.sin(np.arange(120) * 1.3)[None, :, None] * 40   # fine stripes (picture detail) on the left half
+    original = Image.fromarray(np.clip(flat + rng.normal(0, 3, flat.shape), 0, 255).astype(np.uint8))
+    assert abs(prepare.grain_std(np.asarray(original, np.float32), np.ones((240, 240), bool)).mean()
+               - prepare.grain_std(np.asarray(original, np.float32)[:, 130:], np.ones((240, 110), bool)).mean()) < 0.5
+
+
+def test_grain_strength_scales_the_added_grain():
+    rng = np.random.default_rng(6)
+    base = np.full((160, 160, 3), 128, np.float32)
+    original = Image.fromarray(np.clip(base + rng.normal(0, 6, base.shape), 0, 255).astype(np.uint8))
+    clean = Image.fromarray(base.astype(np.uint8))
+    ev = np.ones((160, 160), bool)
+    full = prepare.grain_std(np.asarray(prepare.add_grain(original, clean), np.float32), ev).mean()
+    half = prepare.grain_std(np.asarray(prepare.add_grain(original, clean, strength=0.5), np.float32), ev).mean()
+    assert abs(half / full - 0.5) < 0.1
+    assert prepare.add_grain(original, clean, strength=0).tobytes() == clean.tobytes()

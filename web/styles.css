@@ -559,10 +559,6 @@ button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
 .rtile.active, .rtile.active:hover:not(:disabled) { border-color: var(--ink); }
 .rpic { position: relative; display: block; width: 100%; aspect-ratio: 1; border-radius: var(--r-img); background: var(--surface); overflow: hidden; }
 .rpic img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.rbadge {
-  position: absolute; top: 6px; left: 6px; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
-  background: var(--ink); color: var(--on-ink); font: 600 11px/1 var(--font-body); box-shadow: 0 0 0 2px var(--canvas);
-}
 .rtile.failed .rpic { opacity: .45; }
 .rtile.removed .rpic { opacity: .55; }
 .rtile.removed:hover .rpic { opacity: 1; }

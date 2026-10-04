@@ -2051,6 +2051,18 @@ function syncResultFilters() {
   }
 }
 
+function tileImage(run, pic) {
+  if (!run.resultUrl) return null;
+  const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img);
+  return img;
+}
+// "W × H" of the result: the working size first, then the loaded image (crop & stitch results are larger)
+function sizeLabel(el, run, img) {
+  const set = (w, h) => { el.textContent = w ? `${w} × ${h}` : ""; };
+  set(run.size?.work_w, run.size?.work_h);
+  img?.addEventListener("load", () => set(img.naturalWidth, img.naturalHeight));
+}
+
 function renderHistory() {
   syncResultFilters();
   const box = $("history");
@@ -2070,18 +2082,11 @@ function renderHistory() {
     b.setAttribute("aria-label", `Open run: ${run.prompt || "untitled"}`);
     const pic = document.createElement("span"); pic.className = "rpic";
     if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
-    if (run.resultUrl) { const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img); }
-    if (run.params?.upscale_of || run.params?.task === "upscale") {   // an upscale of another run: ×2 / ×4 badge in the corner
-      const badge = document.createElement("span"); badge.className = "rbadge";
-      badge.textContent = `×${run.params.upscale}`;
-      pic.append(badge);
-    }
+    const img = tileImage(run, pic);
     const meta = document.createElement("span"); meta.className = "rmeta";
-    const took = runTook(run);
-    const l = document.createElement("span"); l.textContent = took ? fmtTime(took) : "";
-    const st = document.createElement("span"); st.className = run.status === "error" ? "strong" : "hint";
-    st.textContent = run.status === "error" ? "Failed" : relTime(run.finished || run.created);
-    meta.append(l, st);
+    const l = document.createElement("span"); sizeLabel(l, run, img);
+    meta.append(l);
+    if (run.status === "error") { const st = document.createElement("span"); st.className = "strong"; st.textContent = "Failed"; meta.append(st); }
     b.append(pic, meta);
     b.title = run.status === "error" && run.error ? `${run.prompt}\n\nFailed: ${run.error}` : run.prompt;
     b.onclick = () => selectRun(run);
@@ -2117,10 +2122,10 @@ function renderRemoved(box) {
     b.setAttribute("aria-label", `Restore the run from ${relTime(run.finished || run.created)}`);
     const pic = document.createElement("span"); pic.className = "rpic";
     if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
-    if (run.resultUrl) { const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img); }
+    const img = tileImage(run, pic);
     const meta = document.createElement("span"); meta.className = "rmeta";
     const l = document.createElement("span"); l.textContent = "Restore";
-    const st = document.createElement("span"); st.className = "hint"; st.textContent = relTime(run.finished || run.created);
+    const st = document.createElement("span"); st.className = "hint"; sizeLabel(st, run, img);
     meta.append(l, st);
     b.append(pic, meta);
     b.title = `${run.prompt}\n\nClick to bring it back into the results`;

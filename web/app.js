@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
-  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays",
+  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole",
   "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "colorCorrection", "cropStitch", "cropContext", "cropGrain", "outpaintColors",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -1195,6 +1195,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     clean_overlays: $("cleanOverlays").checked,
+    keep_whole: wholeImage() && $("keepWhole").checked,
     loras: state.loras.filter((l) => l.name && l.strength),
     outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas()) : undefined,
     outpaint_colors: outpaintOn() ? $("outpaintColors").checked : undefined,
@@ -2356,7 +2357,7 @@ function loadRunSettings(run) {
   if (p.upscaler && [...$("upscaler").options].some((o) => o.value === p.upscaler)) $("upscaler").value = p.upscaler;
   $("keepNote").value = p.keep_note ?? (p.keep_identical === false ? "" : KEEP_NOTE);
   const checks = { postColors: p.post_colors, postWarp: p.post_warp, postPoisson: p.post_poisson,
-    cleanOverlays: p.clean_overlays };
+    cleanOverlays: p.clean_overlays, keepWhole: p.keep_whole };
   for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
   $("randomSeed").checked = false;   // reproduce the run
   $("refNote").value = p.ref_note ?? defaultRefNote();
@@ -2575,12 +2576,13 @@ function syncModeUi() {
   document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
   refreshSizeDebounced();
   const notPaste = $("mode").value !== "paste";
-  $("keepNoteRow").hidden = notPaste;
+  syncKeepNote();
   $("postFixRow").hidden = notPaste;
   syncAreaCards();
   if (state.maskUiReady) applyMaskTexts();  // not during module init (applyMaskMode runs it later)
 }
 $("mode").addEventListener("change", syncModeUi);
+$("keepWhole").addEventListener("change", syncModeUi);
 $("mode").addEventListener("change", refreshCropDebounced);
 $("cropStitch").addEventListener("change", refreshCrop);
 $("cropContext").addEventListener("input", refreshCropDebounced);
@@ -3300,6 +3302,13 @@ const MASK_TEXTS = {
 
 // masks are used when SAM3 is installed and the mode is not "No mask"
 function maskOn() { return !!state.maskAvailable && !["none", "outpaint"].includes($("mode").value) && !upscaling(); }
+// an edit of the whole image: no mask and no outpainting
+function wholeImage() { return !maskOn() && $("mode").value !== "outpaint" && !upscaling(); }
+// the keep-identical instruction is used by free edit + paste and, when ticked, by whole-image edits
+function syncKeepNote() {
+  const paste = maskOn() && $("mode").value === "paste";
+  $("keepNoteRow").hidden = !paste && !(wholeImage() && $("keepWhole").checked);
+}
 
 
 // Masking needs SAM3. Without it the UI hides everything about masks and never sends one.
@@ -3315,6 +3324,8 @@ function applyMaskTexts() {
   const i = maskOn() ? 0 : 1;
   document.body.classList.toggle("no-mask", !maskOn());
   document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
+  $("keepWholeRow").hidden = !wholeImage();
+  syncKeepNote();
   const up = state.task === "upscale";
   $("batchSubmitNext").textContent = up ? "Upscale and next" : "Submit and next";
   $("batchSubmitNext").title = up ? "Queue the current image for upscaling and open the next open one" : MASK_TEXTS.next[i];

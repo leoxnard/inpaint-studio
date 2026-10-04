@@ -258,6 +258,9 @@
         <label class="check" title="Adds an instruction to remove watermarks, logos, captions and overlaid text (when generating: to create none). With a mask only the masked area can change.">
           <input type="checkbox" id="cleanOverlays"> Remove watermarks and text
         </label>
+        <label class="check edit-only" id="keepWholeRow" hidden title="Whole image: adds the keep-identical instruction (editable in Advanced) after your prompt, so everything you did not ask to change stays the same.">
+          <input type="checkbox" id="keepWhole"> Keep everything else identical
+        </label>
       </div>
 
       <div class="sec">
@@ -318,8 +321,8 @@
           <label>Sampler <select id="sampler"></select></label>
           <label>Scheduler <select id="scheduler"></select></label>
         </div>
-        <div class="stack needs-mask paste-only edit-only" id="keepNoteRow">
-          <label title="Free edit + paste: added after your prompt so everything outside the change stays where it is and the pasted area lines up. Empty = no instruction.">Keep-identical instruction
+        <div class="stack paste-only edit-only" id="keepNoteRow">
+          <label title="Free edit + paste (or whole image with Keep everything else identical): added after your prompt so everything outside the change stays where it is and the pasted area lines up. Empty = no instruction.">Keep-identical instruction
             <textarea id="keepNote" rows="4"></textarea>
           </label>
           <button type="button" class="linkbtn" id="keepNoteReset">Reset to default</button>

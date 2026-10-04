@@ -180,8 +180,8 @@ def edit_prompt(p: dict[str, Any]) -> str:
         prompt = f"{prompt}\n\n{CLEAN_NOTE_GENERATE if p.get('task') == 'generate' else CLEAN_NOTE}"
     if p.get("outpaint"):
         prompt = f"{prompt}\n\n{OUTPAINT_NOTE}"
-    if p.get("mode") == "paste":
-        # p["keep_note"] replaces the default (Advanced in the UI), empty turns it off;
+    if p.get("mode") == "paste" or (p.get("keep_whole") and not p.get("use_mask")):
+        # also for whole-image edits when asked (keep_whole); p["keep_note"] replaces the default (Advanced in the UI), empty turns it off;
         # keep_identical=False is the older way to turn it off
         keep = KEEP_IDENTICAL if p.get("keep_identical", True) else ""
         if p.get("keep_note") is not None:

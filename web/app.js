@@ -10,9 +10,9 @@ const $ = (id) => document.getElementById(id);
 // ------------------------------------------------------------------ persisted form fields
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
-  "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
+  "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postAlign", "postColors", "postWarp", "postPoisson", "postGrain", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole",
-  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "colorCorrection", "cropStitch", "cropContext", "cropGrain", "outpaintColors",
+  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "colorCorrection", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -1198,10 +1198,11 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_whole: wholeImage() && $("keepWhole").checked,
     loras: state.loras.filter((l) => l.name && l.strength),
     outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas()) : undefined,
-    outpaint_colors: outpaintOn() ? $("outpaintColors").checked : undefined,
-    crop_grain: cropOn() ? $("cropGrain").checked : undefined,
+    outpaint_colors: outpaintOn() ? $("postColors").checked : undefined,
+    crop_grain: cropOn() ? $("postGrain").checked : undefined,
     crop_stitch: cropOn() || undefined, crop_context: cropOn() ? num("cropContext") / 100 : undefined, match_ref: $("matchRef").checked,
-    post_colors: $("postColors").checked, post_warp: $("postWarp").checked, post_poisson: $("postPoisson").checked,
+    post_align: $("postAlign").checked, post_colors: $("postColors").checked, post_warp: $("postWarp").checked,
+    post_poisson: $("postPoisson").checked, post_grain: $("postGrain").checked,
     upscale: $("upscaler").value ? parseInt($("upscale").value, 10) || 0 : 0, upscaler: $("upscaler").value || null,
     preset: $("preset").value, quant: $("quant").value, task: state.task, preview_method: "auto",
     refs: state.refs.slice(0, maxRefs()).map((r) => r.name),
@@ -1343,7 +1344,7 @@ function showRun(run) {
   clearInterval(state.progressTimer);
   state.run = run;
   run.shown = null;
-  $("alignPanel").hidden = true;
+  $("postPanel").hidden = true;
   renderViewer();
   if (run.rawUrl && run.maskUrl && !run.match) measureMatch(run);
 }
@@ -2016,11 +2017,7 @@ function renderDetails(run, status) {
   $("loadSettings").title = run.params ? "Switch to Create with this run's settings (the image stays)"
     : "The settings of this run are not known to this page (it was queued elsewhere)";
   $("useResult").hidden = !(done && run.resultUrl);
-  $("alignBtn").hidden = !(done && run.serverId && run.rawUrl && run.maskUrl && !run.params?.outpaint);
-  // grain afterwards: needs an original; upscales made with grain have it already ("With grain / Clean")
-  $("grainBtn").hidden = !(done && run.serverId && run.beforeUrl && run.resultUrl && runTask(run) !== "generate"
-    && !(runTask(run) === "upscale" && run.params?.grain));
-  $("grainBtn").textContent = run.grainUrl ? "Remove grain" : "Add grain";
+  $("postBtn").hidden = !(done && run.serverId && postOptions(run));
   $("downloadBtn").hidden = !(done && run.resultUrl);
   if (done && run.resultUrl) {
     $("downloadBtn").href = shownResult(run);
@@ -2356,7 +2353,8 @@ function loadRunSettings(run) {
   for (const [id, v] of [["sampler", p.sampler], ["scheduler", p.scheduler]]) if (v) setSelectValue(id, v);
   if (p.upscaler && [...$("upscaler").options].some((o) => o.value === p.upscaler)) $("upscaler").value = p.upscaler;
   $("keepNote").value = p.keep_note ?? (p.keep_identical === false ? "" : KEEP_NOTE);
-  const checks = { postColors: p.post_colors, postWarp: p.post_warp, postPoisson: p.post_poisson,
+  const checks = { postAlign: p.post_align, postColors: p.outpaint ? p.outpaint_colors : p.post_colors, postWarp: p.post_warp,
+    postPoisson: p.post_poisson, postGrain: p.post_grain ?? p.crop_grain,
     cleanOverlays: p.clean_overlays, keepWhole: p.keep_whole };
   for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
   $("randomSeed").checked = false;   // reproduce the run
@@ -2575,9 +2573,8 @@ function initApp() {
 function syncModeUi() {
   document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
   refreshSizeDebounced();
-  const notPaste = $("mode").value !== "paste";
   syncKeepNote();
-  $("postFixRow").hidden = notPaste;
+  syncPostOptions();
   syncAreaCards();
   if (state.maskUiReady) applyMaskTexts();  // not during module init (applyMaskMode runs it later)
 }
@@ -2586,6 +2583,12 @@ $("keepWhole").addEventListener("change", syncModeUi);
 $("mode").addEventListener("change", refreshCropDebounced);
 $("cropStitch").addEventListener("change", refreshCrop);
 $("cropContext").addEventListener("input", refreshCropDebounced);
+
+// Post-processing in Create: each option lists the modes it works in (data-modes)
+function syncPostOptions() {
+  const mode = wholeImage() ? "none" : outpaintOn() ? "outpaint" : $("mode").value;
+  for (const l of $("postFixRow").querySelectorAll("[data-modes]")) l.hidden = !l.dataset.modes.split(" ").includes(mode);
+}
 
 // "Area to change" cards are a view of the hidden #mode select
 function syncAreaCards() {
@@ -2868,77 +2871,90 @@ async function startSession() {
   if (!state.run && !state.wantRun) showLatest();
 }
 
-// ------------------------------------------------------------------ advanced: post-hoc alignment
-let alignTimer = 0;
-function alignValues() {
-  return { dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100,
-           colors: $("fixColors").checked, warp: $("fixWarp").checked, poisson: $("fixPoisson").checked };
+// ------------------------------------------------------------------ post-processing of a finished run
+// What a run can get (mirrors server.post_kind): fix = "paste" (raw image + mask), "whole" (whole-image edit) or null;
+// grain unless the run has it already (upscale or crop & stitch made with grain). null: nothing to offer.
+function postOptions(run) {
+  const p = run.params || {};
+  const task = runTask(run);
+  let fix = null;
+  if (!p.outpaint && run.beforeUrl && run.rawUrl && run.maskUrl) fix = "paste";
+  else if (task === "edit" && p.use_mask === false && !p.outpaint && run.beforeUrl && run.resultUrl) fix = "whole";
+  const grain = !!(run.beforeUrl && run.resultUrl && task !== "generate" && !(task === "upscale" && p.grain)
+    && !(p.crop_box && p.crop_grain !== false));
+  return fix || grain ? { fix, grain } : null;
 }
-function setAlignValues(v) {
-  $("alignDx").value = Math.round(v.dx * 10) / 10;
-  $("alignDy").value = Math.round(v.dy * 10) / 10;
-  $("alignScale").value = Math.round(v.scale * 10000) / 100;
-  for (const [id, k] of [["fixColors", "colors"], ["fixWarp", "warp"], ["fixPoisson", "poisson"]]) {
+let postTimer = 0;
+function postValues() {
+  return { dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100,
+           colors: $("fixColors").checked, warp: $("fixWarp").checked, poisson: $("fixPoisson").checked,
+           grain: $("fixGrain").checked };
+}
+function setPostValues(v) {
+  if ("dx" in v) $("alignDx").value = Math.round(v.dx * 10) / 10;
+  if ("dy" in v) $("alignDy").value = Math.round(v.dy * 10) / 10;
+  if ("scale" in v) $("alignScale").value = Math.round(v.scale * 10000) / 100;
+  for (const [id, k] of [["fixColors", "colors"], ["fixWarp", "warp"], ["fixPoisson", "poisson"], ["fixGrain", "grain"]]) {
     if (k in v) $(id).checked = !!v[k];
   }
 }
-async function alignRequest(body) {
+async function postRequest(body) {
   const run = state.run;
   if (!run?.serverId) return;
-  $("alignInfo").textContent = "Working...";
+  $("postInfo").textContent = "Working...";
   try {
-    const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/align`, body);
-    setAlignValues(res);
+    const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, body);
+    if (res.dx != null) setPostValues(res);
+    if (res.saved) {
+      run.aligned = res.aligned || null;
+      run.grainUrl = res.grain_url || null;
+      $("postPanel").hidden = true;
+      showToast("Post-processing applied.");
+      renderViewer();
+      return;
+    }
     $("cmpBefore").src = run.beforeUrl;
     $("cmpAfter").src = res.url;
     $("liveImg").hidden = true; $("compare").hidden = false;
-    $("alignInfo").textContent = `Outside-mask difference: ${res.unaligned_diff} → ${res.outside_diff} / 255`
-      + (res.confidence ? ` · match confidence ${res.confidence}` : "") + (res.saved ? " · saved" : "");
-    if (res.saved) {
-      run.aligned = { dx: res.dx, dy: res.dy, scale: res.scale, colors: res.colors, warp: res.warp,
-                      poisson: res.poisson, outside_diff: res.outside_diff, url: res.url };
-      $("downloadBtn").href = res.url;
-    }
-  } catch (e) { $("alignInfo").textContent = ""; showError(e.message); }
+    const where = res.kind === "whole" ? "Difference in unchanged areas" : "Outside-mask difference";
+    $("postInfo").textContent = res.outside_diff != null
+      ? `${where}: ${res.unaligned_diff} → ${res.outside_diff} / 255` + (res.confidence ? ` · match confidence ${res.confidence}` : "")
+      : "Preview";
+  } catch (e) { $("postInfo").textContent = ""; showError(e.message); }
 }
 function schedulePreview() {
-  clearTimeout(alignTimer);
-  alignTimer = setTimeout(() => alignRequest({ ...alignValues(), save: false }), 250);
+  clearTimeout(postTimer);
+  postTimer = setTimeout(() => postRequest({ ...postValues(), save: false }), 250);
 }
-$("alignBtn").onclick = () => {
+$("postBtn").onclick = () => {
   const run = state.run;
-  $("alignPanel").hidden = false;
-  setAlignValues(run.aligned || { dx: 0, dy: 0, scale: 1, colors: true, warp: false, poisson: false });
-  $("alignInfo").textContent = "Try Auto-align and the fixes, then fine-tune with the arrows (Shift = 5 px).";
+  const opt = postOptions(run);
+  if (!opt) return;
+  for (const el of $("postPanel").querySelectorAll(".post-fix")) el.hidden = !opt.fix;
+  for (const el of $("postPanel").querySelectorAll(".post-paste")) el.hidden = opt.fix !== "paste";
+  $("fixGrain").closest("label").hidden = !opt.grain;
+  // the panel starts at what the run has now
+  const a = opt.fix && run.aligned ? run.aligned : {};
+  setPostValues({ dx: a.dx || 0, dy: a.dy || 0, scale: a.scale || 1, colors: !!a.colors, warp: !!a.warp,
+                  poisson: !!a.poisson, grain: !!run.grainUrl });
+  $("postPanel").hidden = false;
   schedulePreview();
 };
-$("grainBtn").onclick = async () => {
-  const run = state.run;
-  if (!run?.serverId) return;
-  const on = !run.grainUrl;
-  $("grainBtn").disabled = true;
-  $("grainBtn").textContent = on ? "Adding grain..." : "Removing...";
-  try {
-    const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/grain`, { on });
-    run.grainUrl = res.grain_url || null;
-    showToast(on ? "Grain added." : "Grain removed.");
-  } catch (e) { showError(e.message); } finally {
-    $("grainBtn").disabled = false;
-    renderViewer();
-  }
+$("postClose").onclick = () => { $("postPanel").hidden = true; showFinal(); };
+$("alignAuto").onclick = () => postRequest({ ...postValues(), auto: true, save: false });
+$("postReset").onclick = () => {
+  setPostValues({ dx: 0, dy: 0, scale: 1, colors: false, warp: false, poisson: false, grain: false });
+  schedulePreview();
 };
-$("alignClose").onclick = () => { $("alignPanel").hidden = true; showFinal(); };
-$("alignAuto").onclick = () => alignRequest({ auto: true, save: false });
-$("alignReset").onclick = () => { setAlignValues({ dx: 0, dy: 0, scale: 1, colors: false, warp: false, poisson: false }); schedulePreview(); };
-$("alignSave").onclick = () => alignRequest({ ...alignValues(), save: true });
+$("postSave").onclick = () => postRequest({ ...postValues(), save: true });
 for (const id of ["alignDx", "alignDy", "alignScale"]) $(id).addEventListener("input", schedulePreview);
-for (const id of ["fixColors", "fixWarp", "fixPoisson"]) $(id).addEventListener("change", schedulePreview);
-for (const b of document.querySelectorAll("#alignPanel [data-nudge]")) {
+for (const id of ["fixColors", "fixWarp", "fixPoisson", "fixGrain"]) $(id).addEventListener("change", schedulePreview);
+for (const b of document.querySelectorAll("#postPanel [data-nudge]")) {
   b.onclick = (e) => {
     const [x, y] = b.dataset.nudge.split(",").map(Number);
     const step = e.shiftKey ? 5 : 1;
-    const v = alignValues();
-    setAlignValues({ ...v, dx: v.dx + x * step, dy: v.dy + y * step });
+    const v = postValues();
+    setPostValues({ dx: v.dx + x * step, dy: v.dy + y * step });
     schedulePreview();
   };
 }
@@ -3319,6 +3335,7 @@ function applyMaskTexts() {
   document.body.classList.toggle("no-mask", !maskOn());
   document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
   $("keepWholeRow").hidden = !wholeImage();
+  syncPostOptions();
   syncKeepNote();
   const up = state.task === "upscale";
   $("batchNoMaskAll").textContent = up ? "Upscale all" : MASK_TEXTS.all[i];

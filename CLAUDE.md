@@ -27,11 +27,13 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   `/api/*`, `/data/*` and `/ws/jobs` only accept local Host/Origin (`local_origin`, extra hosts via
   `INPAINT_STUDIO_ALLOWED_HOSTS`).
 - `prepare.py` – crop & stitch (crop around the mask before the run, `stitch` back into the original after
-  it → `<run>_full.png`), outpaint padding (`pad`) and the grain of upscale runs (`add_grain` → `<run>_grain.png`). Pure functions, unit-tested; used by `create_job`.
-- `align.py` – post-processing of a paste-mode free edit: shift/scale alignment (phase
+  it → `<run>_full.png`), outpaint padding (`pad`) and the grain (`add_grain`, global or only inside a mask → `<run>_grain.png`). Pure functions, unit-tested; used by `create_job`.
+- `align.py` – post-processing of a paste-mode free edit or a whole-image edit: shift/scale alignment (phase
   correlation), local warp fix (DIS optical flow), colour/exposure match (Lab offset field) and
-  seamless edges (graph-cut seam in a band around the mask edge), all measured outside the mask. `POST /api/runs/{id}/align`; also run
-  automatically after paste jobs (saved as `<run>_fixed.png`).
+  seamless edges (graph-cut seam in a band around the mask edge, paste only), measured outside the mask
+  (whole image: on the pixels the edit did not change, `align.unchanged`). Runs → Post-processing picks the steps
+  (fixes + grain, `POST /api/runs/{id}/post`, `server.post_process`); the Create options run automatically after
+  the job (`post_*` params; saved as `<run>_fixed.png`, grain on top as `<run>_grain.png`).
 - `presets.py` – model presets (files, quants, sizes, defaults), components (encoders, VAEs,
   SAM3, upscalers, Viggle node, LoRAs with their `families`, grouped by `LORA_GROUPS`) and the RAM-fit estimate. `installer.py` – setup and the download queue (more items can be queued while one runs) and
   the headless ComfyUI process.

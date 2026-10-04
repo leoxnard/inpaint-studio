@@ -157,3 +157,16 @@ def test_size_for_megabytes_scales_with_the_square_root_of_the_target():
     assert abs(prepare.size_for_megabytes(1000, 500, 1.0, 18)[0] - 2 * w) <= 1
     img = Image.new("RGB", (64, 64), (10, 20, 30))
     assert 0 < prepare.png_bytes_per_pixel(img) < 0.5   # a flat image compresses well
+
+
+def test_add_grain_with_mask_only_touches_the_masked_area():
+    rng = np.random.default_rng(4)
+    flat = np.full((200, 200, 3), 128, np.float32)
+    original = Image.fromarray(np.clip(flat + rng.normal(0, 8, flat.shape), 0, 255).astype(np.uint8))
+    result = np.asarray(original).copy()
+    result[50:150, 50:150] = 128                           # the edit came out clean inside the mask
+    m = np.zeros((200, 200), np.uint8)
+    m[50:150, 50:150] = 255
+    out = np.asarray(prepare.add_grain(original, Image.fromarray(result), mask=Image.fromarray(m)), np.float32)
+    assert (out[:40] == result[:40]).all()                 # outside the mask nothing changes
+    assert 5 < out[60:140, 60:140].std() < 11              # inside it gets about the original's grain back

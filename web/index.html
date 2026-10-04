@@ -119,12 +119,8 @@
             <input type="checkbox" id="cropStitch"> Edit around the mask only (keeps full resolution)</label>
           <label class="crop-ctx">Context around the mask <output id="cropContextOut">50 %</output>
             <input type="range" id="cropContext" min="25" max="150" step="5" value="50"></label>
-          <label class="check" title="The edit comes out clean; this adds the photo's grain (measured around the mask) inside the mask so the pasted area does not look smoother than the rest.">
-            <input type="checkbox" id="cropGrain" checked> Match film grain</label>
           <div class="hint" id="cropInfo"></div>
         </div>
-        <label class="check outpaint-only" title="Shifts the new area's colour and brightness, line by line along the border, to match the old image next to it, fading out away from the border.">
-          <input type="checkbox" id="outpaintColors" checked> Match colours at the border</label>
       </section>
 
       <p class="sec hint gen-only">To keep working on a result, open it in <a href="#runs">Runs</a> and choose “Use result as new input”.</p>
@@ -282,11 +278,13 @@
         </div>
       </div>
 
-      <fieldset class="sec needs-mask paste-only edit-only" id="postFixRow" title="Free edit + paste: fix the generated image before pasting, measured from the area outside the mask. The plain paste is kept as <run>.png, the fixed one is <run>_fixed.png.">
-        <legend>After pasting, fix</legend>
-        <label class="check"><input type="checkbox" id="postColors" checked> Colours and exposure</label>
-        <label class="check"><input type="checkbox" id="postWarp"> Local warp</label>
-        <label class="check"><input type="checkbox" id="postPoisson"> Seamless edges</label>
+      <fieldset class="sec edit-only" id="postFixRow" title="Applied to the result when the run is done, measured on the parts of the image the edit did not change. The plain result is kept (<run>.png); the fixed one is <run>_fixed.png, with grain <run>_grain.png. Everything can be changed later in Runs → Post-processing.">
+        <legend>Post-processing</legend>
+        <label class="check" data-modes="paste none" title="Undo a small shift or zoom of the whole picture the model sometimes makes (estimated automatically)."><input type="checkbox" id="postAlign"> Shift and scale</label>
+        <label class="check" data-modes="paste none outpaint" title="Free edit + paste, whole image: undo a colour or exposure drift of the edit, as a smooth field. Extend canvas: match the new area's colours to the old image along the border."><input type="checkbox" id="postColors" checked> Colours and exposure</label>
+        <label class="check" data-modes="paste none" title="Undo small local distortions (optical flow), measured where the edit should match the original."><input type="checkbox" id="postWarp"> Local warp</label>
+        <label class="check" data-modes="paste" title="Moves the cut between original and edit, near the mask edge, to where both look alike."><input type="checkbox" id="postPoisson"> Seamless edges</label>
+        <label class="check" data-modes="paste inpaint none outpaint" title="The model output is clean; this adds the original's film or sensor grain (with a mask: only inside it) so the edit does not look smoother than the rest."><input type="checkbox" id="postGrain" checked> Film grain</label>
       </fieldset>
 
       <fieldset class="sec">
@@ -402,9 +400,9 @@
         <div class="progress"><div class="bar" id="progressBar"></div></div>
         <div class="hint" id="progressText"></div>
       </div>
-      <div class="align-panel" id="alignPanel" hidden>
-            <div class="row wrap">
-              <button id="alignAuto" class="primary">Auto-align</button>
+      <div class="align-panel" id="postPanel" hidden>
+            <div class="row wrap post-fix">
+              <button id="alignAuto">Auto-align</button>
               <div class="nudge">
                 <button data-nudge="0,-1" title="Up (Shift = 5 px)">↑</button>
                 <button data-nudge="-1,0" title="Left (Shift = 5 px)">←</button>
@@ -416,17 +414,18 @@
               <label>scale % <input type="number" id="alignScale" step="0.1" value="100"></label>
             </div>
             <div class="row wrap">
-              <label class="check"><input type="checkbox" id="fixColors"> Match colors &amp; exposure</label>
-              <label class="check"><input type="checkbox" id="fixWarp"> Fix local warp</label>
-              <label class="check"><input type="checkbox" id="fixPoisson"> Seamless edges</label>
+              <label class="check post-fix"><input type="checkbox" id="fixColors"> Colours &amp; exposure</label>
+              <label class="check post-fix"><input type="checkbox" id="fixWarp"> Local warp</label>
+              <label class="check post-paste"><input type="checkbox" id="fixPoisson"> Seamless edges</label>
+              <label class="check"><input type="checkbox" id="fixGrain"> Film grain</label>
             </div>
             <div class="row wrap">
-              <span class="hint" id="alignInfo">Shifts, scales and fixes the full generated image, then pastes only the masked area into the original. Uncovered edges keep the original.</span>
+              <span class="hint" id="postInfo"></span>
             </div>
             <div class="row wrap">
-              <button id="alignReset">Reset</button>
-              <button id="alignSave">Save adjusted result</button>
-              <button id="alignClose">Close</button>
+              <button id="postReset" title="Everything off: the plain result">Reset</button>
+              <button id="postSave" class="primary">Apply</button>
+              <button id="postClose">Close</button>
             </div>
           </div>
       <div class="steps" id="stepsBar" hidden>
@@ -474,8 +473,7 @@
           <h2 class="h">Actions</h2>
           <button class="primary" id="loadSettings" title="Switch to Create with this run's settings (the image stays)">Load settings in Create</button>
           <button id="useResult" title="Load the image shown in the viewer (raw or pasted result, or the picked step) as the new input">Use result as new input</button>
-          <button id="alignBtn" title="Free edit + paste: align the generated image and fix colours, local warp and edges before pasting">Align to original</button>
-          <button id="grainBtn" title="Adds the original's film or sensor grain to the result (models and upscalers come out clean). The result without it stays.">Add grain</button>
+          <button id="postBtn" title="Align, fix colours, warp and edges, add grain: pick the steps, see a preview, apply. The plain result stays.">Post-processing</button>
           <a class="btn" id="downloadBtn" download>Download</a>
           <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
           <button id="downloadSteps">Download shown steps</button>

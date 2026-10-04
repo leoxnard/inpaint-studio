@@ -581,11 +581,11 @@ button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
 .viewer-tools { gap: 10px 18px; }
 .runs-center .bigarea { flex: none; height: 65vh; min-height: 300px; max-height: none; container-type: size; }
 /* with the adjust panel open, image + panel fit on screen together */
-.runs-center:has(#alignPanel:not([hidden])) .bigarea { height: max(300px, calc(100vh - 460px)); }
+.runs-center:has(#postPanel:not([hidden])) .bigarea { height: max(300px, calc(100vh - 460px)); }
 /* the image follows the area's real height, so it shrinks instead of being cut off when panels open below */
 .runs-center #liveImg, .runs-center .compare img { max-height: 100cqh; }
 @media (max-width: 1100px) {  /* stacked layout: the page scrolls, the area hugs the image */
-  .runs-center .bigarea, .runs-center:has(#alignPanel:not([hidden])) .bigarea { height: auto; container-type: normal; }
+  .runs-center .bigarea, .runs-center:has(#postPanel:not([hidden])) .bigarea { height: auto; container-type: normal; }
   .runs-center #liveImg, .runs-center .compare img { max-height: 65vh; }
 }
 #resultEmpty { font-size: 16px; line-height: 1.5; max-width: 560px; }
@@ -736,7 +736,7 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 
 /* Compare view (web/compare.js): replaces the single-run viewer */
 body.cmp-active #runsView .runhead, body.cmp-active #viewerTools, body.cmp-active #pipeline, body.cmp-active #variantStrip,
-body.cmp-active #progressWrap, body.cmp-active #alignPanel, body.cmp-active #stepsBar,
+body.cmp-active #progressWrap, body.cmp-active #postPanel, body.cmp-active #stepsBar,
 body.cmp-active #bigArea > :not(#multiCmp) { display: none !important; }
 body.cmp-active .runs-center .bigarea { height: max(360px, calc(100vh - 330px)); background: none; }
 .mcmp { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -791,3 +791,6 @@ body.mode-outpaint:not(.task-generate) #display.op-paint { cursor: crosshair; }
 #setupBtn::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 0; z-index: -1;
   background: var(--selected); }
 #setupBtn.downloading::before { width: var(--dl, 0%); transition: width .6s ease; }
+
+/* Post-processing: options that do not apply to the mode or run are hidden */
+#postFixRow [hidden], #postPanel [hidden] { display: none !important; }

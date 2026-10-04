@@ -19,7 +19,7 @@ The UI has two views, switched in the header (the address keeps the view, e.g. `
 - **Runs** – the queue on the left (running run with progress, waiting runs with Remove), the
   selected run in the middle (live preview while it renders, then the result with a before/after
   slider, the saved steps and all results with filters) and its details and actions on the right
-  (load its settings in Create, use the result as new input, align, download, delete).
+  (load its settings in Create, use the result as new input, post-processing, download, delete).
 
 The app predicts the working size and warns (or auto-fixes) when it would exceed ~4096 latent
 tokens, the point where the edit turns into gray noise on Apple Silicon.
@@ -61,11 +61,13 @@ submit them together with **Submit all masked**. Or use **Auto-mask and submit a
 settings; images where nothing is found are marked and skipped) or **Submit all without mask**.
 The **+** tile adds more images to an open batch.
 
-## Align (advanced)
-For free edit + paste runs, **Align to original** in Runs lines the generated image up with the
-original before pasting: Auto-align estimates shift and scale from the area outside the mask
-(phase correlation), then fine-tune with the arrows (Shift = 5 px) and scale. Uncovered edges keep
-the original. The aligned result is saved next to the run; the original result stays.
+## Post-processing
+**Post-processing** in Runs collects every fix a run can get; tick the steps, check the preview, **Apply**.
+Free edit + paste and whole-image edits: shift and scale (Auto-align estimates them by phase correlation,
+then fine-tune with the arrows, Shift = 5 px), colours & exposure and local warp; paste runs also seamless
+edges. All edits and upscales: film grain (with a mask only inside it). Uncovered edges keep the original;
+the plain result always stays. The same options sit in Create under **Post-processing** and run when the
+job is done (only the ones that fit the chosen area mode are shown).
 
 ## Queue
 "Add edit to queue" puts a job into a server-side queue, so you can keep preparing the next
@@ -113,8 +115,9 @@ an **Edit | Generate** switch (generate = text to image, no input image) and pro
 (built-in + own, saved in the browser).
 
 ## Paste fixes & upscaling
-Free edit + paste runs can be fixed automatically after pasting (Edit card) or later via
-**Adjust…**: match colours & exposure (smooth Lab offset field measured outside the mask), fix
+Free edit + paste and whole-image runs can be fixed automatically (Post-processing in Create) or later in
+Runs: match colours & exposure (smooth Lab offset field measured outside the mask; whole image: on the pixels
+whose colour moved about as much as most, so the asked-for change is left alone), fix
 local warp (DIS optical flow, OpenCV) and seamless edges (graph-cut seam, OpenCV), on top of shift/scale alignment.
 The fixed result is saved as `<run>_fixed.png`. An optional upscaler from the Download Center
 (UltraSharp / RealESRGAN in pixel space, or SeedVR2) upscales the result and saves `<run>_x2.png` / `_x4.png`.
@@ -126,8 +129,8 @@ factor (1–4×), a target width in px (each image of a folder gets that width) 
 (estimated from how well the original compresses as PNG, `prepare.size_for_megabytes`; usually within ±25 %). Upscalers come out clean and
 lose the camera's grain, so by default the original's grain is added back at its original size
 (`prepare.add_grain`, saved as `<run>_grain.png`; the clean upscale stays as `<run>.png`, "Clean" in Runs).
-Any finished edit or upscale can also get the grain afterwards: **Add grain** in Runs (`POST /api/runs/{id}/grain`,
-measured on the run's original; **Remove grain** goes back). Compare sorts the picked results by model, then
+Any finished edit or upscale can also get the grain afterwards: Post-processing → Film grain in Runs
+(`POST /api/runs/{id}/post`, measured on the run's original; untick it to go back). Compare sorts the picked results by model, then
 parameter count and quantisation.
 Pixel-space upscalers to download: UltraSharp (V1/V2), UltraMix Balanced, Remacri, NMKD Siax, RealESRGAN 2x/4x.
 
@@ -185,7 +188,7 @@ the mask goes to the model, scaled to the full working size, and the result is p
 original at its full resolution. Outside the mask the original pixels stay exactly the same. Use it for
 small changes in large photos: a 20 MP photo otherwise comes back at ~1 MP. **Context** sets how much
 around the mask goes along (more context = better fit, less detail). The stage shows the crop as a dashed box. The
-edit comes out without the photo's grain; **Match film grain** (on by default) measures the grain around
+edit comes out without the photo's grain; **Film grain** under Post-processing (on by default) measures the grain around
 the mask (strength and how much it is the same in all colour channels) and adds matching noise inside it.
 
 The mask canvas zooms with ⌘/Ctrl + scroll or a pinch (1–8×); scroll or Space + drag pans, `0` resets.

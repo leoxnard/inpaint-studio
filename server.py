@@ -49,7 +49,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscale_width", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
+                  "upscale", "upscale_width", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
                   "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes")
 
 @asynccontextmanager
@@ -469,37 +469,6 @@ async def delete_run(run_id: str):
     return {"deleted": run_id}
 
 
-class GrainReq(BaseModel):
-    on: bool = True
-
-
-@app.post("/api/runs/{run_id}/grain")
-async def grain_run(run_id: str, req: GrainReq):
-    """Adds the original's grain to a finished result afterwards (prepare.add_grain) -> <run>_grain.png and
-    run["grain_url"], which the viewer and downloads then prefer; on: false goes back to the result without it."""
-    f = (RUNS / run_id / "run.json").resolve()
-    if f.parent.parent != RUNS.resolve() or not f.is_file():
-        raise HTTPException(404, "run not found")
-    run = json.loads(f.read_text())
-    if not req.on:
-        run.pop("grain_url", None)
-        save_run(run)
-        return run
-    if not (run.get("before_url") and run.get("result_url")):
-        raise HTTPException(400, "adding grain needs an original image (not for generated images)")
-    fixed = RUNS / run_id / "aligned.png"
-    result = Image.open(fixed) if run.get("aligned") and fixed.exists() else await _fetch_view(run["result_url"])
-    orig = await _fetch_view(run["before_url"])
-    out = await asyncio.to_thread(prepare.add_grain, orig, result, int(run.get("params", {}).get("seed") or 0))
-    out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
-    (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
-    name = f"{run_id}_grain.png"
-    await asyncio.to_thread(out.save, out_dir / "InpaintStudio" / name)
-    run["grain_url"] = view_url({"filename": name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={int(time.time() * 1000)}"
-    save_run(run)
-    return run
-
-
 @app.post("/api/runs/{run_id}/hide")
 async def hide_run(run_id: str):
     """Removes a run from the history without deleting any file (run.json gets hidden: true)."""
@@ -573,71 +542,152 @@ async def _fetch_view(url: str) -> Image.Image:
     return Image.open(io.BytesIO(r.content))
 
 
-class AlignReq(BaseModel):
-    auto: bool = False
+class PostReq(BaseModel):
+    auto: bool = False     # estimate the shift/scale (align.estimate) instead of dx, dy, scale
     dx: float = 0
     dy: float = 0
     scale: float = 1.0
     colors: bool = False
     warp: bool = False
-    poisson: bool = False
+    poisson: bool = False  # seamless edges (masked edits only)
+    grain: bool = False    # the original's film / sensor grain (prepare.add_grain)
     save: bool = False
 
 
-async def adjust_run(run: dict, req: AlignReq) -> dict:
-    """Align and fix the free edit (shift/scale, local warp, colours, seamless edge), paste it into the
-    original and write a preview (or, with save, the adjusted result: run dir + ComfyUI output)."""
-    run_id = run["id"]
-    if not (run.get("before_url") and run.get("raw_url") and run.get("mask_url")):
-        raise HTTPException(400, "adjusting needs a free edit + paste run (raw image and mask)")
-    if run_id not in _align_cache:
-        _align_cache.clear()  # keep only the run being adjusted in memory
-        _align_cache[run_id] = tuple([await _fetch_view(run[k]) for k in ("before_url", "raw_url", "mask_url")])
-    original, raw, mask = _align_cache[run_id]
-    feather = int(run.get("params", {}).get("feather") or 0)
-    outpaint = bool(run.get("params", {}).get("outpaint"))
+def fix_kind(run: dict) -> str | None:
+    """Which alignment / colour / warp fixes a run can get: 'paste' (free edit + paste or extend canvas: raw image
+    and mask), 'whole' (whole-image edit: the result itself against the original) or None (grain only)."""
+    if run.get("before_url") and run.get("raw_url") and run.get("mask_url"):
+        return "paste"
+    p = run.get("params") or {}
+    if (p.get("task") or "edit") == "edit" and p.get("use_mask") is False and not p.get("outpaint") \
+            and run.get("before_url") and run.get("result_url"):
+        return "whole"
+    return None
+
+
+def post_kind(run: dict) -> str | None:
+    """fix_kind as offered in Post-processing: extend canvas runs are blended at the end of the run and only get grain."""
+    return None if (run.get("params") or {}).get("outpaint") else fix_kind(run)
+
+
+async def _post_inputs(run: dict, kind: str | None) -> tuple:
+    """(original, image to fix, mask) for a run, kept in memory for the run being adjusted."""
+    key = f"{run['id']}:{kind}"
+    if key not in _align_cache:
+        _align_cache.clear()
+        if kind == "paste":
+            _align_cache[key] = tuple([await _fetch_view(run[k]) for k in ("before_url", "raw_url", "mask_url")])
+        elif kind == "whole":
+            _align_cache[key] = (await _fetch_view(run["before_url"]), await _fetch_view(run["result_url"]), None)
+        else:
+            _align_cache[key] = (await _fetch_view(run["before_url"]), None, None)
+    return _align_cache[key]
+
+
+async def fix_image(run: dict, req: PostReq, kind: str) -> tuple[Image.Image, dict]:
+    """Align and fix the edit (shift/scale, local warp, colours, seamless edge) and paste it into the original
+    (whole-image edits: the whole fixed image). Returns the image and the numbers for the UI."""
+    original, raw, mask = await _post_inputs(run, kind)
+    params = run.get("params") or {}
+    feather = int(params.get("feather") or 0)
+    outpaint = bool(params.get("outpaint"))
     if outpaint:   # extend canvas: old image moved to where the model put it, wide fade, colour gain, no seam cut
         mask = align.outpaint_paste_mask(mask.resize(raw.size), 0.09 * max(raw.size))
         original, mask, moved = await asyncio.to_thread(align.outpaint_align, original, raw, mask)
-    elif feather > 0 and "type=input" in run["mask_url"]:  # newer runs keep only the uploaded hard mask
+    elif mask is not None and feather > 0 and "type=input" in run["mask_url"]:  # newer runs keep only the uploaded hard mask
         mask = mask.convert("L").filter(ImageFilter.GaussianBlur(max(1.0, feather / 3)))
     result: dict[str, Any] = {}
     if outpaint and moved.get("moved"):
         result["reframed"] = {k: round(moved[k], 3) for k in ("dx", "dy", "scale")}
     dx, dy, scale = req.dx, req.dy, req.scale
     if req.auto:
-        est = await asyncio.to_thread(align.estimate, original, raw, mask)
+        est_mask = mask if mask is not None else Image.new("L", original.size, 0)
+        est = await asyncio.to_thread(align.estimate, original, raw, est_mask)
         dx, dy, scale = est["dx"], est["dy"], est["scale"]
         result["confidence"] = est["confidence"]
     if not 0.8 <= scale <= 1.25 or abs(dx) > 500 or abs(dy) > 500:
         raise HTTPException(400, "alignment values out of range")
-    opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson and not outpaint}
+    opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson and kind == "paste" and not outpaint}
     composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts,
                                               color_gain=outpaint)
     _, base = await asyncio.to_thread(align.compose, original, raw, mask, 0, 0, 1.0)
-    name = "aligned.png" if req.save else "aligned_preview.jpg"
-    composed.save(RUNS / run_id / name, quality=92)
-    url = f"/data/runs/{run_id}/{name}?t={int(time.time() * 1000)}"
     result.update({"dx": dx, "dy": dy, "scale": scale, **opts, "outside_diff": stats["outside_diff"],
-                   "unaligned_diff": base["outside_diff"], "url": url, "saved": req.save})
+                   "unaligned_diff": base["outside_diff"]})
+    return composed, result
+
+
+def _grain_mask_url(run: dict) -> str | None:
+    """Masked edits get grain only in the mask (crop & stitch: the mask on the full original)."""
+    p = run.get("params") or {}
+    if p.get("crop_box") and p.get("orig_mask"):
+        return input_mask_url(p["orig_mask"])
+    return run.get("mask_url")
+
+
+async def post_process(run: dict, req: PostReq, kind: str | None) -> dict:
+    """Post-processing of a finished run: the fixes (fix_image, when kind allows them), then the grain, on top
+    of each other. Without save a JPEG preview; with save the fixed image (aligned.png in the run dir, <run>_fixed.png)
+    and the grained one (<run>_grain.png, run["grain_url"]), which the viewer and downloads then prefer.
+    Steps that are off are removed from the run again."""
+    run_id = run["id"]
+    if not run.get("result_url"):
+        raise HTTPException(400, "the run has no result")
+    fixes = kind is not None and (req.auto or req.dx or req.dy or req.scale != 1 or req.colors or req.warp or req.poisson)
+    result: dict[str, Any] = {"kind": kind}
+    if fixes:
+        img, info = await fix_image(run, req, kind)
+        result.update(info)
+    elif kind is None and run.get("aligned") and (RUNS / run_id / "aligned.png").exists():
+        img = Image.open(RUNS / run_id / "aligned.png")   # extend canvas: the blend made at the end of the run
+    else:
+        img = await _fetch_view(run["result_url"])
+    out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
+    stamp = int(time.time() * 1000)
+    if req.save and kind is not None:
+        if fixes:
+            img.save(RUNS / run_id / "aligned.png")
+            url = f"/data/runs/{run_id}/aligned.png?t={stamp}"
+            run["aligned"] = {k: result[k] for k in ("dx", "dy", "scale", "colors", "warp", "poisson", "outside_diff")} | {"url": url}
+            try:  # next to <run>.png, so the files on disk match what the app shows
+                (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
+                img.save(out_dir / "InpaintStudio" / f"{run_id}_fixed.png")
+            except OSError:
+                pass
+        else:
+            run.pop("aligned", None)
+    if req.grain:
+        if not run.get("before_url"):
+            raise HTTPException(400, "grain needs an original image (not for generated images)")
+        original = (await _post_inputs(run, kind))[0]
+        mask_url = _grain_mask_url(run)
+        mask = await _fetch_view(mask_url) if mask_url else None
+        seed = int((run.get("params") or {}).get("seed") or 0)
+        img = await asyncio.to_thread(prepare.add_grain, original, img, seed, mask)
     if req.save:
-        run["aligned"] = {"dx": dx, "dy": dy, "scale": scale, **opts, "outside_diff": stats["outside_diff"], "url": url}
-        save_run(run)
-        out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
-        try:  # next to <run>.png, so the files on disk match what the app shows
+        if req.grain:
+            name = f"{run_id}_grain.png"
             (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
-            composed.save(out_dir / "InpaintStudio" / f"{run_id}_fixed.png")
-        except OSError:
-            pass
+            await asyncio.to_thread(img.save, out_dir / "InpaintStudio" / name)
+            run["grain_url"] = view_url({"filename": name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
+        else:
+            run.pop("grain_url", None)
+        save_run(run)
+        result["url"] = run.get("grain_url") or (run.get("aligned") or {}).get("url") or run["result_url"]
+    else:
+        await asyncio.to_thread(img.convert("RGB").save, RUNS / run_id / "post_preview.jpg", quality=92)
+        result["url"] = f"/data/runs/{run_id}/post_preview.jpg?t={stamp}"
+    result.update(saved=req.save, aligned=run.get("aligned"), grain_url=run.get("grain_url"))
     return result
 
 
-@app.post("/api/runs/{run_id}/align")
-async def align_run(run_id: str, req: AlignReq):
-    f = RUNS / run_id / "run.json"
-    if not f.is_file():
+@app.post("/api/runs/{run_id}/post")
+async def post_run(run_id: str, req: PostReq):
+    f = (RUNS / run_id / "run.json").resolve()
+    if f.parent.parent != RUNS.resolve() or not f.is_file():
         raise HTTPException(404, "run not found")
-    return await adjust_run(json.loads(f.read_text()), req)
+    run = json.loads(f.read_text())
+    return await post_process(run, req, post_kind(run))
 
 
 class UpscaleReq(BaseModel):
@@ -862,16 +912,21 @@ async def complete_run(job: dict, pid: str) -> None:
     res, before, raw, upscaled = first("out_result"), first("out_before"), first("out_raw"), first("out_upscaled")
     use_mask = params.get("use_mask") and params.get("mask")
     run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,
-               mask_url=input_mask_url(params["mask"]) if use_mask else None)
-    post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")}
+               mask_url=input_mask_url(params["mask"]) if use_mask else None, result_url=view_url(res) if res else None)
+    post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")} | {"auto": bool(params.get("post_align"))}
     if params.get("outpaint") and params.get("mode") != "paste" and before and raw:
         try:  # the plain paste stays available as <run>.png
             await outpaint_fix(run, params, view_url(before), view_url(raw))
         except Exception as e:
             print(f"outpaint blend failed for {run_id}: {e!r}")
-    if params.get("mode") == "paste" and use_mask and raw and any(post.values()):
-        try:  # automatic fixes; the plain paste stays available as <run>.png
-            await adjust_run(run, AlignReq(save=True, **post))
+    # automatic post-processing (free edit + paste, whole image): the plain result stays available as <run>.png;
+    # crop & stitch adds its grain when stitching, upscales below
+    kind = fix_kind(run) if (params.get("mode") == "paste" and use_mask) or not use_mask else None
+    fixes = kind is not None and any(post.values())
+    grain = bool(params.get("post_grain")) and (params.get("task") or "edit") == "edit" and not params.get("crop_box")
+    if res and (fixes or grain):
+        try:
+            await post_process(run, PostReq(save=True, grain=grain, **(post if fixes else {})), kind if fixes else None)
         except Exception as e:  # never fail the run because of the post-processing
             print(f"post-processing failed for {run_id}: {e!r}")
     if params.get("task") == "upscale" and params.get("grain") and res:

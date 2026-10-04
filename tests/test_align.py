@@ -98,3 +98,31 @@ def test_outpaint_align_moves_the_original_to_where_the_model_put_it():
     a, b = np.asarray(moved, float)[100:500, 300:700], np.asarray(raw, float)[100:500, 300:700]
     assert np.abs(a - b).mean() < 6                        # the moved original now lines up with the model's image
     assert (np.asarray(moved_mask)[-20:, 300:700] == 255).all()   # uncovered bottom counts as generated
+
+
+def test_whole_image_colours_fix_the_drift_but_keep_the_edit():
+    import numpy as np
+    from PIL import Image
+
+    import align
+    rng = np.random.default_rng(2)
+    o = np.asarray(Image.fromarray(rng.integers(60, 190, (120, 160, 3), dtype=np.uint8)).resize((640, 480), Image.BICUBIC), float)
+    edit = o * 0.85                                        # the model made everything darker ...
+    edit[180:300, 260:380] = [200, 30, 30]                 # ... and painted a red square (the asked-for change)
+    out, stats = align.compose(Image.fromarray(o.astype(np.uint8)), Image.fromarray(edit.astype(np.uint8)), None,
+                               0, 0, 1.0, colors=True)
+    out = np.asarray(out, float)
+    assert np.abs(out[:150] - o[:150]).mean() < 4          # the drift is gone where nothing was asked for
+    assert out[240, 320, 0] > 150 and out[240, 320, 1] < 80   # the red square stays red
+
+
+def test_whole_image_compose_without_fixes_is_the_edit():
+    import numpy as np
+    from PIL import Image
+
+    import align
+    rng = np.random.default_rng(3)
+    o = Image.fromarray(rng.integers(0, 255, (64, 64, 3), dtype=np.uint8))
+    e = Image.fromarray(rng.integers(0, 255, (64, 64, 3), dtype=np.uint8))
+    out, _ = align.compose(o, e, None, 0, 0, 1.0)
+    assert np.abs(np.asarray(out, int) - np.asarray(e, int)).max() <= 1

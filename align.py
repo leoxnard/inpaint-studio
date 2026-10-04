@@ -263,26 +263,41 @@ def outpaint_align(original: Image.Image, raw: Image.Image, mask: Image.Image) -
     return moved, moved_mask, {**est, "moved": True}
 
 
-def compose(original: Image.Image, raw: Image.Image, mask: Image.Image,
+UNCHANGED_LAB = 10.0   # whole image: a pixel counts as unchanged when its colour shift is this close to the typical one
+
+
+def unchanged(o: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """Whole-image edits have no mask. A colour / exposure drift moves most pixels by about the same Lab offset;
+    the parts the prompt really changed differ far more. Pixels near the typical (median) offset count as unchanged."""
+    blur = lambda a: cv2.GaussianBlur(a.astype(np.float32), (0, 0), max(1.0, max(a.shape[:2]) / 300))
+    diff = (cv2.cvtColor(blur(o) / 255, cv2.COLOR_RGB2LAB) - cv2.cvtColor(blur(m) / 255, cv2.COLOR_RGB2LAB))
+    med = np.median(diff.reshape(-1, 3), axis=0)
+    return np.linalg.norm(diff - med, axis=-1) < UNCHANGED_LAB
+
+
+def compose(original: Image.Image, raw: Image.Image, mask: Image.Image | None,
             dx: float, dy: float, scale: float,
             colors: bool = False, warp: bool = False, poisson: bool = False,
             color_gain: bool = False) -> tuple[Image.Image, dict]:
-    """Paste the masked area of the transformed (and optionally fixed) raw image into the original."""
+    """Paste the masked area of the transformed (and optionally fixed) raw image into the original.
+    mask None (whole-image edit): the whole transformed image is used, the fixes are measured on the pixels the
+    edit did not change (`unchanged`), and only edges the shift uncovers keep the original."""
     original = original.convert("RGB")
     raw = raw.convert("RGB").resize(original.size, Image.BICUBIC)
-    mask_l = mask.convert("L").resize(original.size, Image.BILINEAR)
+    whole = mask is None
+    mask_l = Image.new("L", original.size, 255) if whole else mask.convert("L").resize(original.size, Image.BILINEAR)
     moved = transform(raw, dx, dy, scale)
     valid = transform(Image.new("L", original.size, 255), dx, dy, scale)
     o = np.asarray(original, dtype=np.float64)
     m = np.asarray(moved, dtype=np.float64)
     mk = np.asarray(mask_l)
-    keep = (mk < 20) & (np.asarray(valid) > 250)
+    keep = (unchanged(o, m) if whole else mk < 20) & (np.asarray(valid) > 250)
     if warp and keep.any():
         m = fix_warp(o.astype(np.uint8), np.clip(m, 0, 255).astype(np.uint8), keep).astype(np.float64)
     if colors and keep.any():
         m = match_colors(o, m, keep, color_gain).astype(np.float64)
     weight = mk / 255.0
-    if poisson:
+    if poisson and not whole:
         weight = _seam_weight(o, m, mk > 127)
     weight = weight * (np.asarray(valid, dtype=np.float64) / 255.0)
     out = o * (1 - weight[..., None]) + m * weight[..., None]

@@ -75,20 +75,29 @@ def grain_noise(o: np.ndarray, where: np.ndarray, shape: tuple, seed: int = 0) -
     return noise / grain_std(noise, np.ones(noise.shape[:2], bool)).clip(1e-6)
 
 
-def add_grain(original: Image.Image, result: Image.Image, seed: int = 0) -> Image.Image:
-    """Upscalers come out clean: give `result` (an upscale of `original`) back the original's grain, at the
-    original's grain size (so it looks the same at the same print size). The strength is what the original
-    has minus what the result still has, both measured at the original's size."""
+def add_grain(original: Image.Image, result: Image.Image, seed: int = 0, mask: Image.Image | None = None) -> Image.Image:
+    """Upscalers and edit models come out clean: give `result` (same picture as `original`, any size) back the
+    original's grain, at the original's grain size (so it looks the same at the same print size). The strength is
+    what the original has minus what the result still has, both measured at the original's size.
+    mask (masked edits): only the masked area is new, so the grain is measured outside it in the original, inside
+    it in the result, and added only there (feathered by the mask)."""
     o = np.asarray(original.convert("RGB"), np.float32)
     r = np.asarray(result.convert("RGB"), np.float32)
     h, w = o.shape[:2]
     everywhere = np.ones((h, w), bool)
+    src, new = everywhere, everywhere
+    if mask is not None:
+        hard = np.asarray(mask.convert("L").resize((w, h), Image.BILINEAR)) > 127
+        if hard.any() and not hard.all():
+            src, new = ~hard, hard
     small = cv2.resize(r, (w, h), interpolation=cv2.INTER_AREA)
-    need = np.sqrt(np.maximum(grain_std(o, everywhere) ** 2 - grain_std(small, everywhere) ** 2, 0))
+    need = np.sqrt(np.maximum(grain_std(o, src) ** 2 - grain_std(small, new) ** 2, 0))
     if need.max() <= 0.5:
         return result.convert("RGB")
-    noise = cv2.resize(grain_noise(o, everywhere, o.shape, seed), (r.shape[1], r.shape[0]), interpolation=cv2.INTER_CUBIC)
+    noise = cv2.resize(grain_noise(o, src, o.shape, seed), (r.shape[1], r.shape[0]), interpolation=cv2.INTER_CUBIC)
     noise /= grain_std(cv2.resize(noise, (w, h), interpolation=cv2.INTER_AREA), everywhere).clip(1e-6)
+    if mask is not None:
+        noise *= (np.asarray(mask.convert("L").resize((r.shape[1], r.shape[0]), Image.BILINEAR), np.float32) / 255)[..., None]
     r += noise * need
     return Image.fromarray(np.clip(r, 0, 255).astype(np.uint8))
 

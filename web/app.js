@@ -1997,7 +1997,8 @@ $("selInput").onclick = async () => {
       const blob = await (await fetch(shownResult(run))).blob();
       return new File([blob], run.filename || `${run.serverId}.png`, { type: blob.type || "image/png" });
     }));
-    if (state.batch.length) $("batchClear").click();   // a new batch, not added to an open one
+    if (state.batch.length) $("batchClear").click();   // a new batch, not added to the open images
+    if (files.length > 1 && state.imgEl) clearImage();
     stopSelecting();
     if (files.length === 1) await setImageFile(files[0]); else openFiles(files);
     setView("create");
@@ -3151,12 +3152,17 @@ function openFiles(files) {
   const imgs = files.filter((f) => f.type.startsWith("image/")).sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
   if (!imgs.length) { showError("No images found."); return; }
   if (!ensureEditTask()) return;
-  if (imgs.length === 1 && !state.batch.length) { setImageFile(imgs[0]); return; }
+  if (imgs.length === 1 && !state.batch.length && !state.imgEl) { setImageFile(imgs[0]); return; }
+  if (!state.batch.length && state.imgEl) {   // a single image becomes the first item of the batch
+    state.batch.push({ file: null, label: state.imageLabel || "image", thumbUrl: state.imgEl.src, name: state.imageName,
+      srcW: state.srcW, srcH: state.srcH, status: "open", mask: null, maskMeta: null });
+    state.imgUrl = null;   // now owned by the batch item
+    state.batchIdx = 0;
+  }
   const items = imgs.map((file) => ({ file, label: file.name, thumbUrl: URL.createObjectURL(file),
     name: null, srcW: 0, srcH: 0, status: "open", mask: null, maskMeta: null }));
   const first = state.batch.length;   // an open batch grows
   state.batch.push(...items);
-  if (!first) state.batchIdx = -1;
   renderBatch();
   openBatchItem(first);
 }
@@ -3166,17 +3172,50 @@ function currentBatchItem() {
   return it && it.name === state.imageName ? it : null;
 }
 
-// "+" tile at the end of the image grid: opens the file picker
+// "+" tile at the end of the image grid: opens the file picker, the chosen images are added
 function addTile() {
   const add = document.createElement("label");
   add.className = "batch-item add";
   add.htmlFor = "fileInput";
-  // a batch grows, a single image is replaced (choosing several starts a batch)
-  const label = state.batch.length ? "Add images" : "Choose other images";
-  add.title = label;
-  add.setAttribute("aria-label", label);
+  add.title = "Add images";
+  add.setAttribute("aria-label", "Add images");
   add.textContent = "+";
   return add;
+}
+
+// "−" shown on a tile while hovered: removes that image
+function removeButton(onRemove) {
+  const x = document.createElement("span");
+  x.className = "remove";
+  x.setAttribute("role", "button");
+  x.title = "Remove this image";
+  x.setAttribute("aria-label", "Remove this image");
+  x.textContent = "−";
+  x.onclick = (e) => { e.stopPropagation(); e.preventDefault(); onRemove(); };
+  return x;
+}
+
+// back to the empty dropzone
+function clearImage() {
+  if (state.imgUrl) URL.revokeObjectURL(state.imgUrl);
+  state.imgUrl = null; state.imgEl = null;
+  state.imageName = null; state.imageLabel = null; state.srcW = 0; state.srcH = 0;
+  state.size = null;
+  resetMask();
+  $("imageInfo").textContent = "No image loaded.";
+  saveSession({ imageName: null, srcW: 0, srcH: 0, label: null, maskName: null, maskMeta: null });
+  renderBatch();
+  render();
+}
+
+function removeBatchItem(i) {
+  const [it] = state.batch.splice(i, 1);
+  if (it.file) URL.revokeObjectURL(it.thumbUrl);
+  if (!state.batch.length) { state.batchIdx = -1; clearImage(); return; }
+  if (i < state.batchIdx) { state.batchIdx--; renderBatch(); return; }
+  if (i > state.batchIdx) { renderBatch(); return; }
+  state.batchIdx = -1;   // the open image was removed: open its neighbour (its mask is gone with it)
+  openBatchItem(Math.min(i, state.batch.length - 1));
 }
 
 function renderBatch() {
@@ -3193,7 +3232,7 @@ function renderBatch() {
       b.className = "batch-item active";
       b.title = $("imageInfo").textContent;
       const img = document.createElement("img"); img.src = state.imgEl.src; img.alt = "";
-      b.append(img);
+      b.append(img, removeButton(clearImage));
       grid.append(b, addTile());
     }
     return;
@@ -3207,7 +3246,7 @@ function renderBatch() {
     const img = document.createElement("img"); img.src = it.thumbUrl; img.alt = "";
     const tag = document.createElement("span"); tag.className = "tag";
     tag.textContent = { open: "", masked: "mask", queued: "✓", nomask: "∅", error: "!", skipped: "skip" }[it.status] || "";
-    b.append(img, tag);
+    b.append(img, tag, removeButton(() => removeBatchItem(i)));
     b.onclick = () => openBatchItem(i);
     grid.appendChild(b);
   });
@@ -3488,7 +3527,7 @@ $("batchSkip").onclick = () => {
 $("batchAutoAll").onclick = () => batchSubmitAll(true);
 $("batchNoMaskAll").onclick = () => batchSubmitAll(false);
 $("batchClear").onclick = () => {
-  for (const it of state.batch) URL.revokeObjectURL(it.thumbUrl);
+  for (const it of state.batch) if (it.file) URL.revokeObjectURL(it.thumbUrl);
   state.batch = []; state.batchIdx = -1;
   renderBatch();
 };

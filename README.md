@@ -141,7 +141,7 @@ Click **Open folder…** or drop several images. They show up as a thumbnail gri
 - **Mask all** computes masks for every image (nothing is queued), so you can check them first.
 - **Submit all masked**, **Auto-mask and submit all** (images without a match are skipped) or
   **Submit all without mask**.
-- The **+** tile adds more images, **Clear batch** closes the folder.
+- The **+** tile adds more images (also to a single open image, which then becomes a batch). Hover a tile and click **−** to remove that image. **Clear batch** closes the folder.
 
 ## Upscaling
 

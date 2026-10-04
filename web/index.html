@@ -216,9 +216,21 @@
 
       <section class="sec upscale-only" id="upscaleSec">
         <h2 class="h">Upscale</h2>
+        <div class="seg" id="upscaleBySeg" role="group" aria-label="Target size by">
+          <button data-by="factor" aria-pressed="true">Factor</button>
+          <button data-by="width" aria-pressed="false">Width</button>
+          <button data-by="mb" aria-pressed="false">File size</button>
+        </div>
+        <select id="upscaleBy" hidden><option value="factor" selected>factor</option><option value="width">width</option><option value="mb">mb</option></select>
         <div class="grid2">
-          <label title="How much larger the result is (1–4). Upscalers with a fixed scale are resized to it.">Factor
+          <label class="by-factor" title="How much larger the result is (1–4). Upscalers with a fixed scale are resized to it.">Factor
             <input type="number" id="upscaleFactor" min="1" max="4" step="0.5" value="2">
+          </label>
+          <label class="by-width" title="Width of the result in px; the height follows the aspect ratio. Every image of a folder gets this width (1–4× its own size).">Width (px)
+            <input type="number" id="upscaleWidth" min="64" max="16384" step="1" value="3840">
+          </label>
+          <label class="by-mb" title="Rough size of the result PNG in MB. Estimated from how well the original compresses; the real file is usually within ±25 %. Every image of a folder is sized for it.">Size (MB, approx.)
+            <input type="number" id="upscaleMB" min="0.1" max="500" step="0.5" value="20">
           </label>
           <label class="seedvr2-only" title="SeedVR2: how the colours of the result are matched to the original. lab is the most faithful, wavelet keeps more of the new detail, adain is fastest (global tint), none skips it.">Color correction
             <select id="colorCorrection">
@@ -227,6 +239,7 @@
             </select>
           </label>
         </div>
+        <label class="check" title="Upscalers come out clean and lose the film or sensor grain. This adds the original's grain back at its original size, so the result keeps the camera look. The clean upscale stays available (Raw)."><input type="checkbox" id="upscaleGrain" checked> Keep the original's grain</label>
         <div class="sizeinfo" id="upscaleSizes"></div>
         <p class="warn" id="upscaleWarn" hidden></p>
         <p class="hint" id="upscaleHint"></p>

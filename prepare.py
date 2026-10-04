@@ -12,6 +12,8 @@ the mask, with a small overlap into the old image so the border blends.
 
 from __future__ import annotations
 
+import io
+
 import cv2
 import numpy as np
 from PIL import Image, ImageFilter
@@ -89,6 +91,23 @@ def add_grain(original: Image.Image, result: Image.Image, seed: int = 0) -> Imag
     noise /= grain_std(cv2.resize(noise, (w, h), interpolation=cv2.INTER_AREA), everywhere).clip(1e-6)
     r += noise * need
     return Image.fromarray(np.clip(r, 0, 255).astype(np.uint8))
+
+
+# Upscaled PNGs came out at ~0.7-1.15x the source's PNG bytes per pixel (UltraSharp, RealESRGAN, SeedVR2, with grain)
+UPSCALE_PNG_RATIO = 0.9
+
+
+def png_bytes_per_pixel(img: Image.Image) -> float:
+    """Bytes per pixel of `img` saved as PNG the way ComfyUI saves (compress level 4)."""
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "PNG", compress_level=4)
+    return buf.tell() / (img.size[0] * img.size[1])
+
+
+def size_for_megabytes(w: int, h: int, bpp: float, mb: float) -> tuple[int, int]:
+    """Output size whose upscaled PNG is roughly `mb` MB (10^6 bytes), from the source's PNG bytes per pixel."""
+    f = (mb * 1e6 / (UPSCALE_PNG_RATIO * bpp * w * h)) ** 0.5
+    return max(1, round(w * f)), max(1, round(h * f))
 
 
 def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: dict[str, int],

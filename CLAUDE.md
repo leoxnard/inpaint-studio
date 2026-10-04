@@ -27,7 +27,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   `/api/*`, `/data/*` and `/ws/jobs` only accept local Host/Origin (`local_origin`, extra hosts via
   `INPAINT_STUDIO_ALLOWED_HOSTS`).
 - `prepare.py` – crop & stitch (crop around the mask before the run, `stitch` back into the original after
-  it → `<run>_full.png`) and outpaint padding (`pad`). Pure functions, unit-tested; used by `create_job`.
+  it → `<run>_full.png`), outpaint padding (`pad`) and the grain of upscale runs (`add_grain` → `<run>_grain.png`). Pure functions, unit-tested; used by `create_job`.
 - `align.py` – post-processing of a paste-mode free edit: shift/scale alignment (phase
   correlation), local warp fix (DIS optical flow), colour/exposure match (Lab offset field) and
   seamless edges (graph-cut seam in a band around the mask edge), all measured outside the mask. `POST /api/runs/{id}/align`; also run

@@ -12,7 +12,7 @@ const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postColors", "postWarp", "postPoisson", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays",
-  "upscaleModel", "upscaleFactor", "colorCorrection", "cropStitch", "cropContext", "cropGrain", "outpaintColors",
+  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "colorCorrection", "cropStitch", "cropContext", "cropGrain", "outpaintColors",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 
@@ -1220,12 +1220,20 @@ async function uploadMaskBlob(blob) {
 }
 
 // Upscale task: the image is upscaled as its own run (no prompt, no mask)
-async function runUpscale() {
+const upscaleByWidth = () => $("upscaleBy").value === "width";
+function upscaleParams(image) {
+  const by = $("upscaleBy").value;
+  const size = by === "width" ? { width: parseInt($("upscaleWidth").value, 10) || 0 }
+    : by === "mb" ? { megabytes: parseFloat($("upscaleMB").value) || 0 } : { factor: parseFloat($("upscaleFactor").value) || 2 };
+  return { image, upscaler: $("upscaleModel").value, color_correction: $("colorCorrection").value, grain: $("upscaleGrain").checked, ...size };
+}
+async function runUpscale({ thenNext = false } = {}) {
   setSubmitting(true);
   try {
     saveForm();
-    await submitJob({ image: state.imageName, upscaler: $("upscaleModel").value,
-      factor: parseFloat($("upscaleFactor").value) || 2, color_correction: $("colorCorrection").value }, "/api/upscale");
+    await submitJob(upscaleParams(state.imageName), "/api/upscale");
+    const item = currentBatchItem();
+    if (item) { item.status = "queued"; renderBatch(); if (thenNext) openNextBatchItem(); }
   } catch (e) { showError(e.message); } finally { setSubmitting(false); }
 }
 
@@ -1235,7 +1243,7 @@ async function runEdit({ thenNext = false } = {}) {
   if (!generate && !state.imageName) { showError("Load an image first."); return; }
   if (state.task === "upscale") {
     if (!upscaling()) { showError("No upscaler installed. Open the Download Center to get one."); return; }
-    await runUpscale(); return;
+    await runUpscale({ thenNext }); return;
   }
   if (!presetById($("preset").value)) { showError("No model installed. Open the Download Center to get one."); return; }
   const useMask = !generate && maskOn();
@@ -1768,6 +1776,12 @@ function renderViewer() {
   $("runFile").textContent = run?.filename || "";
   // toolbar above the image
   $("rawSeg").hidden = !(run && hasRaw(run));
+  const [pasted, raw] = $("rawSeg").children;   // an upscale's "raw" is the clean upscale without the grain
+  const up = run && runTask(run) === "upscale";
+  pasted.textContent = up ? "With grain" : "Pasted result";
+  raw.textContent = up ? "Clean" : "Raw (full generated image)";
+  pasted.title = up ? "The upscale with the original's grain added back" : "The original with only the masked area replaced";
+  raw.title = up ? "The upscaler's output as it came out" : "The model's full generated image, before the masked area was pasted in";
   syncRawSeg();
   $("compareRow").hidden = !(done && run.beforeUrl);
   $("viewerTools").hidden = $("rawSeg").hidden && $("compareRow").hidden;
@@ -2266,7 +2280,12 @@ function loadRunSettings(run) {
   if (task !== state.task) setTask(task);
   if (task === "upscale") {
     if (installedUpscalers().some((u) => u.key === p.upscaler)) $("upscaleModel").value = p.upscaler;
-    if (p.upscale != null) $("upscaleFactor").value = p.upscale;
+    $("upscaleBy").value = p.upscale_width ? "width" : p.upscale_mb ? "mb" : "factor";
+    if (p.upscale_width) $("upscaleWidth").value = p.upscale_width;
+    else if (p.upscale_mb) $("upscaleMB").value = p.upscale_mb;
+    else if (p.upscale != null) $("upscaleFactor").value = p.upscale;
+    if (p.grain != null) $("upscaleGrain").checked = !!p.grain;
+    syncUpscaleBy();
     if (p.color_correction) $("colorCorrection").value = p.color_correction;
     renderModelPicker();
     saveForm();
@@ -2478,6 +2497,7 @@ function initApp() {
   syncModeUi();   // the stored mode decides which paste-only fields show
   $("aspect").dispatchEvent(new Event("change"));
   syncUpscaler();
+  syncUpscaleBy();
   state.task = ["generate", "upscale"].includes($("task").value) ? $("task").value : "edit";
   initModelPicker();
   promptPresets = initPromptPresets({ getTask: () => state.task });
@@ -3014,6 +3034,7 @@ function maskHasWhite(im) {
 }
 
 async function batchSubmitAll(withMask) {
+  if (state.task === "upscale") { await upscaleAll(); return; }
   if (!maskOn()) withMask = false;
   if (state.batchBusy) return;
   stashCurrentMask();
@@ -3048,6 +3069,34 @@ async function batchSubmitAll(withMask) {
         }
         await submitJob(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: withMask,
           megapixels: size.megapixels, resolution: size.resolution }));
+        it.status = "queued";
+      } catch (e) {
+        it.status = "error";
+        showError(`${it.label}: ${e.message}`);
+      }
+      renderBatch();
+    }
+  } finally {
+    setBatchBusy(false);
+    renderBatch();
+  }
+}
+
+// Upscale task: every open image of the folder becomes its own upscale run
+async function upscaleAll() {
+  if (state.batchBusy) return;
+  if (!upscaling()) { showError("No upscaler installed. Open the Download Center to get one."); return; }
+  const todo = state.batch.filter((it) => ["open", "masked", "nomask"].includes(it.status));
+  if (!todo.length) { showError("No open images left."); return; }
+  saveForm();
+  setBatchBusy(true);
+  let done = 0;
+  try {
+    for (const it of todo) {
+      $("batchInfo").textContent = `Queueing ${++done} / ${todo.length}: ${it.label}`;
+      try {
+        await ensureUploaded(it);
+        await submitJob(upscaleParams(it.name), "/api/upscale");
         it.status = "queued";
       } catch (e) {
         it.status = "error";
@@ -3204,9 +3253,12 @@ function applyMaskTexts() {
   const i = maskOn() ? 0 : 1;
   document.body.classList.toggle("no-mask", !maskOn());
   document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
-  $("batchSubmitNext").title = MASK_TEXTS.next[i];
-  $("batchNoMaskAll").textContent = MASK_TEXTS.all[i];
-  $("batchNoMaskAll").title = MASK_TEXTS.allTitle[i];
+  const up = state.task === "upscale";
+  $("batchSubmitNext").textContent = up ? "Upscale and next" : "Submit and next";
+  $("batchSubmitNext").title = up ? "Queue the current image for upscaling and open the next open one" : MASK_TEXTS.next[i];
+  $("batchNoMaskAll").textContent = up ? "Upscale all" : MASK_TEXTS.all[i];
+  $("batchNoMaskAll").title = up ? "Queue every open image for upscaling" : MASK_TEXTS.allTitle[i];
+  $("batchClear").textContent = up ? "Clear" : "Clear batch";
   setMode(state.mode);
   render();
 }
@@ -3419,6 +3471,15 @@ function initModelPicker() {
 function updateUpscaleSizes() {
   if (!upscaling()) return;
   const [w, h] = state.srcW ? [state.srcW, state.srcH] : [1024, 1024];
+  if ($("upscaleBy").value === "mb") { updateUpscaleMB(w, h); return; }
+  if (upscaleByWidth()) {
+    const W = parseInt($("upscaleWidth").value, 10) || w, H = Math.round(h * W / w), f = W / w;
+    const ok = f >= 1 && f <= 4.0005;
+    $("upscaleSizes").innerHTML = `${state.srcW ? "Now" : "Example"}: ${w} × ${h} px<br><b>→ ${W} × ${H} px (${(W * H / 1e6).toFixed(1)} MP, ×${f.toFixed(2)})</b>`
+      + (ok ? "" : `<br>Out of range: the factor must be 1–4 (${Math.ceil(w)}–${4 * w} px wide).`);
+    updateUpscaleWarn(w, h, f);
+    return;
+  }
   const f = parseFloat($("upscaleFactor").value) || 2;
   const line = (k) => {
     const W = Math.round(w * k), H = Math.round(h * k);
@@ -3428,6 +3489,22 @@ function updateUpscaleSizes() {
   const factors = [...new Set([2, 4, f])].sort((a, b) => a - b);
   $("upscaleSizes").innerHTML = `${state.srcW ? "Now" : "Example"}: ${w} × ${h} px<br>${factors.map(line).join("<br>")}`;
   updateUpscaleWarn(w, h, f);
+}
+
+// File size: the server estimates the output size from how well the image compresses (needs the upload)
+let mbPlanSeq = 0;
+async function updateUpscaleMB(w, h) {
+  const mb = parseFloat($("upscaleMB").value) || 0;
+  if (!state.imageName || !mb) { $("upscaleSizes").textContent = "Load an image to see the size."; $("upscaleWarn").hidden = true; return; }
+  const seq = ++mbPlanSeq;
+  try {
+    const p = await postJson("/api/upscale/plan", { image: state.imageName, megabytes: mb });
+    if (seq !== mbPlanSeq) return;
+    const ok = p.factor >= 1 && p.factor <= 4.0005;
+    $("upscaleSizes").innerHTML = `Now: ${w} × ${h} px<br><b>≈ ${mb} MB → ${p.width} × ${p.height} px (${(p.width * p.height / 1e6).toFixed(1)} MP, ×${p.factor.toFixed(2)})</b>`
+      + (ok ? "" : "<br>Out of range: the factor must be 1–4.");
+    updateUpscaleWarn(w, h, p.factor);
+  } catch (e) { if (seq === mbPlanSeq) $("upscaleSizes").textContent = e.message; }
 }
 
 // SeedVR2 samples the whole image in one go (only the VAE is tiled), so memory grows with the output size.
@@ -3450,6 +3527,21 @@ function updateUpscaleWarn(w, h, f) {
   warn.hidden = false;
 }
 $("upscaleFactor").addEventListener("input", updateUpscaleSizes);
+$("upscaleWidth").addEventListener("input", updateUpscaleSizes);
+$("upscaleMB").addEventListener("input", updateUpscaleSizes);
+// "Factor / Width" is a view of the hidden #upscaleBy select
+function syncUpscaleBy() {
+  for (const by of ["factor", "width", "mb"]) document.body.classList.toggle(`up-by-${by}`, $("upscaleBy").value === by);
+  for (const b of $("upscaleBySeg").children) b.setAttribute("aria-pressed", String(b.dataset.by === $("upscaleBy").value));
+  updateUpscaleSizes();
+}
+$("upscaleBySeg").addEventListener("click", (e) => {
+  const by = e.target.closest("button")?.dataset.by;
+  if (!by || by === $("upscaleBy").value) return;
+  $("upscaleBy").value = by;
+  syncUpscaleBy();
+  saveForm();
+});
 
 function syncTaskUi() {
   const gen = state.task === "generate";

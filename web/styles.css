@@ -707,6 +707,12 @@ button.busy::before {
 
 /* Upscale task: everything but the image, model and upscale options hides */
 body:not(.mode-upscale) .upscale-only, body:not(.up-seedvr2) .seedvr2-only { display: none !important; }
+body:not(.up-by-factor) .by-factor, body:not(.up-by-width) .by-width, body:not(.up-by-mb) .by-mb { display: none !important; }
+#upscaleBySeg { align-self: flex-start; }
+/* Upscale task with several images: no Batch… menu, its two plain buttons sit in the row */
+body.mode-upscale #batchMore { display: none !important; }
+body.mode-upscale #batchMenu { display: flex !important; }
+body.mode-upscale #variants { display: none !important; }   /* an upscale has no seeds to vary */
 body.mode-upscale #refsSec, body.mode-upscale #sizeSec, body.mode-upscale #modeCard, body.mode-upscale .maskpanel,
 body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !important; }
 /* five result filters do not fit a phone: they scroll sideways instead of being cut off */

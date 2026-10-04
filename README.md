@@ -122,6 +122,13 @@ The fixed result is saved as `<run>_fixed.png`. An optional upscaler from the Do
 SeedVR2 comes as 1.4B sharp (community distillation, needs a small pinned ComfyUI node), 3B, 7B and
 7B sharp in int8 / fp16; its memory estimate assumes a 4 MP result.
 
+The **Upscale** tab upscales images on their own (one image or a whole folder, like in Edit). The size is a
+factor (1–4×), a target width in px (each image of a folder gets that width) or a rough file size in MB
+(estimated from how well the original compresses as PNG, `prepare.size_for_megabytes`; usually within ±25 %). Upscalers come out clean and
+lose the camera's grain, so by default the original's grain is added back at its original size
+(`prepare.add_grain`, saved as `<run>_grain.png`; the clean upscale stays as `<run>.png`, "Clean" in Runs).
+Pixel-space upscalers to download: UltraSharp (V1/V2), UltraMix Balanced, Remacri, NMKD Siax, RealESRGAN 2x/4x.
+
 ## Requirements & setup
 Only macOS on Apple Silicon (32 GB RAM recommended). On first start the UI shows a **setup page**
 that finds an existing Comfy Desktop install or installs what is missing (pick steps, folders and

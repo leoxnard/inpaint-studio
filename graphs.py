@@ -528,15 +528,15 @@ SEEDVR2_COLORS = ("lab", "wavelet", "adain", "none")
 
 
 def _seedvr2(g: dict[str, Any], image: list, files: dict[str, str], factor: float, color_correction: str,
-             seed: int, key: str = "") -> list:
-    """SeedVR2 nodes after ComfyUI's utility_seedvr2 template (resize by the factor, one sampler step,
+             seed: int, key: str = "", size: tuple[int, int] | None = None) -> list:
+    """SeedVR2 nodes after ComfyUI's utility_seedvr2 template (resize by the factor, or to `size`, one sampler step,
     tiled VAE, colour correction); `key` prefixes the node ids so they fit into a larger graph."""
     tiles = {"tile_size": 512, "overlap": 128, "temporal_size": 4096, "temporal_overlap": 8}
     k = lambda n: f"{key}{n}"
     g.update({
         k("unet"): {"class_type": "UNETLoader", "inputs": {"unet_name": files["model"], "weight_dtype": "default"}},
         k("vae"): {"class_type": "VAELoader", "inputs": {"vae_name": files["vae"]}},
-        k("resize"): {"class_type": "ImageScaleBy", "inputs": {"image": image, "upscale_method": "lanczos", "scale_by": factor}},
+        k("resize"): _scale(image, factor, size),
         k("pre"): {"class_type": "SeedVR2Preprocess", "inputs": {"resized_images": [k("resize"), 0]}},
         k("encode"): {"class_type": "VAEEncodeTiled", "inputs": {"pixels": [k("pre"), 0], "vae": [k("vae"), 0], **tiles}},
         k("cond"): {"class_type": "SeedVR2Conditioning", "inputs": {"model": [k("unet"), 0], "vae_conditioning": [k("encode"), 0]}},
@@ -551,22 +551,30 @@ def _seedvr2(g: dict[str, Any], image: list, files: dict[str, str], factor: floa
     return [k("post"), 0]
 
 
+def _scale(image: list, factor: float, size: tuple[int, int] | None) -> dict:
+    """Lanczos resize by `factor`, or to exactly `size` (w, h) when given."""
+    if size:
+        return {"class_type": "ImageScale", "inputs": {"image": image, "upscale_method": "lanczos",
+                                                       "width": size[0], "height": size[1], "crop": "disabled"}}
+    return {"class_type": "ImageScaleBy", "inputs": {"image": image, "upscale_method": "lanczos", "scale_by": factor}}
+
+
 def build_upscale_graph(image: str, comp: dict[str, Any], files: dict[str, str], factor: float, prefix: str,
-                        color_correction: str = "lab", seed: int = 0) -> dict:
+                        color_correction: str = "lab", seed: int = 0, size: tuple[int, int] | None = None) -> dict:
     """Upscale an image as its own run. Classic upscalers (`UpscaleModelLoader`) are fitted to `factor`
-    when their native scale differs; SeedVR2 (`comp["engine"] == "seedvr2"`) follows ComfyUI's
+    (or to exactly `size`, from a target width) when their native scale differs; SeedVR2 (`comp["engine"] == "seedvr2"`) follows ComfyUI's
     utility_seedvr2 template: resize by the factor, one sampler step, tiled VAE, colour correction.
     `files`: the model file names ("model", and "vae" for SeedVR2)."""
     g: dict[str, Any] = {"load": {"class_type": "LoadImage", "inputs": {"image": image}}}
     if comp.get("engine") == "seedvr2":
-        up = _seedvr2(g, ["load", 0], files, factor, color_correction, seed)
+        up = _seedvr2(g, ["load", 0], files, factor, color_correction, seed, size=size)
     else:
         g["up_model"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": files["model"]}}
         g["up"] = {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["up_model", 0], "image": ["load", 0]}}
         up = ["up", 0]
         native = int(comp.get("scale") or factor)
-        if native != factor:
-            g["up_fit"] = {"class_type": "ImageScaleBy", "inputs": {"image": up, "upscale_method": "lanczos", "scale_by": factor / native}}
+        if size or native != factor:
+            g["up_fit"] = _scale(up, factor / native, size)
             up = ["up_fit", 0]
     g["out_result"] = {"class_type": "SaveImage", "inputs": {"images": up, "filename_prefix": prefix}}
     return g

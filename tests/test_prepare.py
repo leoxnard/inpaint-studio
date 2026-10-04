@@ -149,3 +149,11 @@ def test_add_grain_gives_an_upscale_the_originals_grain_back():
     target = prepare.grain_std(np.asarray(grainy, np.float32), everywhere).mean()
     assert abs(prepare.grain_std(small(out), everywhere).mean() - target) < 0.15 * target
     assert prepare.add_grain(clean.resize((96, 64)), clean).tobytes() == clean.tobytes()   # nothing to add
+
+
+def test_size_for_megabytes_scales_with_the_square_root_of_the_target():
+    w, h = prepare.size_for_megabytes(1000, 500, 1.0, 4.5)   # 4.5 MB / (0.9 B/px) = 5 MP
+    assert abs(w * h - 5e6) < 5e3 and abs(w / h - 2) < 0.01
+    assert abs(prepare.size_for_megabytes(1000, 500, 1.0, 18)[0] - 2 * w) <= 1
+    img = Image.new("RGB", (64, 64), (10, 20, 30))
+    assert 0 < prepare.png_bytes_per_pixel(img) < 0.5   # a flat image compresses well

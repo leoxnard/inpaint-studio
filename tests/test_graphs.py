@@ -248,6 +248,15 @@ def test_upscale_graph_fits_the_factor():
     assert "up_fit" not in g and g["out_result"]["inputs"]["images"] == ["up", 0]
 
 
+def test_upscale_graph_hits_a_target_width_exactly():
+    g = graphs.build_upscale_graph("in.png", {"scale": 2}, {"model": "up2.pth"}, 1.6, "InpaintStudio/x", size=(1600, 900))
+    assert g["up_fit"]["class_type"] == "ImageScale"
+    assert (g["up_fit"]["inputs"]["width"], g["up_fit"]["inputs"]["height"]) == (1600, 900)
+    g = graphs.build_upscale_graph("in.png", {"engine": "seedvr2"}, {"model": "s.safetensors", "vae": "v.safetensors"},
+                                   1.6, "InpaintStudio/x", size=(1600, 900))
+    assert g["resize"]["class_type"] == "ImageScale" and g["resize"]["inputs"]["width"] == 1600
+
+
 def test_seedvr2_graph_follows_the_template():
     g = graphs.build_upscale_graph("in.png", {"engine": "seedvr2"}, {"model": "s.safetensors", "vae": "v.safetensors"},
                                    3, "InpaintStudio/x", color_correction="wavelet", seed=7)

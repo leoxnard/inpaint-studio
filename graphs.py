@@ -261,15 +261,19 @@ CONTROL_FAMILIES = ("zimage", "qwen")   # families with a control patch node in 
 
 
 def apply_control(g: dict[str, Any], p: dict[str, Any], family: str) -> None:
-    """Control guidance (generate): the control image (edges via Canny, depth via Depth Anything 3, or a map the user
-    made) at the working size steers the model through a model patch. p["control"]: {type, image, strength, end,
-    is_map}; p["control_patch"], p["control_depth_model"]: file names."""
+    """Control guidance (generate): the control image (edges via Canny, depth via Depth Anything 3, a drawing whose lines
+    are used inverted, or a map the user made) at the working size steers the model through a model patch.
+    p["control"]: {type, image, strength, end, source: photo | drawing | map}; p["control_patch"], p["control_depth_model"]."""
     c = p["control"]
     g["ctrl_load"] = {"class_type": "LoadImage", "inputs": {"image": c["image"]}}
     g["ctrl_fit"] = {"class_type": "ImageScale", "inputs": {
         "image": ["ctrl_load", 0], "upscale_method": "lanczos", "width": p["work_w"], "height": p["work_h"], "crop": "center"}}
     hint = ["ctrl_fit", 0]
-    if not c.get("is_map"):
+    source = c.get("source") or ("map" if c.get("is_map") else "photo")
+    if source == "drawing":   # dark lines on white -> the white-on-black edge map the patches were trained on
+        g["ctrl_map"] = {"class_type": "ImageInvert", "inputs": {"image": hint}}
+        hint = ["ctrl_map", 0]
+    elif source == "photo":
         if c["type"] == "canny":
             g["ctrl_map"] = {"class_type": "Canny", "inputs": {"image": hint, "low_threshold": 0.3, "high_threshold": 0.6}}
         else:

@@ -267,7 +267,9 @@ LoRAs, Your files).
 ## Guidance (Generate)
 
 With Z-Image or Qwen-Image 2512, **Guidance** in Create keeps the layout of another image while generating:
-**Edges** (Canny) or **Depth** (Depth Anything 3). You can also give your own edge or depth map. The map is
+**Edges** (Canny) or **Depth** (Depth Anything 3). The image can be a photo, a **drawing** (dark lines on light, its
+lines are used directly) or your own edge or depth map. For a drawing that should become a photo, about strength
+0.55 with guidance in the first 60 % of the steps worked best with Z-Image; higher values keep the drawing style. The map is
 saved with the run.
 
 ## Files and folders

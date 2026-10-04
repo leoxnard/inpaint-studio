@@ -1498,12 +1498,15 @@ async def create_job(params: dict):
         key = presets.control_patch(params.get("family", ""), c["type"])
         if not key:
             raise HTTPException(400, f"no {c['type']} guidance for this model (Z-Image and Qwen-Image 2512 have it)")
-        need = [key] + (["da3_small"] if c["type"] == "depth" and not c.get("is_map") else [])
+        source = c.get("source") or ("map" if c.get("is_map") else "photo")
+        if source not in ("photo", "drawing", "map") or (source == "drawing" and c["type"] != "canny"):
+            raise HTTPException(400, "control source must be photo, drawing (edges only) or map")
+        need = [key] + (["da3_small"] if c["type"] == "depth" and source == "photo" else [])
         have = installer.installed(installer.load_config())
         missing = [presets.COMPONENTS[k]["title"] for k in need if not have[f"component:{k}"]]
         if missing:
             raise HTTPException(400, f"not installed: {', '.join(missing)} (see Download Center → Control)")
-        params["control"] = {"type": c["type"], "image": c["image"], "is_map": bool(c.get("is_map")),
+        params["control"] = {"type": c["type"], "image": c["image"], "source": source,
                              "strength": float(c.get("strength", presets.COMPONENTS[key].get("strength", 1.0))),
                              "end": float(c.get("end", 1.0))}
         params["control_patch"] = presets.file_name(presets.COMPONENTS[key])

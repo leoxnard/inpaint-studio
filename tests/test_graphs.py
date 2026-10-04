@@ -340,3 +340,5 @@ def test_control_guidance_chain():
     g = graphs.build_edit_graph({**base, "family": "qwen", "control": {"type": "canny", "image": "in/a.png", "is_map": True}})
     assert g["model"]["class_type"] == "QwenImageDiffsynthControlnet" and g["model"]["inputs"]["image"] == ["ctrl_fit", 0]
     assert "ctrl_map" not in g
+    g = graphs.build_edit_graph({**base, "family": "zimage", "control": {"type": "canny", "image": "in/a.png", "source": "drawing"}})
+    assert g["ctrl_map"]["class_type"] == "ImageInvert" and g["model"]["inputs"]["image"] == ["ctrl_map", 0]

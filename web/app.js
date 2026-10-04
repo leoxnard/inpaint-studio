@@ -1950,7 +1950,10 @@ function settingsRows(run) {
     ["CFG", p.cfg ?? ""],
   ];
   if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
-  if (p.control) rows.push(["Guidance", `${p.control.type === "depth" ? "Depth" : "Edges"}${p.control.is_map ? " (own map)" : ""}, ${p.control.strength}`]);
+  if (p.control) {
+    const src = { drawing: " from a drawing", map: " (own map)" }[p.control.source || (p.control.is_map ? "map" : "")] || "";
+    rows.push(["Guidance", `${p.control.type === "depth" ? "Depth" : "Edges"}${src}, ${p.control.strength}`]);
+  }
   if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
   if (p.clean_overlays) rows.push(["Watermarks", "Removed"]);
   if (p.remove_bg) rows.push(["Background", "Removed (transparent)"]);
@@ -3034,13 +3037,16 @@ const guidePatch = (type) => (state.setup?.components || []).find((c) => c.kind 
 function guideMissing() {
   const t = state.guide.type;
   if (!t) return [];
-  const need = [guidePatch(t), t === "depth" && !$("guideIsMap").checked ? (state.setup?.components || []).find((c) => c.key === "da3_small") : null];
+  const need = [guidePatch(t), t === "depth" && $("guideSource").value === "photo" ? (state.setup?.components || []).find((c) => c.key === "da3_small") : null];
   return need.filter((c) => c && !c.installed);
 }
 function renderGuide() {
   $("guideSec").hidden = !guideFamily();
   for (const b of $("guideType").children) b.classList.toggle("active", b.dataset.type === state.guide.type);
   $("guideBody").hidden = !state.guide.type;
+  const drawing = $("guideSource").querySelector('[value="drawing"]');
+  drawing.disabled = state.guide.type === "depth";   // a drawing has lines, not depth
+  if (drawing.disabled && $("guideSource").value === "drawing") $("guideSource").value = "photo";
   const grid = $("guideGrid");
   grid.textContent = "";
   if (state.guide.image) {
@@ -3074,7 +3080,7 @@ $("guideType").addEventListener("click", (e) => {
   if (patch?.strength) { $("guideStrength").value = patch.strength; $("guideStrength").dispatchEvent(new Event("input")); }
   renderGuide(); syncRunButtons();
 });
-$("guideIsMap").addEventListener("change", renderGuide);
+$("guideSource").addEventListener("change", renderGuide);
 $("guideInput").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   e.target.value = "";
@@ -3090,7 +3096,7 @@ $("guideInput").addEventListener("change", async (e) => {
 // what editParams sends for Generate (null when guidance is off or incomplete)
 function guideParams() {
   if (state.task !== "generate" || !guideFamily() || !state.guide.type || !state.guide.image) return null;
-  return { type: state.guide.type, image: state.guide.image, is_map: $("guideIsMap").checked, strength: num("guideStrength") };
+  return { type: state.guide.type, image: state.guide.image, source: $("guideSource").value, strength: num("guideStrength") };
 }
 
 // Thumbnail of a reference: the crop when there is one (drawn on a canvas, works in every browser)

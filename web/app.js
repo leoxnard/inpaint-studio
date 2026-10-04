@@ -1174,7 +1174,15 @@ function setSubmitting(on) {
   $("runEdit").textContent = on ? "Adding to queue..." : runLabel();
 }
 
-const runLabel = () => (upscaling() ? "Add upscale to queue" : state.task === "generate" ? "Add image to queue" : "Add edit to queue");
+// With a folder open the main button queues the whole batch; "Only this image" queues the open one
+const batchMode = () => !!state.batch?.length && state.task !== "generate";   // state.batch is set further down
+const runLabel = () => batchMode()
+  ? `${upscaling() ? "Upscale" : "Add"} all ${batchTodo(maskOn()).length} to queue`
+  : upscaling() ? "Add upscale to queue" : state.task === "generate" ? "Add image to queue" : "Add edit to queue";
+function syncRunButtons() {
+  if (!state.submitting) $("runEdit").textContent = runLabel();
+  $("runOne").hidden = !batchMode();
+}
 
 // Runs have no numbers; their label is what they are doing or how long they took.
 // Times come from the server (started/took), so a page reload does not reset them.
@@ -1524,7 +1532,6 @@ function renderQueueLabel() {
   const n = state.jobs ? state.jobs.size : 0;
   $("runsBadge").hidden = !n;
   $("runsBadge").textContent = `${n} active`;
-  $("cancelEdit").hidden = !n;
 }
 
 // Cancelling takes a moment (ComfyUI stops at the end of the current step): until the job is gone
@@ -2125,10 +2132,6 @@ async function deleteRun(run) {
   } catch (e) { showError(e.message); }
 }
 
-$("cancelEdit").onclick = () => {
-  const job = (state.run && state.jobs.get(state.run.id)) || [...state.jobs.values()].find((j) => j.status === "running");
-  if (job) cancelJob(job); else showError("No queued or running run.");
-};
 
 function loadImg(url) {
   return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
@@ -2600,7 +2603,8 @@ function initApp() {
   $("moreModels").onclick = () => showSetup({ section: "models" });
   $("taskTabs").addEventListener("click", (e) => { if (e.target.dataset.task) setTask(e.target.dataset.task); });
   $("opacity").addEventListener("input", render);
-  $("runEdit").onclick = () => runEdit();
+  $("runEdit").onclick = () => (batchMode() ? batchSubmitAll(maskOn()) : runEdit());
+  $("runOne").onclick = () => runEdit();
   $("maskText").addEventListener("keydown", (e) => { if (e.key === "Enter") computeMask(); });
   setMode("paint");
   renderHistory();
@@ -2613,6 +2617,7 @@ function syncModeUi() {
   refreshSizeDebounced();
   syncKeepNote();
   syncPostOptions();
+  syncRunButtons();
   syncAreaCards();
   if (state.maskUiReady) applyMaskTexts();  // not during module init (applyMaskMode runs it later)
 }
@@ -3065,6 +3070,7 @@ function addTile() {
 }
 
 function renderBatch() {
+  syncRunButtons();
   $("batchWrap").hidden = !state.batch.length;
   $("batchClear").hidden = !state.batch.length;
   $("dropzone").hidden = !!(state.imgEl || state.batch.length);
@@ -3183,13 +3189,17 @@ function maskHasWhite(im) {
   return false;
 }
 
+// open images a submit-all queues; "without mask" also takes images where auto-masking found nothing
+function batchTodo(withMask) {
+  if (state.task === "upscale") return state.batch.filter((it) => ["open", "masked", "nomask"].includes(it.status));
+  return state.batch.filter((it) => it.status === "open" || it.status === "masked" || (!withMask && it.status === "nomask"));
+}
 async function batchSubmitAll(withMask) {
   if (state.task === "upscale") { await upscaleAll(); return; }
   if (!maskOn()) withMask = false;
   if (state.batchBusy) return;
   stashCurrentMask();
-  // "without mask" also takes images where auto-masking found nothing
-  const todo = state.batch.filter((it) => it.status === "open" || it.status === "masked" || (!withMask && it.status === "nomask"));
+  const todo = batchTodo(withMask);
   if (!todo.length) { showError("No open images in the batch."); return; }
   if (withMask && !$("maskText").value.trim()) { showError("Enter what to mask first."); return; }
   setBatchBusy(true);
@@ -3236,7 +3246,7 @@ async function batchSubmitAll(withMask) {
 async function upscaleAll() {
   if (state.batchBusy) return;
   if (!upscaling()) { showError("No upscaler installed. Open the Download Center to get one."); return; }
-  const todo = state.batch.filter((it) => ["open", "masked", "nomask"].includes(it.status));
+  const todo = batchTodo(false);
   if (!todo.length) { showError("No open images left."); return; }
   saveForm();
   setBatchBusy(true);
@@ -3280,7 +3290,7 @@ function maskCanvasFromImage(im) {
 
 function setBatchBusy(on) {
   state.batchBusy = on;
-  for (const id of ["batchSkip", "batchMaskAll", "batchSubmitMasked", "batchAutoAll", "batchNoMaskAll"]) $(id).disabled = on;
+  for (const id of ["batchSkip", "batchMaskAll", "batchSubmitMasked", "batchAutoAll", "batchNoMaskAll", "runEdit", "runOne"]) $(id).disabled = on;
 }
 
 // step 1 for the whole batch: masks only, nothing is queued
@@ -3405,6 +3415,7 @@ function applyMaskTexts() {
   document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
   $("keepWholeRow").hidden = !wholeImage();
   syncPostOptions();
+  syncRunButtons();
   syncKeepNote();
   const up = state.task === "upscale";
   $("batchNoMaskAll").textContent = up ? "Upscale all" : MASK_TEXTS.all[i];
@@ -3792,7 +3803,7 @@ function syncTaskUi() {
     : fam === "qwen_edit" ? "Experimental: 20B model, slow on 32 GB." : "";
   hint.textContent = text;
   hint.hidden = !text;
-  if (!state.submitting) $("runEdit").textContent = runLabel();
+  syncRunButtons();
   renderRefs();
   promptPresets?.refresh();
 }

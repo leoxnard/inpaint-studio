@@ -584,7 +584,7 @@ details.sec { padding-top: 12px; }
 .runbox { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
 #settingsCol .runbox .row > button.big { flex: 1; }
 button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
-.runbox .row #cancelEdit { min-height: 52px; }
+.runbox .row #runOne { min-height: 44px; flex: none; }
 .toast { background: var(--ink); color: var(--on-ink); }
 .toast.error { background: var(--canvas); color: var(--bad); border: 1px solid var(--bad); }
 .toast a { color: inherit; font-weight: 600; white-space: nowrap; }

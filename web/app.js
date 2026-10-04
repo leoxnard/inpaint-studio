@@ -15,12 +15,20 @@ const PERSIST = [
   "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleWidth", "upscaleMB", "upscaleGrain", "upscaleGrainStrength", "grainStrength", "colorCorrection", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
+// Post-processing options start on (the HTML default) and keep a stored value only once the user clicked them
+const POST_OPTIONS = ["postAlign", "postColors", "postWarp", "postPoisson", "postGrain"];
+const TOUCHED_KEY = "inpaint-studio-touched-v1";
+function touchedOptions() {
+  try { return new Set(JSON.parse(localStorage.getItem(TOUCHED_KEY) || "[]")); } catch { return new Set(); }
+}
 
 function loadForm() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+    const touched = touchedOptions();
     for (const id of PERSIST) {
       if (!(id in saved)) continue;
+      if (POST_OPTIONS.includes(id) && !touched.has(id)) continue;
       const el = $(id);
       if (el.type === "checkbox") el.checked = !!saved[id];
       else el.value = saved[id];
@@ -2571,6 +2579,14 @@ function initApp() {
   bindOutput("tolerance", "toleranceOut", (v) => `${v}`);
   bindOutput("opacity", "opacityOut", (v) => `${Math.round(v * 100)}%`);
   for (const id of PERSIST) $(id).addEventListener("change", saveForm);
+  for (const id of POST_OPTIONS) {
+    $(id).addEventListener("change", (e) => {
+      if (!e.isTrusted) return;   // a click, not "Load settings in Create"
+      const touched = touchedOptions();
+      touched.add(id);
+      try { localStorage.setItem(TOUCHED_KEY, JSON.stringify([...touched])); } catch { /* ignore */ }
+    });
+  }
   $("aspect").addEventListener("change", refreshSizeDebounced);
   for (const id of ["unet", "clip", "vae"]) $(id).addEventListener("change", updateOverrideHint);
   for (const id of ["megapixels", "resolution"]) {

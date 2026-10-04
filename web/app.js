@@ -2162,6 +2162,13 @@ function tileImage(run, pic) {
   const img = document.createElement("img"); img.src = run.resultUrl; img.alt = ""; img.loading = "lazy"; pic.append(img);
   return img;
 }
+// model of a run for the result tiles: the upscaler, or the preset with its quantisation
+function runModelName(run) {
+  const p = run.params || {};
+  if (runTask(run) === "upscale") return (state.setup?.components || []).find((c) => c.key === p.upscaler)?.title || p.upscaler || "";
+  const model = presetById(p.preset)?.title || (p.unet || "").replace(/\.(gguf|safetensors)$/, "");
+  return model && p.quant ? `${model} · ${p.quant}` : model;
+}
 // "W × H" of the result: the working size first, then the loaded image (crop & stitch results are larger)
 function sizeLabel(el, run, img) {
   const set = (w, h) => { el.textContent = w ? `${w} × ${h}` : ""; };
@@ -2193,8 +2200,10 @@ function renderHistory() {
     if (run.size?.work_w) pic.style.aspectRatio = `${run.size.work_w} / ${run.size.work_h}`;
     const img = tileImage(run, pic);
     const meta = document.createElement("span"); meta.className = "rmeta";
+    const model = document.createElement("span"); model.className = "rmodel"; model.textContent = runModelName(run);
+    model.title = model.textContent;
     const l = document.createElement("span"); sizeLabel(l, run, img);
-    meta.append(l);
+    meta.append(model, l);
     if (run.status === "error") { const st = document.createElement("span"); st.className = "strong"; st.textContent = "Failed"; meta.append(st); }
     if (pickable) {   // which picks share the source image of the first pick
       const first = cmpRuns()[0];

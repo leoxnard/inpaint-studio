@@ -605,7 +605,9 @@ button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
 .rtile.failed .rpic { opacity: .45; }
 .rtile.removed .rpic { opacity: .55; }
 .rtile.removed:hover .rpic { opacity: 1; }
-.rmeta { padding: 0 4px 4px; font-size: 12px; display: flex; justify-content: space-between; gap: 4px; }
+.rmeta { padding: 0 4px 4px; font-size: 12px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 4px; }
+.rmodel { flex-basis: 100%; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; }
+.rmodel:empty { display: none; }
 /* queue cards */
 .queue { display: flex; flex-direction: column; gap: 8px; }
 .qcard { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--hairline); border-radius: var(--r-card); }

@@ -1228,23 +1228,23 @@ function upscaleParams(image) {
     : by === "mb" ? { megabytes: parseFloat($("upscaleMB").value) || 0 } : { factor: parseFloat($("upscaleFactor").value) || 2 };
   return { image, upscaler: $("upscaleModel").value, color_correction: $("colorCorrection").value, grain: $("upscaleGrain").checked, ...size };
 }
-async function runUpscale({ thenNext = false } = {}) {
+async function runUpscale() {
   setSubmitting(true);
   try {
     saveForm();
     await submitJob(upscaleParams(state.imageName), "/api/upscale");
     const item = currentBatchItem();
-    if (item) { item.status = "queued"; renderBatch(); if (thenNext) openNextBatchItem(); }
+    if (item) { item.status = "queued"; renderBatch(); }
   } catch (e) { showError(e.message); } finally { setSubmitting(false); }
 }
 
-async function runEdit({ thenNext = false } = {}) {
+async function runEdit() {
   if (state.submitting) return;
   const generate = state.task === "generate";
   if (!generate && !state.imageName) { showError("Load an image first."); return; }
   if (state.task === "upscale") {
     if (!upscaling()) { showError("No upscaler installed. Open the Download Center to get one."); return; }
-    await runUpscale({ thenNext }); return;
+    await runUpscale(); return;
   }
   if (!presetById($("preset").value)) { showError("No model installed. Open the Download Center to get one."); return; }
   const useMask = !generate && maskOn();
@@ -1274,7 +1274,7 @@ async function runEdit({ thenNext = false } = {}) {
     }
     await submitVariants(params);
     const item = currentBatchItem();
-    if (item) { item.status = "queued"; renderBatch(); if (thenNext) openNextBatchItem(); }
+    if (item) { item.status = "queued"; renderBatch(); }
   } catch (e) {
     showError(e.message);
   } finally {
@@ -2981,6 +2981,7 @@ function addTile() {
 
 function renderBatch() {
   $("batchWrap").hidden = !state.batch.length;
+  $("batchClear").hidden = !state.batch.length;
   $("dropzone").hidden = !!(state.imgEl || state.batch.length);
   const grid = $("batchGrid");
   grid.hidden = !$("dropzone").hidden;
@@ -3194,7 +3195,7 @@ function maskCanvasFromImage(im) {
 
 function setBatchBusy(on) {
   state.batchBusy = on;
-  for (const id of ["batchSubmitNext", "batchSkip", "batchMaskAll", "batchSubmitMasked", "batchAutoAll", "batchNoMaskAll"]) $(id).disabled = on;
+  for (const id of ["batchSkip", "batchMaskAll", "batchSubmitMasked", "batchAutoAll", "batchNoMaskAll"]) $(id).disabled = on;
 }
 
 // step 1 for the whole batch: masks only, nothing is queued
@@ -3271,7 +3272,6 @@ async function batchSubmitMasked() {
 
 $("batchMaskAll").onclick = batchMaskAll;
 $("batchSubmitMasked").onclick = batchSubmitMasked;
-$("batchSubmitNext").onclick = () => runEdit({ thenNext: true });
 $("batchSkip").onclick = () => {
   const it = currentBatchItem();
   if (!it) { showError("No batch image open."); return; }
@@ -3287,15 +3287,9 @@ $("batchClear").onclick = () => {
   state.batch = []; state.batchIdx = -1;
   renderBatch();
 };
-$("batchMore").onclick = () => {
-  const open = $("batchMenu").hidden;
-  $("batchMenu").hidden = !open;
-  $("batchMore").setAttribute("aria-expanded", String(open));
-};
 
 // ------------------------------------------------------------------ setup page & no-mask mode
 const MASK_TEXTS = {
-  next: ["Queue the current image with its mask and open the next open one", "Queue the current image and open the next open one"],
   all: ["Submit all without mask", "Submit all"],
   allTitle: ["Queue every open image without a mask (whole image is edited)", "Queue every open image"],
 };
@@ -3327,8 +3321,6 @@ function applyMaskTexts() {
   $("keepWholeRow").hidden = !wholeImage();
   syncKeepNote();
   const up = state.task === "upscale";
-  $("batchSubmitNext").textContent = up ? "Upscale and next" : "Submit and next";
-  $("batchSubmitNext").title = up ? "Queue the current image for upscaling and open the next open one" : MASK_TEXTS.next[i];
   $("batchNoMaskAll").textContent = up ? "Upscale all" : MASK_TEXTS.all[i];
   $("batchNoMaskAll").title = up ? "Queue every open image for upscaling" : MASK_TEXTS.allTitle[i];
   $("batchClear").textContent = up ? "Clear" : "Clear batch";

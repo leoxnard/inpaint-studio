@@ -57,27 +57,23 @@
         <div class="row wrap">
           <label class="btn small" for="folderInput">Open folder…</label>
           <input type="file" id="folderInput" webkitdirectory multiple hidden>
+          <button id="batchClear" class="small" hidden>Clear batch</button>
         </div>
         <div id="batchWrap" class="stack" hidden>
           <div class="hint" id="batchInfo"></div>
-          <div class="row wrap">
-            <button id="batchSubmitNext" title="Queue the current image with its mask and open the next open one">Submit and next</button>
+          <div class="row wrap" id="batchMenu">
             <button id="batchSkip" title="Skip this image: it is left out of the batch (also of the submit-all buttons) and the next open image opens. Submitting it later still works.">Skip</button>
-            <button id="batchMore" aria-expanded="false" aria-controls="batchMenu">Batch…</button>
-          </div>
-          <div class="row wrap" id="batchMenu" hidden>
             <button id="batchMaskAll" class="needs-mask" title="Compute masks for all open images one after another (nothing is queued). Then review them with ← → and submit.">Mask all</button>
             <button id="batchSubmitMasked" class="needs-mask" title="Queue every image that has a mask (computed or painted)">Submit all masked</button>
             <button id="batchAutoAll" class="needs-mask" title="Compute a mask with the current mask settings for every open image and queue them; images where nothing is found are skipped">Auto-mask and submit all</button>
             <button id="batchNoMaskAll" title="Queue every open image without a mask (whole image is edited)">Submit all without mask</button>
-            <button id="batchClear">Clear batch</button>
           </div>
           <div class="hint" id="batchKeysHint">← → switch images.</div>
         </div>
       </section>
 
       <section class="sec" id="refsSec" hidden>
-        <h2 class="h">Reference images</h2>
+        <h2 class="h">Reference images <span class="badge" title="Works, but results with reference images are not always reliable yet">Experimental</span></h2>
         <p class="hint" id="refsHint"></p>
         <div class="ref-list" id="refGrid"></div>
         <input type="file" id="refInput" accept="image/*" multiple hidden>

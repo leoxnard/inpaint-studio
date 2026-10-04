@@ -712,8 +712,6 @@ body:not(.mode-upscale) .upscale-only, body:not(.up-seedvr2) .seedvr2-only { dis
 body:not(.up-by-factor) .by-factor, body:not(.up-by-width) .by-width, body:not(.up-by-mb) .by-mb { display: none !important; }
 #upscaleBySeg { align-self: flex-start; }
 /* Upscale task with several images: no Batch… menu, its two plain buttons sit in the row */
-body.mode-upscale #batchMore { display: none !important; }
-body.mode-upscale #batchMenu { display: flex !important; }
 body.mode-upscale #variants { display: none !important; }   /* an upscale has no seeds to vary */
 body.mode-upscale #refsSec, body.mode-upscale #sizeSec, body.mode-upscale #modeCard, body.mode-upscale .maskpanel,
 body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !important; }
@@ -759,6 +757,11 @@ body.cmp-active .runs-center .bigarea { height: max(360px, calc(100vh - 330px));
 .mc-strip { position: absolute; top: 0; bottom: 0; border-left: 1px solid rgba(255,255,255,.85); }
 .mc-strip:first-of-type { border-left: 0; }
 .mc-strip .mc-label { left: 50%; transform: translateX(-50%); }
+/* wide invisible grab area centred on a strip border */
+.mc-handle { position: absolute; top: 0; bottom: 0; width: 16px; margin-left: -8px; cursor: ew-resize; touch-action: none; z-index: 3; }
+.mc-handle::after { content: ""; position: absolute; top: 50%; left: 50%; width: 6px; height: 36px; transform: translate(-50%, -50%);
+  border-radius: var(--r-pill); background: rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+.mc-handle:hover::after, .mc-handle.active::after { background: #fff; height: 48px; }
 
 /* crop & stitch options under the area cards */
 .crop-opts { display: grid; gap: 8px; margin-top: 12px; }

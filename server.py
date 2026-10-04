@@ -171,11 +171,12 @@ async def healthz():
 
 @app.get("/api/status")
 async def status():
+    download = INSTALLER.progress()   # summed bytes of the download queue, for the topbar button
     try:
         q = await comfy_json("GET", "/queue")
     except HTTPException as e:
-        return {"comfy": False, "error": e.detail}
-    return {"comfy": True, "running": len(q["queue_running"]), "pending": len(q["queue_pending"])}
+        return {"comfy": False, "error": e.detail, "download": download}
+    return {"comfy": True, "running": len(q["queue_running"]), "pending": len(q["queue_pending"]), "download": download}
 
 
 # ---------------------------------------------------------------- setup (first run, optional masking)
@@ -626,7 +627,7 @@ async def upscale(req: UpscaleReq):
     have = installer.installed(cfg)
     missing = [k for k in [req.upscaler, *comp.get("needs", [])] if not have[f"component:{k}"]]
     if missing:
-        raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Downloads)")
+        raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Download Center)")
     if not 1 <= req.factor <= 4:
         raise HTTPException(400, "factor must be between 1 and 4")
     src = await _fetch_view(input_mask_url(req.image))
@@ -1024,7 +1025,7 @@ async def create_job(params: dict):
             have = installer.installed(installer.load_config())
             missing = [k for k in [params["upscaler"], *up.get("needs", [])] if not have[f"component:{k}"]]
             if missing:
-                raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Downloads)")
+                raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Download Center)")
             params.update(upscale_engine="seedvr2", upscale_vae=presets.file_name(presets.COMPONENTS[up["needs"][0]]),
                           color_correction=params.get("color_correction") or "lab")
     else:

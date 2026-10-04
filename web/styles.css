@@ -745,3 +745,9 @@ body.mode-outpaint:not(.task-generate) .outpaint-only { display: flex; }
 .op-tools .op-brush input { grid-column: 1 / -1; width: 100%; }
 body.mode-outpaint:not(.task-generate) #display.op-paint { cursor: crosshair; }
 .hint.warn-text { color: var(--bad); }
+
+/* topbar Downloads button: grey fill from left to right while downloads run */
+#setupBtn { position: relative; overflow: hidden; isolation: isolate; }
+#setupBtn::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 0; z-index: -1;
+  background: var(--selected); }
+#setupBtn.downloading::before { width: var(--dl, 0%); transition: width .6s ease; }

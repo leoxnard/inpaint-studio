@@ -94,3 +94,11 @@ def test_loras_belong_to_a_group_of_known_families():
         assert c["folder"] == "loras" and c["path"].endswith(".safetensors"), key
         assert c["families"] and set(c["families"]) <= grouped, key
         assert installer.valid_item(f"component:{key}")
+
+
+def test_progress_sums_the_whole_queue(monkeypatch):
+    inst = installer.Installer()
+    monkeypatch.setattr(installer.Installer, "running", property(lambda self: True))
+    inst.steps = {"a": {"state": "done", "size": 100}, "b": {"state": "running", "size": 200, "done": 50},
+                  "c": {"state": "pending", "size": 700}, "d": {"state": "cancelled", "size": 999}}
+    assert inst.progress() == {"done": 150, "total": 1000}

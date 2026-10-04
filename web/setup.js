@@ -91,7 +91,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     root.appendChild(inner);
 
     const head = el("div", "row wrap");
-    ui.title = el("h2", null, data.ready ? "Setup & downloads" : "Welcome to Inpaint Studio");
+    ui.title = el("h2", null, data.ready ? "Download Center" : "Welcome to Inpaint Studio");
     head.appendChild(ui.title);
     ui.back = el("button", "small", "Back to app");
     ui.back.style.marginLeft = "auto";
@@ -704,7 +704,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
       side.appendChild(stateTag(sam.id));
       if (sam.installed) side.appendChild(installedBadge());
       r.appendChild(side);
-      r.appendChild(el("div", "desc", "Computes masks from a text description. You can add it later under Downloads."));
+      r.appendChild(el("div", "desc", "Computes masks from a text description. You can add it later in the Download Center."));
       box.appendChild(r);
     }
 

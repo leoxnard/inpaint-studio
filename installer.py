@@ -128,6 +128,17 @@ def item_target(cfg: dict, item: str) -> tuple[str, Path, int]:
     return HF.format(repo=pr["repo"], rev="main", path=f["file"]), Path(cfg["models_dir"]) / "diffusion_models" / f["file"], f["size"]
 
 
+def item_size(item: str) -> int:
+    """Download size in bytes as listed in presets (0 for base steps, whose size is not known up front)."""
+    kind, _, rest = item.partition(":")
+    if kind == "component":
+        return presets.COMPONENTS.get(rest, {}).get("size", 0)
+    if kind == "model":
+        pid, _, q = rest.partition(":")
+        return presets.PRESETS.get(pid, {}).get("quants", {}).get(q, {}).get("size", 0)
+    return 0
+
+
 def item_title(item: str) -> str:
     kind, _, rest = item.partition(":")
     if kind == "component":
@@ -225,9 +236,23 @@ class Installer:
             if self.steps.get(s, {}).get("state") in ("pending", "running"):
                 continue
             self.steps.pop(s, None)  # re-queued after an error or cancel: move to the end
-            self.steps[s] = {"state": "pending", "title": item_title(s), "message": "", "done": 0, "total": None, "rate": 0}
+            self.steps[s] = {"state": "pending", "title": item_title(s), "message": "", "done": 0, "total": None, "rate": 0,
+                             "size": item_size(s)}
         if not self.running:
             self.task = asyncio.create_task(self._run(on_done))
+
+    def progress(self) -> dict | None:
+        """Bytes of the whole queue (finished, running and waiting downloads) while it runs, else None."""
+        if not self.running:
+            return None
+        done = total = 0
+        for st in self.steps.values():
+            if st["state"] not in ("pending", "running", "done"):
+                continue
+            size = st.get("size") or 0
+            total += size
+            done += size if st["state"] == "done" else min(st.get("done") or 0, size) if st["state"] == "running" else 0
+        return {"done": done, "total": total}
 
     def cancel(self, item: str | None = None) -> None:
         """Cancel one queued or running item, or the whole queue."""

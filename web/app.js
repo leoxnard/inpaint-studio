@@ -121,10 +121,25 @@ function loadImage(url) {
 const fmtTime = (s) => s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`;
 
 // ------------------------------------------------------------------ status pill
+// Downloads button in the topbar fills from left to right while the download queue runs (all items summed)
+function showDownloadProgress(d) {
+  const btn = $("setupBtn");
+  const on = !!(d && d.total);
+  btn.classList.toggle("downloading", on);
+  btn.style.setProperty("--dl", on ? `${Math.min(100, (100 * d.done) / d.total).toFixed(1)}%` : "0%");
+  btn.title = on ? `Downloading: ${Math.round((100 * d.done) / d.total)}% of ${(d.total / 1e9).toFixed(1)} GB`
+    : "Models, components and folders";
+}
+
+let statusTimer = null;
 async function pollStatus() {
+  clearTimeout(statusTimer);
   const pill = $("statusPill");
+  let downloading = false;
   try {
     const s = await api("/api/status");
+    showDownloadProgress(s.download);
+    downloading = !!s.download;
     if (s.comfy) {
       pill.className = "pill online";
       $("statusText").textContent = "ComfyUI running";
@@ -138,6 +153,7 @@ async function pollStatus() {
     pill.className = "pill offline";
     $("statusText").textContent = "Server unreachable";
   }
+  statusTimer = setTimeout(pollStatus, downloading ? 1500 : 5000);
 }
 
 // ------------------------------------------------------------------ models
@@ -660,7 +676,7 @@ function renderLoras() {
   });
   $("loraAdd").disabled = !avail.length || state.loras.length >= MAX_LORAS;
   const wrong = state.loras.filter((l) => l.name && !loraFits(l.name));
-  $("loraHint").textContent = !avail.length ? "No LoRAs yet. Download some in Downloads → LoRAs, or put .safetensors files into models/loras."
+  $("loraHint").textContent = !avail.length ? "No LoRAs yet. Download some in Download Center → LoRAs, or put .safetensors files into models/loras."
     : wrong.length ? `${wrong.map((l) => loraInfo(l.name).title).join(", ")}: made for ${loraGroup(wrong[0].name)}, not for this model.`
     : "Applied to the diffusion model, in this order.";
   $("loraHint").classList.toggle("warn-text", wrong.length > 0);
@@ -1217,7 +1233,7 @@ async function runEdit({ thenNext = false } = {}) {
   const generate = state.task === "generate";
   if (!generate && !state.imageName) { showError("Load an image first."); return; }
   if (upscaling()) { await runUpscale(); return; }
-  if (!presetById($("preset").value)) { showError("No model installed. Open Downloads to get one."); return; }
+  if (!presetById($("preset").value)) { showError("No model installed. Open the Download Center to get one."); return; }
   const useMask = !generate && maskOn();
   setSubmitting(true);
   try {
@@ -3189,7 +3205,7 @@ $("upscale").addEventListener("change", syncUpscaler);
 
 (async () => {
   pollStatus();
-  setInterval(pollStatus, 5000);
+
   let info = null;
   try { info = await api("/api/setup"); } catch { /* old server without setup: just start the app */ }
   if (info) { state.setup = info; applyMaskMode(info.mask_available); renderUpscalers(); renderLoras(); }

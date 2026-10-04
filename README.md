@@ -204,6 +204,10 @@ The same options are in Create and run automatically when the job is done.
 - Jobs keep running when you reload or close the page. The queue cannot be reordered or paused.
 - If the server restarts while ComfyUI keeps running, unfinished runs are followed again (without live
   progress). A crashed run can be queued again with **Retry**.
+- Shortcuts in Create: **B** paint, **E** erase, **W** wand, **G** bucket, **[ ]** brush size, **⌘↵** add to queue.
+- **Recent…** above the prompt and the mask field remember your last prompts and mask texts.
+- Hover a result tile to see the original on its right half. **Download for ComfyUI** saves the result with its
+  workflow inside: drop it onto ComfyUI to open the exact graph.
 
 **Variations:** the ×1 … ×8 menu next to the queue button runs the same edit several times, each with
 its own seed (random, or seed, seed + 1, …). They show as a strip under the image in Runs.
@@ -239,6 +243,16 @@ this Mac, downloaded, size).
 - Each preset brings the matching text encoder and VAE (`presets.py`).
 - **LoRAs:** a picked set per model line (speed, styles, camera angles, upscale). The picker shows which
   model line a LoRA is for, starts with its suggested strength and warns when it does not fit.
+- **Upscalers** and **Control** (guidance patches, Depth Anything) have their own sections.
+- **Your files:** import a model, LoRA, upscaler or other model file that is already on your Mac. It is
+  linked into the models folder, not copied, and **Remove** deletes only the link.
+- **Free memory** in the top bar unloads ComfyUI's models; next to it you see how much RAM is free.
+
+## Guidance (Generate)
+
+With Z-Image or Qwen-Image 2512, **Guidance** in Create keeps the layout of another image while generating:
+**Edges** (Canny) or **Depth** (Depth Anything 3). You can also give your own edge or depth map. The map is
+saved with the run.
 
 ## Files and folders
 

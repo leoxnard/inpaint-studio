@@ -115,6 +115,8 @@ def test_drop_counter_renames_in_output_dir(tmp_path, monkeypatch):
     (tmp_path / "InpaintStudio/r1/step_17_20_00001_.png").write_bytes(b"x")
     img = server.drop_counter({"filename": "step_17_20_00001_.png", "subfolder": "InpaintStudio/r1", "type": "output"})
     assert img["filename"] == "step_17_20.png" and (tmp_path / "InpaintStudio/r1/step_17_20.png").is_file()
+    again = server.drop_counter({"filename": "step_17_20_00001_.png", "subfolder": "InpaintStudio/r1", "type": "output"})
+    assert again["filename"] == "step_17_20.png"   # renamed by another server already
     missing = {"filename": "x_00001_.png", "subfolder": "", "type": "output"}
     assert server.drop_counter(missing) == missing
 

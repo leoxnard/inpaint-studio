@@ -134,11 +134,16 @@ async def wait_history(prompt_id: str, timeout: float = 300, cancelled: asyncio.
 
 def drop_counter(img: dict) -> dict:
     """Rename ComfyUI's 'name_00001_.png' to 'name.png'. Every run has its own prefix, so the
-    counter never matters; if the output folder is not reachable the name is kept."""
+    counter never matters; if the output folder is not reachable the name is kept. Already renamed
+    (a second server that shares the run folder finished the same run) also gives the new name."""
     new = re.sub(r"_\d{5}_(\.\w+)$", r"\1", img["filename"])
     src = (COMFY_OUTPUT or Path(installer.load_config()["output_dir"])) / img.get("subfolder", "") / img["filename"]
     dst = src.with_name(new)
-    if new == img["filename"] or img.get("type", "output") != "output" or not src.is_file() or dst.exists():
+    if new == img["filename"] or img.get("type", "output") != "output":
+        return img
+    if not src.exists() and dst.is_file():
+        return {**img, "filename": new}
+    if not src.is_file() or dst.exists():
         return img
     try:
         src.rename(dst)

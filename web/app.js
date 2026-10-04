@@ -1265,6 +1265,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
     clean_overlays: $("cleanOverlays").checked,
+    control: guideParams() || undefined,
     keep_whole: wholeImage() && $("keepWhole").checked && !removeBgOn(),
     remove_bg: removeBgOn() || undefined,
     loras: state.loras.filter((l) => l.name && l.strength),
@@ -1922,6 +1923,7 @@ function settingsRows(run) {
     ["CFG", p.cfg ?? ""],
   ];
   if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
+  if (p.control) rows.push(["Guidance", `${p.control.type === "depth" ? "Depth" : "Edges"}${p.control.is_map ? " (own map)" : ""}, ${p.control.strength}`]);
   if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
   if (p.clean_overlays) rows.push(["Watermarks", "Removed"]);
   if (p.remove_bg) rows.push(["Background", "Removed (transparent)"]);
@@ -2758,6 +2760,7 @@ function initApp() {
   if (state.task === "generate") refreshSize();
   bindOutput("threshold", "thresholdOut", (v) => (+v).toFixed(2));
   bindOutput("brushSize", "brushSizeOut", (v) => `${v} px`);
+  bindOutput("guideStrength", "guideStrengthOut", (v) => Number(v).toFixed(2));
   bindOutput("tolerance", "toleranceOut", (v) => `${v}`);
   bindOutput("opacity", "opacityOut", (v) => `${Math.round(v * 100)}%`);
   for (const id of PERSIST) $(id).addEventListener("change", saveForm);
@@ -2988,6 +2991,72 @@ function renderRefs() {
     add.textContent = "+";
     grid.appendChild(add);
   }
+}
+
+// Guidance (Generate with Z-Image / Qwen-Image 2512): edges or depth of another image steer the layout
+state.guide = { type: "", image: null, label: "" };
+const guideFamily = () => ["zimage", "qwen"].includes(currentFamily());
+const guidePatch = (type) => (state.setup?.components || []).find((c) => c.kind === "control" && (c.families || []).includes(currentFamily()) && (c.types || []).includes(type));
+function guideMissing() {
+  const t = state.guide.type;
+  if (!t) return [];
+  const need = [guidePatch(t), t === "depth" && !$("guideIsMap").checked ? (state.setup?.components || []).find((c) => c.key === "da3_small") : null];
+  return need.filter((c) => c && !c.installed);
+}
+function renderGuide() {
+  $("guideSec").hidden = !guideFamily();
+  for (const b of $("guideType").children) b.classList.toggle("active", b.dataset.type === state.guide.type);
+  $("guideBody").hidden = !state.guide.type;
+  const grid = $("guideGrid");
+  grid.textContent = "";
+  if (state.guide.image) {
+    const row = document.createElement("div"); row.className = "ref-row";
+    const img = document.createElement("img"); img.className = "batch-item"; img.alt = ""; img.src = inputViewUrl(state.guide.image);
+    img.style.objectFit = "cover"; img.style.aspectRatio = "1";
+    const name = document.createElement("span"); name.className = "hint"; name.textContent = state.guide.label;
+    const x = document.createElement("button"); x.className = "linkbtn"; x.textContent = "Remove";
+    x.onclick = () => { state.guide.image = null; renderGuide(); syncRunButtons(); };
+    row.append(img, name, x); grid.appendChild(row);
+  } else {
+    const add = document.createElement("label");
+    add.className = "batch-item add"; add.htmlFor = "guideInput"; add.textContent = "+";
+    add.title = "Pick the image whose layout to keep"; add.setAttribute("aria-label", add.title);
+    grid.appendChild(add);
+  }
+  const missing = guideMissing();
+  $("guideMissing").hidden = !missing.length;
+  $("guideMissing").innerHTML = "";
+  if (missing.length) {
+    $("guideMissing").append(`Not installed: ${missing.map((c) => c.title).join(", ")}. `);
+    const a = document.createElement("button"); a.className = "linkbtn"; a.textContent = "Download Center";
+    a.onclick = () => showSetup({ section: "control" });
+    $("guideMissing").append(a);
+  }
+}
+$("guideType").addEventListener("click", (e) => {
+  if (e.target.dataset.type == null) return;
+  state.guide.type = e.target.dataset.type;
+  const patch = guidePatch(state.guide.type);
+  if (patch?.strength) { $("guideStrength").value = patch.strength; $("guideStrength").dispatchEvent(new Event("input")); }
+  renderGuide(); syncRunButtons();
+});
+$("guideIsMap").addEventListener("change", renderGuide);
+$("guideInput").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const fd = new FormData();
+    fd.append("file", file, file.name || "guide.png");
+    const up = await api("/api/upload", { method: "POST", body: fd });
+    state.guide.image = up.name; state.guide.label = file.name || "image";
+  } catch (err) { showError(err.message); }
+  renderGuide(); syncRunButtons();
+});
+// what editParams sends for Generate (null when guidance is off or incomplete)
+function guideParams() {
+  if (state.task !== "generate" || !guideFamily() || !state.guide.type || !state.guide.image) return null;
+  return { type: state.guide.type, image: state.guide.image, is_map: $("guideIsMap").checked, strength: num("guideStrength") };
 }
 
 // Thumbnail of a reference: the crop when there is one (drawn on a canvas, works in every browser)
@@ -3694,7 +3763,7 @@ const setup = createSetup({
     const lorasChanged = loraIds(data) !== loraIds(state.setup);
     state.setup = data;
     if (appStarted && data.mask_available !== state.maskAvailable) { location.reload(); return; }
-    if (appStarted) { renderModelPicker(); renderUpscalers(); if (lorasChanged) loadModels(); }
+    if (appStarted) { renderModelPicker(); renderUpscalers(); renderGuide(); if (lorasChanged) loadModels(); }
   },
 });
 $("setupBtn").onclick = showSetup;
@@ -4041,6 +4110,7 @@ function syncTaskUi() {
   hint.hidden = !text;
   syncRunButtons();
   renderRefs();
+  renderGuide();
   promptPresets?.refresh();
 }
 

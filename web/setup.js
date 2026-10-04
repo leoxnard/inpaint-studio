@@ -112,7 +112,9 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     if (data.ready) {
       inner.appendChild(buildComponents());
       inner.appendChild(buildModels());
+      inner.appendChild(buildUpscalers());
       inner.appendChild(buildLoras());
+      inner.appendChild(buildControl());
       inner.appendChild(buildImports());
     } else {
       seedFirstRun();
@@ -326,14 +328,30 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
         onDelete: () => confirmDelete(sam.id, "Masking (SAM3)", sam.size, "The masking tools will be hidden afterwards."),
       }));
     }
-    for (const u of data.components.filter((c) => c.kind === "upscaler" && !c.group && !c.imported)) {
-      sec.appendChild(itemRow({
-        id: u.id, title: u.title, desc: u.description, size: u.size, installed: u.installed, deletable: true, optional: true,
-        onDelete: () => confirmDelete(u.id, u.title, u.size, ""),
-      }));
-    }
+    return sec;
+  }
+
+  // a plain list of optional downloads (Install / Delete per row)
+  const optionalRow = (c) => itemRow({
+    id: c.id, title: c.title, desc: c.description, size: c.size, installed: c.installed, deletable: true, optional: true,
+    onDelete: () => confirmDelete(c.id, c.title, c.size, ""),
+  });
+
+  function buildUpscalers() {
+    const sec = section("Upscalers");
+    sec.id = "setupUpscalers";
+    sec.appendChild(el("div", "hint", "For the Upscale task and for upscaling an edit's result. Pixel upscalers are fast; SeedVR2 adds detail but needs more time and RAM."));
+    for (const u of data.components.filter((c) => c.kind === "upscaler" && !c.group && !c.imported)) sec.appendChild(optionalRow(u));
     const sv = data.components.filter((c) => c.group === "SeedVR2");
     if (sv.length) sec.appendChild(buildSeedvr2Card(sv));
+    return sec;
+  }
+
+  function buildControl() {
+    const sec = section("Control");
+    sec.id = "setupControl";
+    sec.appendChild(el("div", "hint", "Generate with the layout of another image: its edges or its depth. One patch per model line; depth also needs Depth Anything."));
+    for (const c of data.components.filter((c) => c.group === "Control" && !c.imported)) sec.appendChild(optionalRow(c));
     return sec;
   }
 
@@ -943,7 +961,8 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     root.hidden = false;
     await load();
     build();
-    const anchor = target === "models" && root.querySelector("#setupModels");
+    const ids = { models: "setupModels", upscalers: "setupUpscalers", control: "setupControl", files: "setupImports" };
+    const anchor = ids[target] && root.querySelector(`#${ids[target]}`);
     if (anchor) anchor.scrollIntoView({ block: "start" });
     else root.scrollTop = 0;
     if (waitingComfy) return;   // a finished queue is still waiting for ComfyUI (polling went on in the background)

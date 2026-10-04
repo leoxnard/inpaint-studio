@@ -38,7 +38,7 @@ BASE_STEPS = [  # id, title, description
     ("gguf_node", "GGUF loader", "ComfyUI-GGUF custom node, patched for Qwen-Image 2.1"),
 ]
 MODEL_FOLDERS = ["checkpoints", "clip", "clip_vision", "diffusion_models", "unet", "text_encoders", "vae",
-                 "vae_approx", "loras", "upscale_models", "embeddings", "controlnet", "model_patches"]
+                 "vae_approx", "loras", "upscale_models", "embeddings", "controlnet", "model_patches", "geometry_estimation"]
 
 
 # ---------------------------------------------------------------- config

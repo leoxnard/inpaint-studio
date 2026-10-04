@@ -87,6 +87,36 @@ COMPONENTS.update({
 })
 
 
+# Control guidance (Generate): a model patch keeps the layout of an image (its edges or its depth). `types` are the maps
+# a patch understands; the depth map comes from Depth Anything 3 (da3_small).
+COMPONENTS.update({
+    "ctrl_zimage_union": {"title": "Z-Image Fun ControlNet Union 2.1", "kind": "control", "group": "Control",
+                          "repo": "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1",
+                          "path": "Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors", "folder": "model_patches",
+                          "size": 6_712_485_600, "families": ["zimage"], "types": ["canny", "depth"], "strength": 0.75,
+                          "description": "Z-Image: keep the edges or the depth of an image while generating."},
+    "ctrl_qwen_canny": {"title": "Qwen-Image Canny patch (DiffSynth)", "kind": "control", "group": "Control",
+                        "repo": "Comfy-Org/Qwen-Image-DiffSynth-ControlNets",
+                        "path": "split_files/model_patches/qwen_image_canny_diffsynth_controlnet.safetensors",
+                        "folder": "model_patches", "size": 2_266_838_080, "families": ["qwen"], "types": ["canny"], "strength": 1.0,
+                        "description": "Qwen-Image 2512: keep the edges of an image while generating."},
+    "ctrl_qwen_depth": {"title": "Qwen-Image Depth patch (DiffSynth)", "kind": "control", "group": "Control",
+                        "repo": "Comfy-Org/Qwen-Image-DiffSynth-ControlNets",
+                        "path": "split_files/model_patches/qwen_image_depth_diffsynth_controlnet.safetensors",
+                        "folder": "model_patches", "size": 2_266_838_080, "families": ["qwen"], "types": ["depth"], "strength": 1.0,
+                        "description": "Qwen-Image 2512: keep the depth (layout in space) of an image while generating."},
+    "da3_small": {"title": "Depth Anything 3 (small)", "kind": "depth", "group": "Control", "repo": "Comfy-Org/Depth-Anything-3",
+                  "path": "geometry_estimation/depth_anything_3_small.safetensors", "folder": "geometry_estimation",
+                  "size": 137_254_980, "description": "Makes the depth map for depth guidance."},
+})
+
+
+def control_patch(family: str, kind: str) -> str | None:
+    """The control component for a model family and map type (canny / depth), if there is one."""
+    return next((k for k, c in COMPONENTS.items()
+                 if c.get("kind") == "control" and family in c["families"] and kind in c["types"]), None)
+
+
 def file_name(c: dict[str, Any]) -> str:
     """Local file name of a component: `save_as` when the repo's name is too generic, else the repo file name."""
     return c.get("save_as") or c["path"].rsplit("/", 1)[-1]

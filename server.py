@@ -55,7 +55,7 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
                   "upscale", "upscale_width", "upscale_long_side", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -267,7 +267,7 @@ async def setup_status():
              "installed": have[f"component:{cid}"], "kind": c.get("kind"), "scale": c.get("scale"),
              "engine": c.get("engine"), "group": c.get("group"), "needs": c.get("needs", []), "families": c.get("families"),
              "strength": c.get("strength"), "repo": c["repo"], "description": c.get("description", ""),
-             "imported": bool(c.get("imported"))}
+             "imported": bool(c.get("imported")), "types": c.get("types")}
              for cid, c in presets.COMPONENTS.items()]
     ram = system_ram()
     for c in comps:
@@ -1160,6 +1160,8 @@ async def complete_run(job: dict, pid: str) -> None:
         img = (outs.get(key, {}).get("images") or [None])[0]
         return drop_counter(img) if img else None
     res, before, raw, upscaled = first("out_result"), first("out_before"), first("out_raw"), first("out_upscaled")
+    if control := first("out_control"):
+        run["control_url"] = view_url(control)
     if not res:
         await finish_job(job, "error", error="ComfyUI finished without a result image")
         return
@@ -1451,6 +1453,25 @@ async def create_job(params: dict):
             raise HTTPException(400, "Remove background does not work with Extend canvas")
         params.update(use_mask=False, mask=None, crop_stitch=False, upscale=0, keep_whole=False,
                       **{f"post_{k}": False for k in ("align", "colors", "warp", "poisson", "grain")})
+    if params.get("control"):   # control guidance (generate): the patch for this family and map type must be installed
+        c = params["control"]
+        if params.get("task") != "generate" or not isinstance(c, dict) or not c.get("image"):
+            raise HTTPException(400, "control guidance needs Generate and a control image")
+        if c.get("type") not in ("canny", "depth"):
+            raise HTTPException(400, "control type must be canny or depth")
+        key = presets.control_patch(params.get("family", ""), c["type"])
+        if not key:
+            raise HTTPException(400, f"no {c['type']} guidance for this model (Z-Image and Qwen-Image 2512 have it)")
+        need = [key] + (["da3_small"] if c["type"] == "depth" and not c.get("is_map") else [])
+        have = installer.installed(installer.load_config())
+        missing = [presets.COMPONENTS[k]["title"] for k in need if not have[f"component:{k}"]]
+        if missing:
+            raise HTTPException(400, f"not installed: {', '.join(missing)} (see Download Center → Control)")
+        params["control"] = {"type": c["type"], "image": c["image"], "is_map": bool(c.get("is_map")),
+                             "strength": float(c.get("strength", presets.COMPONENTS[key].get("strength", 1.0))),
+                             "end": float(c.get("end", 1.0))}
+        params["control_patch"] = presets.file_name(presets.COMPONENTS[key])
+        params["control_depth_model"] = presets.file_name(presets.COMPONENTS["da3_small"])
     if params.get("family") == "qwen21_turbo":  # fixed few-step schedule, no CFG
         params.update(steps=graphs.turbo_steps(params["steps"]), cfg=1.0)
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"

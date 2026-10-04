@@ -102,6 +102,23 @@
         <div class="tokenbar" id="tokenBar" hidden><i></i></div>
       </section>
 
+      <section class="sec gen-only" id="guideSec" data-fold="guide" hidden>
+        <h2 class="h">Guidance</h2>
+        <p class="hint">Keep the layout of another image: its edges or its depth.</p>
+        <div class="seg" id="guideType" role="group" aria-label="Guidance">
+          <button data-type="" class="active">Off</button><button data-type="canny">Edges</button><button data-type="depth">Depth</button>
+        </div>
+        <div id="guideBody" class="col" hidden>
+          <div class="ref-list" id="guideGrid"></div>
+          <input type="file" id="guideInput" accept="image/*" hidden>
+          <label class="check" title="Use the image as it is (an edge drawing or a depth map you made), without computing the map"><input type="checkbox" id="guideIsMap"> The image already is the map</label>
+          <label><span class="lbl">Strength <output id="guideStrengthOut"></output></span>
+            <input type="range" id="guideStrength" min="0" max="1.5" step="0.05" value="0.75">
+          </label>
+          <div class="warn" id="guideMissing" hidden></div>
+        </div>
+      </section>
+
       <section class="sec needs-sam edit-only" id="modeCard" data-fold="area">
         <h2 class="h">Area to change</h2>
         <div class="area-cards" id="areaCards" role="radiogroup" aria-label="Area to change">

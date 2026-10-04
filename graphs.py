@@ -257,6 +257,43 @@ def apply_loras(g: dict[str, Any], loras: Any) -> None:
         prev = [key, 0]
 
 
+CONTROL_FAMILIES = ("zimage", "qwen")   # families with a control patch node in ComfyUI
+
+
+def apply_control(g: dict[str, Any], p: dict[str, Any], family: str) -> None:
+    """Control guidance (generate): the control image (edges via Canny, depth via Depth Anything 3, or a map the user
+    made) at the working size steers the model through a model patch. p["control"]: {type, image, strength, end,
+    is_map}; p["control_patch"], p["control_depth_model"]: file names."""
+    c = p["control"]
+    g["ctrl_load"] = {"class_type": "LoadImage", "inputs": {"image": c["image"]}}
+    g["ctrl_fit"] = {"class_type": "ImageScale", "inputs": {
+        "image": ["ctrl_load", 0], "upscale_method": "lanczos", "width": p["work_w"], "height": p["work_h"], "crop": "center"}}
+    hint = ["ctrl_fit", 0]
+    if not c.get("is_map"):
+        if c["type"] == "canny":
+            g["ctrl_map"] = {"class_type": "Canny", "inputs": {"image": hint, "low_threshold": 0.3, "high_threshold": 0.6}}
+        else:
+            g["ctrl_da3"] = {"class_type": "LoadDA3Model", "inputs": {"model_name": p["control_depth_model"], "weight_dtype": "default"}}
+            g["ctrl_geo"] = {"class_type": "DA3Inference", "inputs": {
+                "da3_model": ["ctrl_da3", 0], "image": hint, "resolution": 504, "resize_method": "upper_bound_resize", "mode": "mono"}}
+            g["ctrl_map"] = {"class_type": "DA3Render", "inputs": {
+                "da3_geometry": ["ctrl_geo", 0], "output": "depth", "output.normalization": "v2_style", "output.apply_sky_clip": False}}
+        hint = ["ctrl_map", 0]
+    g["out_control"] = {"class_type": "SaveImage", "inputs": {"images": hint, "filename_prefix": f"{p.get('prefix', 'InpaintStudio/edit')}/control"}}
+    g["ctrl_patch"] = {"class_type": "ModelPatchLoader", "inputs": {"name": p["control_patch"]}}
+    g["model_base"] = g.pop("model")
+    strength = float(c.get("strength", 1.0))
+    if family == "zimage":
+        g["model"] = {"class_type": "ZImageFunControlnet", "inputs": {
+            "model": ["model_base", 0], "model_patch": ["ctrl_patch", 0], "vae": ["vae", 0], "strength": strength,
+            "image": hint, "start_percent": 0.0, "end_percent": float(c.get("end", 1.0))}}
+    elif family == "qwen":
+        g["model"] = {"class_type": "QwenImageDiffsynthControlnet", "inputs": {
+            "model": ["model_base", 0], "model_patch": ["ctrl_patch", 0], "vae": ["vae", 0], "image": hint, "strength": strength}}
+    else:
+        raise ValueError(f"no control guidance for model family {family}")
+
+
 def turbo_steps(steps: int) -> int:
     return min(7, max(5, int(steps)))
 
@@ -342,6 +379,8 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
     else:
         raise ValueError(f"unknown model family {family}")
 
+    if generate and p.get("control"):
+        apply_control(g, p, family)
     if generate:
         empty = "EmptyLatentImage" if family in ("qwen21", "qwen21_turbo") else "EmptySD3LatentImage"
         g["latent_src"] = {"class_type": empty, "inputs": {"width": p["work_w"], "height": p["work_h"], "batch_size": 1}}

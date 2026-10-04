@@ -326,3 +326,17 @@ def test_remove_background_is_a_whole_image_edit_with_the_template_prompt():
     import pytest
     with pytest.raises(ValueError):
         graphs.build_edit_graph({**p, "family": "qwen_edit"})
+
+
+def test_control_guidance_chain():
+    import graphs
+    base = {"task": "generate", "prompt": "a barn", "steps": 4, "seed": 1, "cfg": 1, "denoise": 1, "megapixels": 1,
+            "resolution": 1024, "work_w": 1024, "work_h": 768, "unet": "z.gguf", "clip": "c.safetensors", "vae": "v.safetensors",
+            "control_patch": "patch.safetensors", "control_depth_model": "da3.safetensors", "prefix": "InpaintStudio/r1"}
+    g = graphs.build_edit_graph({**base, "family": "zimage", "control": {"type": "depth", "image": "in/a.png", "strength": 0.7}})
+    assert g["model"]["class_type"] == "ZImageFunControlnet" and g["model"]["inputs"]["model"] == ["model_base", 0]
+    assert g["model"]["inputs"]["image"] == ["ctrl_map", 0] and g["ctrl_map"]["class_type"] == "DA3Render"
+    assert g["out_control"]["inputs"]["filename_prefix"] == "InpaintStudio/r1/control"
+    g = graphs.build_edit_graph({**base, "family": "qwen", "control": {"type": "canny", "image": "in/a.png", "is_map": True}})
+    assert g["model"]["class_type"] == "QwenImageDiffsynthControlnet" and g["model"]["inputs"]["image"] == ["ctrl_fit", 0]
+    assert "ctrl_map" not in g

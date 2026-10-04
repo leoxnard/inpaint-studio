@@ -61,7 +61,7 @@ LUMA_EDGES = np.array([0, 40, 80, 120, 160, 200, 256], np.float32)   # ... and p
 LUMA_CENTERS = (LUMA_EDGES[:-1] + LUMA_EDGES[1:]) / 2
 LUMA_PRIOR = 2000            # pixels: a brightness band with this many flat pixels is half its own value, half the overall
 GRAIN_MAX_SIGMA = 1.0        # the coarsest grain expected (blur of white noise), see plausible_grain
-GRAIN_STRENGTH = 0.8         # default strength: grain on a smooth model result looks stronger than in the textured original
+GRAIN_STRENGTH = 1.0         # default strength: all the result lacks compared with the original
 
 
 def _band(img: np.ndarray, lo: float, hi: float) -> np.ndarray:

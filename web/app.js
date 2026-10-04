@@ -17,7 +17,7 @@ const PERSIST = [
 const STORE_KEY = "inpaint-studio-form-v1";
 // Post-processing options start at the HTML default (on) and keep a stored value only once the user clicked them
 const POST_OPTIONS = ["postAlign", "postColors", "postWarp", "postPoisson", "postGrain"];
-const GRAIN_STRENGTH = 0.8;   // prepare.GRAIN_STRENGTH
+const GRAIN_STRENGTH = 1.0;   // prepare.GRAIN_STRENGTH
 const TOUCHED_KEY = "inpaint-studio-touched-v1";
 function touchedOptions() {
   try { return new Set(JSON.parse(localStorage.getItem(TOUCHED_KEY) || "[]")); } catch { return new Set(); }

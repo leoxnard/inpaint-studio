@@ -139,7 +139,7 @@ bands and six brightness bands, and only what the result lacks per band is added
 does not count as grain, and grain that is strongest in the midtones stays that way. Brightness bands with few
 flat pixels are pulled towards the overall value, and coarser bands are capped at what grain can have (white noise
 blurred by 1 px), so picture detail that slipped into the flat areas is not added as blotchy noise. **Grain strength**
-(0–200 %, in Runs → Post-processing; runs start with 80 %) scales it.
+(0–200 %, in Runs → Post-processing; runs start with 100 %) scales it.
 Any finished edit or upscale can also get the grain afterwards: Post-processing → Film grain in Runs
 (`POST /api/runs/{id}/post`, measured on the run's original; untick it to go back). Compare sorts the picked results by model, then
 parameter count and quantisation.

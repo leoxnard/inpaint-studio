@@ -13,7 +13,8 @@ def stored_run(tmp_path, run_id, status="running", prompt_id="p1", job=True):
     (d / "run.json").write_text(json.dumps({"id": run_id, "status": status, "created": 1, "prompt_id": prompt_id,
                                             "params": {"prompt": "x"}, "frames": []}))
     if job:
-        (d / "job.json").write_text(json.dumps({"params": {"prefix": f"InpaintStudio/{run_id}", "task": "edit"},
+        (d / "job.json").write_text(json.dumps({"params": {"prefix": f"InpaintStudio/{run_id}", "task": "edit",
+                                                           "image": f"inpaint-studio/{run_id}_crop.png"},
                                                 "graph": {"out_result": {"inputs": {"filename_prefix": f"InpaintStudio/{run_id}"}}}}))
     return d
 
@@ -103,6 +104,8 @@ def test_retry_queues_a_copy_with_a_new_id(tmp_path, monkeypatch):
     assert new_id != "20260101-000000-abcd"
     assert started["params"]["prefix"] == f"InpaintStudio/{new_id}"
     assert started["graph"]["out_result"]["inputs"]["filename_prefix"] == f"InpaintStudio/{new_id}"
+    # crop & stitch: the crop uploaded for the old run keeps its name (nothing uploads one for the new id)
+    assert started["params"]["image"] == "inpaint-studio/20260101-000000-abcd_crop.png"
     assert c.post("/api/runs/nope/retry").status_code == 404
 
 

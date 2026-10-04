@@ -68,3 +68,20 @@ def test_delete_refuses_a_running_run(tmp_path, monkeypatch):
     finally:
         server.JOBS.pop("r1", None)
     assert c.delete("/api/runs/r1").status_code == 200 and not d.exists()
+
+
+def test_invalid_job_is_a_400():
+    c = TestClient(server.app)
+    r = c.post("/api/jobs", json={"prompt": "x", "steps": 0, "megapixels": 1, "resolution": 1008, "src_w": 10, "src_h": 10,
+                                  "image": "a.png"})
+    assert r.status_code == 400 and "steps" in r.json()["detail"]
+    r = c.post("/api/jobs", json={"prompt": "x", "steps": 4, "megapixels": 1, "resolution": 1008})
+    assert r.status_code == 400 and "src_w" in r.json()["detail"]
+    r = c.post("/api/jobs", json={"prompt": "x", "steps": 4, "megapixels": 1, "resolution": 1008, "src_w": 10, "src_h": 10})
+    assert r.status_code == 400 and "image" in r.json()["detail"]
+
+
+def test_upload_of_a_non_image_is_a_400():
+    c = TestClient(server.app)
+    r = c.post("/api/upload", files={"file": ("notes.txt", b"hello", "text/plain")})
+    assert r.status_code == 400 and "notes.txt" in r.json()["detail"]

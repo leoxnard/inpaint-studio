@@ -7,6 +7,7 @@ Step 2 runs the edit; ComfyUI's per-step latent previews are relayed to the brow
 from __future__ import annotations
 
 import asyncio
+import functools
 from contextlib import asynccontextmanager
 import io
 import json
@@ -28,7 +29,7 @@ from PIL import Image, ImageFilter, ImageOps
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 import align
 import graphs
@@ -183,6 +184,7 @@ async def status():
 
 # ---------------------------------------------------------------- setup (first run, optional masking)
 
+@functools.cache
 def system_ram() -> int:
     try:
         return int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=2).stdout)
@@ -352,8 +354,11 @@ async def upload_to_comfy(data: bytes, name: str, subfolder: str) -> str:
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)):
     data = await file.read()
-    with Image.open(io.BytesIO(data)) as im:
-        width, height = im.size
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            width, height = im.size
+    except (OSError, Image.DecompressionBombError) as e:
+        raise HTTPException(400, f"{file.filename or 'the file'} is not an image this app can read") from e
     safe_name = f"{uuid.uuid4().hex[:8]}_{Path(file.filename or 'image.png').name}"
     name = await upload_to_comfy(data, safe_name, SUBFOLDER)
     return {"name": name, "width": width, "height": height}
@@ -367,10 +372,10 @@ async def upload_mask(file: UploadFile = File(...)):
 
 
 class SizeReq(BaseModel):
-    width: int
-    height: int
-    megapixels: float = 0.95
-    resolution: int = 1024
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    megapixels: float = Field(0.95, gt=0)
+    resolution: int = Field(1024, gt=0)
     mask_bbox: list[int] | None = None   # crop & stitch: mask bounding box in source pixels (x0, y0, x1, y1)
     crop_context: float = 0.5
 
@@ -490,9 +495,10 @@ async def retry_run(run_id: str):
     if not stored:
         raise HTTPException(404, "this run cannot be retried (no job.json)")
     new_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
-    # the run id only appears in output prefixes and file names, so a textual swap is safe
-    params = json.loads(json.dumps(stored["params"]).replace(run_id, new_id))
-    graph = json.loads(json.dumps(stored["graph"]).replace(run_id, new_id))
+    # the run id appears in output prefixes and file names; inputs made for the old run (crop, canvas) keep their name
+    swap = re.compile(rf"(?<!{re.escape(SUBFOLDER)}/){re.escape(run_id)}")
+    params = json.loads(swap.sub(new_id, json.dumps(stored["params"])))
+    graph = json.loads(swap.sub(new_id, json.dumps(stored["graph"])))
     old = json.loads((RUNS / run_id / "run.json").read_text())
     run = {"id": new_id, "created": time.time(), "status": "queued", "params": old.get("params", {}),
            "size": old.get("size"), "frames": []}
@@ -541,7 +547,17 @@ async def _fetch_view(url: str) -> Image.Image:
     r = await client.get("/view", params=params)
     if r.status_code != 200:
         raise HTTPException(404, f"image not found: {params.get('filename')}")
-    return Image.open(io.BytesIO(r.content))
+    img = Image.open(io.BytesIO(r.content))
+    await asyncio.to_thread(img.load)   # decoding a big PNG must not stall the event loop
+    return img
+
+
+async def png_bytes(img: Image.Image) -> bytes:
+    def encode() -> bytes:
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue()
+    return await asyncio.to_thread(encode)
 
 
 class PostReq(BaseModel):
@@ -599,6 +615,9 @@ async def _post_inputs(run: dict, kind: str | None) -> tuple:
     return _align_cache[key]
 
 
+_BASE_DIFF: dict[tuple, float] = {}   # (run, kind, result) -> outside_diff of the unaligned paste
+
+
 async def fix_image(run: dict, req: PostReq, kind: str) -> tuple[Image.Image, dict]:
     """Align and fix the edit (shift/scale, local warp, colours, seamless edge) and paste it into the original
     (whole-image edits: the whole fixed image). Returns the image and the numbers for the UI."""
@@ -628,9 +647,12 @@ async def fix_image(run: dict, req: PostReq, kind: str) -> tuple[Image.Image, di
     opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson and kind == "paste" and not outpaint}
     composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts,
                                               color_gain=outpaint)
-    _, base = await asyncio.to_thread(align.compose, original, raw, mask, 0, 0, 1.0)
+    key = (run["id"], kind, run.get("result_url"))
+    if key not in _BASE_DIFF:   # the same for every slider position: compute once per run
+        _, base = await asyncio.to_thread(align.compose, original, raw, mask, 0, 0, 1.0)
+        _BASE_DIFF[key] = base["outside_diff"]
     result.update({"dx": dx, "dy": dy, "scale": scale, **opts, "outside_diff": stats["outside_diff"],
-                   "unaligned_diff": base["outside_diff"]})
+                   "unaligned_diff": _BASE_DIFF[key]})
     return composed, result
 
 
@@ -678,7 +700,7 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
     stamp = int(time.time() * 1000)
     if req.save and kind is not None:
         if fixes:
-            img.save(RUNS / run_id / "aligned.png")
+            await asyncio.to_thread(img.save, RUNS / run_id / "aligned.png")
             url = f"/data/runs/{run_id}/aligned.png?t={stamp}"
             run["aligned"] = {k: result[k] for k in ("dx", "dy", "scale", "colors", "warp", "poisson", "outside_diff")} | {"url": url}
         else:
@@ -705,8 +727,12 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
         save_run(run)
         result["url"] = run.get("fixed_url") or (run.get("aligned") or {}).get("url") or run["result_url"]
     else:
-        await asyncio.to_thread(img.convert("RGB").save, RUNS / run_id / "post_preview.jpg", quality=92)
-        result["url"] = f"/data/runs/{run_id}/post_preview.jpg?t={stamp}"
+        # one file per request: overlapping slider moves must not show each other's half-written preview
+        for old in (RUNS / run_id).glob("post_preview*.jpg"):
+            old.unlink(missing_ok=True)
+        name = f"post_preview_{stamp}.jpg"
+        await asyncio.to_thread(lambda: img.convert("RGB").save(RUNS / run_id / name, quality=92))
+        result["url"] = f"/data/runs/{run_id}/{name}"
     result.update(saved=req.save, aligned=run.get("aligned"), fixed_url=run.get("fixed_url"), grain=run.get("grain"),
                   grain_strength=run.get("grain_strength"))
     return result
@@ -726,9 +752,9 @@ async def post_run(run_id: str, req: PostReq):
 class UpscaleReq(BaseModel):
     image: str                    # ComfyUI input name (as returned by /api/upload)
     upscaler: str                 # component key of an installed upscaler
-    factor: float = 2
-    long_side: int | None = None  # target length of the longer side in px instead of the factor (the other follows)
-    megabytes: float | None = None  # or a rough target file size (prepare.size_for_megabytes)
+    factor: float = Field(2, gt=0)
+    long_side: int | None = Field(None, gt=0)  # target length of the longer side in px instead of the factor (the other follows)
+    megabytes: float | None = Field(None, gt=0)  # or a rough target file size (prepare.size_for_megabytes)
     color_correction: str = "lab"  # SeedVR2 only
     grain: bool = True            # give the result the original's grain back (prepare.add_grain)
     grain_strength: float = Field(prepare.GRAIN_STRENGTH, ge=0, le=3)
@@ -745,7 +771,7 @@ async def megabytes_size(image: str, src: Image.Image, mb: float) -> tuple[int, 
 
 class UpscalePlanReq(BaseModel):
     image: str
-    megabytes: float
+    megabytes: float = Field(gt=0)
 
 
 @app.post("/api/upscale/plan")
@@ -1088,23 +1114,23 @@ def save_run_config(run_id: str, run: dict, params: dict, graph: dict) -> None:
 
 async def load_input(name: str) -> Image.Image:
     """An uploaded input image, turned upright like ComfyUI's LoadImage does."""
-    return ImageOps.exif_transpose(await _fetch_view(input_mask_url(name))).convert("RGB")
+    img = await _fetch_view(input_mask_url(name))
+    return await asyncio.to_thread(lambda: ImageOps.exif_transpose(img).convert("RGB"))
 
 
 async def crop_input(params: dict, run_id: str) -> None:
     """Crop & stitch: the edit runs on a crop around the mask (at the full working size, so more detail);
     the original stays in orig_image and the result is pasted back after the run (stitch_result)."""
     orig = await load_input(params["image"])
-    mask = (await _fetch_view(input_mask_url(params["mask"]))).convert("L").resize(orig.size, Image.BILINEAR)
+    mask = await _fetch_view(input_mask_url(params["mask"]))
+    mask = await asyncio.to_thread(lambda: mask.convert("L").resize(orig.size, Image.BILINEAR))
     bbox = prepare.mask_bbox(mask)
     if not bbox:
         raise HTTPException(400, "the mask is empty")
     box = prepare.crop_box(bbox, *orig.size, context=float(params.get("crop_context") or 0.5))
     files = []
     for img, name in ((prepare.crop(orig, box), f"{run_id}_crop.png"), (prepare.crop(mask, box), f"{run_id}_cropmask.png")):
-        buf = io.BytesIO()
-        img.save(buf, "PNG")
-        files.append(await upload_to_comfy(buf.getvalue(), name, SUBFOLDER))
+        files.append(await upload_to_comfy(await png_bytes(img), name, SUBFOLDER))
     params.update(orig_image=params["image"], orig_mask=params["mask"], crop_box=box, orig_size=list(orig.size),
                   image=files[0], mask=files[1], src_w=box["w"], src_h=box["h"], upscale=0)
     fit_size(params)
@@ -1131,7 +1157,7 @@ async def outpaint_input(params: dict, run_id: str) -> None:
     orig = await load_input(params["image"])
     f = min(1.0, (40_000_000 / max(1, cw * ch)) ** 0.5)
     if f < 1:   # a small image on a big canvas: the run works at ~1 MP anyway, so pad a smaller copy
-        orig = orig.resize((max(1, round(orig.width * f)), max(1, round(orig.height * f))), Image.LANCZOS)
+        orig = await asyncio.to_thread(orig.resize, (max(1, round(orig.width * f)), max(1, round(orig.height * f))), Image.LANCZOS)
         cw, ch = round(cw * f), round(ch * f)
         x, y = min(round(x * f), cw - orig.width), min(round(y * f), ch - orig.height)
         params["outpaint"] = {**o, "canvas_w": cw, "canvas_h": ch, "x": x, "y": y}
@@ -1146,9 +1172,7 @@ async def outpaint_input(params: dict, run_id: str) -> None:
         grow = max(2, prepare.OUTPAINT_OVERLAP // 4)
         parts.append((Image.fromarray(prepare.hole_mask(holes, x, y, orig.size, cw, ch, grow)), f"{run_id}_holes.png"))
     for img, name in parts:
-        buf = io.BytesIO()
-        img.save(buf, "PNG")
-        files.append(await upload_to_comfy(buf.getvalue(), name, SUBFOLDER))
+        files.append(await upload_to_comfy(await png_bytes(img), name, SUBFOLDER))
     if holes is not None:
         params["outpaint_holes"] = files[2]
     # "inpaint": only the new area is generated (noise mask). "paste": the model redraws the whole canvas and the
@@ -1175,10 +1199,10 @@ async def outpaint_fix(run: dict, params: dict, before_url: str, raw_url: str) -
         holes = np.asarray((await _fetch_view(input_mask_url(params["outpaint_holes"]))).convert("L").resize(raw.size, Image.BILINEAR))
     fixed = await asyncio.to_thread(align.outpaint_blend, before, raw, box, round(prepare.OUTPAINT_OVERLAP * s),
                                     bool(params.get("outpaint_colors", True)), holes)
-    fixed.save(RUNS / run_id / "aligned.png")
+    await asyncio.to_thread(fixed.save, RUNS / run_id / "aligned.png")
     run["aligned"] = {"outpaint": True, "colors": bool(params.get("outpaint_colors", True)),
                       "url": f"/data/runs/{run_id}/aligned.png?t={int(time.time() * 1000)}"}
-    fixed.save(_output_dir() / f"{run_id}_fixed.png")
+    await asyncio.to_thread(fixed.save, _output_dir() / f"{run_id}_fixed.png")
     run["fixed_url"] = view_url({"filename": f"{run_id}_fixed.png", "subfolder": "InpaintStudio", "type": "output"}) \
         + f"&t={int(time.time() * 1000)}"
 
@@ -1199,8 +1223,28 @@ async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:
     return {"filename": f"{run_id}_full.png", "subfolder": "InpaintStudio", "type": "output"}
 
 
+class JobCheck(BaseModel):
+    """The fields create_job and the graph builders read without a default; everything else passes through."""
+    model_config = {"extra": "allow"}
+    task: str = "edit"
+    prompt: str = ""
+    steps: int = Field(gt=0, le=1000)
+    megapixels: float = Field(gt=0, le=64)
+    resolution: int = Field(gt=0)
+    src_w: int = Field(gt=0)
+    src_h: int = Field(gt=0)
+    seed: int = Field(0, ge=0)
+
+
 @app.post("/api/jobs")
 async def create_job(params: dict):
+    try:
+        JobCheck.model_validate(params)
+    except ValidationError as e:
+        bad = "; ".join(f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors())
+        raise HTTPException(400, f"invalid job: {bad}") from e
+    if params.get("task", "edit") != "generate" and not params.get("image"):
+        raise HTTPException(400, "invalid job: image is missing")
     if params.get("preset"):
         pr = presets.PRESETS.get(params["preset"])
         if not pr:

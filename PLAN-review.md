@@ -78,6 +78,17 @@ canny/depth/inpaint) and `ZImageFunControlnet` (Z-Image Fun ControlNet Union); p
 **Check:** graph unit tests; one real Z-Image generate with depth from the test image → same layout, new
 content; same with edges.
 
+## M7 – Import own files in the Download Center  · installer.py, presets.py, server.py, web/setup.js
+Leonard (added later): import models that are already on the Mac — diffusion models (GGUF / safetensors),
+LoRAs, upscalers, text encoders, VAEs, control patches. "Import file…" per section → pick a file path (native
+picker in the Mac app, path field in the browser), choose its kind (pre-filled from extension / section), symlink
+it into the matching `models/` folder (no copy; LM Studio GGUFs already work this way). Imported LoRAs/upscalers
+show up in their pickers; an imported diffusion model becomes a custom preset based on an existing one (pick the
+family so encoder + VAE pairs stay right). Remove = delete the link only.
+
+**Check:** import a LoRA and an upscaler from a local file → appear in Advanced / Upscaler and work in a run;
+remove → gone, source file untouched.
+
 ## End
 Run all checks, update CLAUDE.md (new endpoints, history file, control chain) and the brain note, rebuild the
 app if `:7380/api/jobs` is empty.

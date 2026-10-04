@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How it works · Inpaint Studio</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800&display=swap">
+  <link rel="stylesheet" href="/guide.css">
+</head>
+<body>
+  <header class="gbar topbar">
+    <a class="brand" href="/#create"><picture><source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)"><img src="/favicon.svg" alt="" width="26" height="26"></picture>Inpaint Studio</a>
+    <nav class="toc" aria-label="Sections">
+      <a href="#parts">Parts</a><a href="#files">Files</a><a href="#graph">Graph</a><a href="#loop">Loop</a><a href="#download">Download</a><a href="#use">Use</a>
+    </nav>
+    <a class="pill-btn" href="/#create">Open the app</a>
+  </header>
+
+  <main>
+    <!-- ============================================================ hero -->
+    <section class="hero">
+      <h1>A picture made<br>out of noise.</h1>
+      <p class="lead">How Inpaint Studio edits and creates images on your Mac, explained for people who have never used an AI image tool.</p>
+      <figure class="strip" aria-label="The same picture at step 0, 5, 10, 15 and 20">
+        <div><canvas data-step="0" width="180" height="120"></canvas><figcaption>Step 0</figcaption></div>
+        <div><canvas data-step="5" width="180" height="120"></canvas><figcaption>5</figcaption></div>
+        <div><canvas data-step="10" width="180" height="120"></canvas><figcaption>10</figcaption></div>
+        <div><canvas data-step="15" width="180" height="120"></canvas><figcaption>15</figcaption></div>
+        <div><canvas data-step="20" width="180" height="120"></canvas><figcaption>20</figcaption></div>
+      </figure>
+      <p class="scrollhint" aria-hidden="true">Scroll to see how</p>
+    </section>
+
+    <!-- ============================================================ parts -->
+    <section id="parts" class="sec">
+      <h2>Four parts, one click</h2>
+      <p class="sub">When you press <b>Add edit to queue</b>, your request travels through four parts. Everything stays on your Mac, nothing is uploaded.</p>
+      <ol class="chain">
+        <li><span class="ico">🖱️</span><b>You</b><span>Pick an image, paint a mask, write what should change.</span></li>
+        <li><span class="ico">🧭</span><b>Inpaint Studio</b><span>This app. Turns your clicks into a recipe and keeps the queue and history.</span></li>
+        <li><span class="ico">⚙️</span><b>ComfyUI</b><span>The engine. Runs the recipe step by step on the Mac's GPU.</span></li>
+        <li><span class="ico">📦</span><b>Model files</b><span>The trained "brain": a few big files in the models folder.</span></li>
+      </ol>
+      <p class="aside">The recipe is called a <b>graph</b>: small boxes (<b>nodes</b>) connected by wires. You never have to build it yourself, the app does that for you. The next sections open it up.</p>
+    </section>
+
+    <!-- ============================================================ files -->
+    <section id="files" class="sec">
+      <h2>A model is three files</h2>
+      <p class="sub">Every model needs a team of three. The colours stay the same on the whole page.</p>
+      <div class="trio">
+        <article class="file c-model">
+          <div class="role">The painter</div>
+          <h3>Diffusion model</h3>
+          <p>Has learned what pictures look like. Removes noise step by step until an image appears.</p>
+          <dl><dt>File</dt><dd>qwen-image-2.1-UC-Q4_K_M.gguf</dd><dt>Size</dt><dd>4.6 GB</dd><dt>Folder</dt><dd>models/diffusion_models</dd></dl>
+        </article>
+        <article class="file c-text">
+          <div class="role">The reader</div>
+          <h3>Text encoder</h3>
+          <p>Reads your prompt (and looks at your image) and turns it into numbers the painter understands.</p>
+          <dl><dt>File</dt><dd>qwen3vl_8b_int8_convrot.safetensors</dd><dt>Size</dt><dd>9.4 GB</dd><dt>Folder</dt><dd>models/text_encoders</dd></dl>
+        </article>
+        <article class="file c-vae">
+          <div class="role">The translator</div>
+          <h3>VAE</h3>
+          <p>Packs pixels into a small "latent" grid before the work, and unpacks the result back into pixels.</p>
+          <dl><dt>File</dt><dd>qwen_image_2.1_vae_bf16.safetensors</dd><dt>Size</dt><dd>0.7 GB</dd><dt>Folder</dt><dd>models/vae</dd></dl>
+        </article>
+      </div>
+      <p class="pairnote">The three must belong together. Each model in the Download Center brings its own matching reader and translator, so you cannot mix them up.</p>
+
+      <h3 class="h3">Optional add-ons</h3>
+      <table class="tbl">
+        <thead><tr><th>Add-on</th><th>What it does</th><th>Folder</th></tr></thead>
+        <tbody>
+          <tr><td><i class="dot c-addon"></i><b>LoRA</b></td><td>A small "plug-in" for the painter: a style, a speed-up or a camera trick. Up to 3 at once.</td><td>models/loras</td></tr>
+          <tr><td><i class="dot c-addon"></i><b>SAM3</b></td><td>Finds things by name and draws the mask for you ("the roof", "the dog").</td><td>models/checkpoints</td></tr>
+          <tr><td><i class="dot c-addon"></i><b>Upscaler</b></td><td>Makes a finished picture 2× or 4× bigger and sharper.</td><td>models/upscale_models</td></tr>
+          <tr><td><i class="dot c-addon"></i><b>Guidance</b></td><td>Copies the layout of another picture (its edges or depth) when generating.</td><td>models/model_patches</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============================================================ graph -->
+    <section id="graph" class="sec graph-sec">
+      <h2>Inside the recipe</h2>
+      <p class="sub">This is the real graph the app sends to ComfyUI for Qwen-Image 2.1. Scroll through the steps, the boxes light up.</p>
+      <div class="seg" role="tablist" aria-label="Graph">
+        <button role="tab" aria-selected="true" data-graph="edit">Edit an image</button>
+        <button role="tab" aria-selected="false" data-graph="generate">Generate from text</button>
+      </div>
+      <div class="scrolly">
+        <div class="stage"><div class="graphwrap"><svg id="graphSvg" viewBox="0 0 1000 520" role="img" aria-label="Node graph"></svg></div>
+          <ul class="legend">
+            <li><i class="dot c-model"></i>Painter</li><li><i class="dot c-text"></i>Reader</li><li><i class="dot c-vae"></i>Translator</li><li><i class="dot c-addon"></i>Add-on</li><li><i class="dot c-io"></i>Image in / out</li>
+          </ul>
+        </div>
+        <ol class="steps">
+          <li data-hl="unet clip vae lora"><h3>Load the files</h3><p>Three loader nodes open the painter, the reader and the translator. A LoRA, if you picked one, is clipped onto the painter.</p></li>
+          <li data-hl="load scale empty" data-mode-text><h3 class="only-edit">Bring your image</h3><h3 class="only-gen">Start with an empty canvas</h3>
+            <p class="only-edit">Your picture is scaled to about one megapixel. That is the size the model works best at.</p>
+            <p class="only-gen">No input image: the painter starts from a blank latent that is filled with random noise.</p></li>
+          <li data-hl="encode clip"><h3>Read the prompt</h3><p class="only-edit">The reader looks at your text <em>and</em> your image together, so "make the roof red" knows which roof.</p><p class="only-gen">The reader turns your sentence into numbers. Nothing else goes in.</p></li>
+          <li data-hl="sampler cache"><h3>Paint in a loop</h3><p>The sampler is where the work happens. It runs the painter again and again, usually 20 times. More on that just below.</p></li>
+          <li data-hl="decode save"><h3>Back to pixels</h3><p>The translator unpacks the latent into a real image, and it is saved to your results.</p></li>
+        </ol>
+      </div>
+      <p class="aside">Want to see it in ComfyUI itself? In Runs, <b>Download for ComfyUI</b> saves a result with this graph inside. Drop the file onto ComfyUI and the exact graph opens.</p>
+    </section>
+
+    <!-- ============================================================ loop -->
+    <section id="loop" class="loop-sec">
+      <div class="loop-sticky">
+        <div class="loop-text">
+          <h2>The loop</h2>
+          <p class="sub">The sampler does not paint in one go. It starts with pure noise and cleans it up a little in every step.</p>
+          <ol class="cycle" aria-label="One step of the loop">
+            <li data-k="0">Look at the noisy picture</li>
+            <li data-k="1">Guess which part is noise</li>
+            <li data-k="2">Remove a bit of it</li>
+            <li data-k="3">Next step</li>
+          </ol>
+          <p class="caption" id="loopCaption">Step 0: only noise. The prompt decides what the noise will turn into.</p>
+        </div>
+        <div class="loop-visual">
+          <canvas id="loopCanvas" width="360" height="240" aria-label="Picture slowly appearing from noise"></canvas>
+          <div class="counter"><span id="stepNum">0</span><small>/ 20 steps</small></div>
+          <div class="bar"><i id="stepBar"></i></div>
+        </div>
+      </div>
+    </section>
+    <section class="sec tight">
+      <div class="facts">
+        <div><b>20</b><span>steps for most models</span></div>
+        <div><b>6–8</b><span>steps for Turbo models, about 5× faster</span></div>
+        <div><b>Live</b><span>Runs shows a preview after every step</span></div>
+      </div>
+      <p class="aside">The noise at step 0 comes from the <b>seed</b>, a single number. Same seed and same settings give the same picture. A new seed gives a new variation.</p>
+    </section>
+
+    <!-- ============================================================ latent -->
+    <section class="sec">
+      <h2>Why size matters</h2>
+      <p class="sub">The painter does not see pixels. It sees a grid where every cell stands for a 16 × 16 pixel block, called a token.</p>
+      <div class="grid-demo">
+        <div class="gd" aria-hidden="true"><div class="gd-img"></div><div class="gd-grid"></div></div>
+        <table class="tbl">
+          <thead><tr><th>Working size</th><th>Tokens</th><th></th></tr></thead>
+          <tbody>
+            <tr><td>768 × 512</td><td>1 536</td><td><span class="tag ok">fast</span></td></tr>
+            <tr><td>1024 × 1024</td><td>4 096</td><td><span class="tag ok">default</span></td></tr>
+            <tr><td>1280 × 1280</td><td>6 400</td><td><span class="tag bad">gray noise</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="aside">On a Mac the edit breaks into gray noise above about 4096 tokens. <b>Auto-fix size</b> (on by default) keeps you below that. For small changes in a big photo, <b>Edit around the mask only</b> keeps the full resolution anyway.</p>
+    </section>
+
+    <!-- ============================================================ quant -->
+    <section class="sec">
+      <h2>Smaller files, almost the same picture</h2>
+      <p class="sub">A model is billions of numbers. A <b>quantisation</b> stores each number with fewer bits, like saving a photo as JPEG. The name tells you how many bits.</p>
+      <div class="bars" id="quantBars" aria-label="File size of Qwen-Image 2.1 UC per quantisation"></div>
+      <table class="tbl">
+        <thead><tr><th>Name</th><th>Bits per number</th><th>Quality</th><th>Use it when</th></tr></thead>
+        <tbody>
+          <tr class="pick"><td><b>Q4_K_M</b></td><td>~4.5</td><td>very close to the original</td><td>Default. Fits 16 GB Macs and loads fast.</td></tr>
+          <tr><td>Q5 / Q6</td><td>5–6</td><td>a little finer detail</td><td>You have RAM to spare.</td></tr>
+          <tr><td>Q8_0</td><td>8</td><td>practically identical</td><td>32 GB or more and you want the last bit.</td></tr>
+          <tr><td>BF16</td><td>16</td><td>the original</td><td>Rarely worth it, twice the size of Q8.</td></tr>
+          <tr><td>Q2 / Q3</td><td>2–3</td><td>visibly worse</td><td>Only if nothing else fits.</td></tr>
+        </tbody>
+      </table>
+      <p class="aside">The <b>K</b> means the smart variant that keeps the most important numbers more precise. <b>M</b> is the medium size of that.</p>
+    </section>
+
+    <!-- ============================================================ download -->
+    <section id="download" class="sec">
+      <h2>Start here</h2>
+      <div class="rec">
+        <div class="rec-main">
+          <div class="rec-tag">Recommended</div>
+          <h3>Qwen-Image 2.1 UC <span>Q4_K_M</span></h3>
+          <p>The best all-rounder: edits photos by instruction ("remove the car", "make it winter") and also generates new images.</p>
+          <ul class="rec-files">
+            <li><i class="dot c-model"></i>Diffusion model<b>4.6 GB</b></li>
+            <li><i class="dot c-text"></i>Text encoder<b>9.4 GB</b></li>
+            <li><i class="dot c-vae"></i>VAE<b>0.7 GB</b></li>
+            <li class="sum">Download in total<b>14.6 GB</b></li>
+          </ul>
+          <p class="fine">Runs on a Mac with Apple Silicon and 16 GB RAM, comfortably with 32 GB. Add SAM3 (1.7 GB) to make masks from words.</p>
+        </div>
+        <ol class="rec-steps">
+          <li>Open the <b>Download Center</b> (top right in the app).</li>
+          <li>Find <b>Qwen-Image 2.1 UC</b> under Models.</li>
+          <li>Keep <b>Q4_K_M</b>, it is already selected.</li>
+          <li>Press download. Encoder and VAE come along automatically.</li>
+          <li class="go"><a class="pill-btn big" href="/#downloads">Open the Download Center</a></li>
+        </ol>
+      </div>
+
+      <h3 class="h3">Other models</h3>
+      <div class="tblwrap"><table class="tbl models">
+        <thead><tr><th>Model</th><th>Good for</th><th>Edit</th><th>Generate</th><th>Q4 file</th></tr></thead>
+        <tbody>
+          <tr><td><b>Qwen-Image 2.1 UC</b></td><td>All-round edits, no content filter</td><td>✓</td><td>✓</td><td>4.6 GB</td></tr>
+          <tr><td><b>Qwen-Image 2.1</b></td><td>Same, official model with the usual limits</td><td>✓</td><td>✓</td><td>4.2 GB</td></tr>
+          <tr><td><b>Viggle Turbo</b></td><td>Quick drafts in 6 steps, a bit softer</td><td>✓</td><td>✓</td><td>4.3 GB</td></tr>
+          <tr><td><b>Z-Image Turbo</b></td><td>Fast photo-real images in 8 steps</td><td>mask only</td><td>✓</td><td>5.0 GB</td></tr>
+          <tr><td><b>Qwen-Image-Edit 2511</b></td><td>Hardest edits: people, relighting, new angles</td><td>✓</td><td></td><td>13.2 GB</td></tr>
+          <tr><td><b>Qwen-Image 2512</b></td><td>Top realism and text on posters</td><td></td><td>✓</td><td>13.2 GB</td></tr>
+        </tbody>
+      </table></div>
+      <p class="aside">The two 13 GB models need a 32 GB Mac and are much slower. Files already on your Mac can be added under <b>Your files</b> in the Download Center.</p>
+    </section>
+
+    <!-- ============================================================ use -->
+    <section id="use" class="sec">
+      <h2>Your first edit</h2>
+      <p class="sub">The Create screen, step by step. The numbers in the picture match the list.</p>
+      <div class="mock" aria-hidden="true">
+        <div class="m-col">
+          <div class="m-seg"><span class="on">Edit</span><span>Generate</span><span>Upscale</span><i class="n">1</i></div>
+          <div class="m-field">Model<b>Qwen-Image 2.1 UC</b><i class="n">2</i></div>
+          <div class="m-thumb"><i class="n">3</i></div>
+          <div class="m-cards"><span class="on">Inpaint</span><span>Whole</span><span>Paste</span><span>Extend</span><i class="n">4</i></div>
+        </div>
+        <div class="m-col m-mid">
+          <div class="m-canvas"><div class="m-mask"></div></div>
+          <div class="m-tools"><span>Find mask</span><span class="on">Paint</span><span>Erase</span><span>Wand</span><span>Bucket</span><i class="n">5</i></div>
+        </div>
+        <div class="m-col">
+          <div class="m-prompt">Replace the roof with red tiles<i class="n">6</i></div>
+          <div class="m-checks"><span></span>Remove watermarks and text</div>
+          <div class="m-run">Add edit to queue<i class="n">7</i></div>
+        </div>
+      </div>
+      <ol class="howto">
+        <li><b>Pick a task.</b> Edit changes a picture, Generate makes one from text, Upscale only enlarges.</li>
+        <li><b>Pick a model.</b> Only installed models show up.</li>
+        <li><b>Choose an image</b> or a whole folder (every file gets the same edit).</li>
+        <li><b>Choose what may change.</b> See the four areas below.</li>
+        <li><b>Mark the spot.</b> Type "roof" under Find mask, or paint it with the brush (B), wand (W) or bucket (G).</li>
+        <li><b>Say what should happen.</b> Plain instructions work best: "remove the person", "make it sunset".</li>
+        <li><b>Add edit to queue</b> (⌘↵). You can prepare the next one while it runs.</li>
+      </ol>
+
+      <h3 class="h3">What may change</h3>
+      <div class="areas">
+        <figure><svg viewBox="0 0 120 80"><rect class="fr" x="4" y="4" width="112" height="72" rx="6"/><rect class="chg" x="4" y="4" width="112" height="72" rx="6"/></svg>
+          <figcaption><b>Whole image</b>Everything may change. For style, light or season.</figcaption></figure>
+        <figure><svg viewBox="0 0 120 80"><rect class="fr" x="4" y="4" width="112" height="72" rx="6"/><path class="chg" d="M40 30c8-14 34-12 40 2s-4 30-20 30-28-18-20-32z"/></svg>
+          <figcaption><b>Masked area, inpaint</b>Only the painted pixels are made new.</figcaption></figure>
+        <figure><svg viewBox="0 0 120 80"><rect class="fr" x="4" y="4" width="112" height="72" rx="6"/><rect class="chg soft" x="4" y="4" width="112" height="72" rx="6"/><path class="chg" d="M40 30c8-14 34-12 40 2s-4 30-20 30-28-18-20-32z"/></svg>
+          <figcaption><b>Free edit + paste</b>Edits the whole picture, then only the masked part is pasted back.</figcaption></figure>
+        <figure><svg viewBox="0 0 120 80"><rect class="chg" x="4" y="4" width="112" height="72" rx="6"/><rect class="fr solid" x="34" y="18" width="52" height="44" rx="4"/></svg>
+          <figcaption><b>Extend canvas</b>The picture gets a new shape, the new space is filled in.</figcaption></figure>
+      </div>
+
+      <h3 class="h3">After you press the button</h3>
+      <div class="runs-flow">
+        <div><b>Queue</b><span>Runs shows each job with "step 7 of 20" and the time left.</span></div>
+        <div><b>Live preview</b><span>Watch the picture come out of the noise.</span></div>
+        <div><b>Result</b><span>Drag the slider to compare before and after.</span></div>
+        <div><b>Polish</b><span>Post-processing fixes colours, edges and adds grain. Upscale makes it bigger.</span></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ settings -->
+    <section class="sec">
+      <h2>The knobs, in one table</h2>
+      <p class="sub">All under <b>Advanced</b>. The defaults are good, change one thing at a time.</p>
+      <div class="tblwrap"><table class="tbl">
+        <thead><tr><th>Setting</th><th>What it means</th><th>Rule of thumb</th></tr></thead>
+        <tbody>
+          <tr><td><b>Steps</b></td><td>How many rounds of the loop</td><td>20 · Turbo 6 · Z-Image 8</td></tr>
+          <tr><td><b>CFG</b></td><td>How strictly the prompt is followed</td><td>1.0 for Qwen-Image 2.1, 4 for 2511 / 2512</td></tr>
+          <tr><td><b>Seed</b></td><td>The starting noise</td><td>Keep it to repeat, change it for a variation</td></tr>
+          <tr><td><b>Denoise</b></td><td>How much of the start picture may be replaced</td><td>1.0 = everything, lower stays closer</td></tr>
+          <tr><td><b>Negative prompt</b></td><td>What you do not want</td><td>Usually empty</td></tr>
+          <tr><td><b>LoRA strength</b></td><td>How much the add-on pushes</td><td>Start with the suggested value</td></tr>
+          <tr><td><b>×1 … ×8</b></td><td>Same edit with several seeds</td><td>×4 to pick the best one</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ============================================================ help -->
+    <section class="sec">
+      <h2>When something looks wrong</h2>
+      <div class="tblwrap"><table class="tbl">
+        <thead><tr><th>You see</th><th>Why</th><th>Try</th></tr></thead>
+        <tbody>
+          <tr><td>Gray noise instead of a picture</td><td>Too many tokens</td><td>Turn on Auto-fix size, or use a smaller size</td></tr>
+          <tr><td>Very slow, Mac gets sluggish</td><td>Model too big for the RAM</td><td>Q4_K_M or a Turbo model, press <b>Free</b> in the top bar</td></tr>
+          <tr><td>The old object comes back</td><td>Inpaint copies its surroundings</td><td>Use Free edit + paste, or a bigger mask</td></tr>
+          <tr><td>Hard edge around the change</td><td>Mask edge too sharp</td><td>Feather the mask, or Post-processing → seamless edges</td></tr>
+          <tr><td>Colours shifted slightly</td><td>The model re-painted everything</td><td>Post-processing → match colours</td></tr>
+          <tr><td>Model missing in the picker</td><td>Not downloaded yet</td><td>Download Center</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ============================================================ glossary -->
+    <section class="sec">
+      <h2>Words you will meet</h2>
+      <dl class="gloss">
+        <dt>Prompt</dt><dd>Your instruction in plain words.</dd>
+        <dt>Mask</dt><dd>The painted area that may change.</dd>
+        <dt>Latent</dt><dd>The packed, small version of a picture the painter works on.</dd>
+        <dt>Token</dt><dd>One cell of the latent, a 16 × 16 pixel block.</dd>
+        <dt>Node</dt><dd>One box in the graph, doing one job.</dd>
+        <dt>Sampler</dt><dd>The node that runs the loop.</dd>
+        <dt>GGUF</dt><dd>A file format for quantised models.</dd>
+        <dt>Quantisation</dt><dd>Fewer bits per number, smaller file.</dd>
+        <dt>LoRA</dt><dd>A small add-on that teaches the painter a style or trick.</dd>
+        <dt>ComfyUI</dt><dd>The engine that runs the graph.</dd>
+      </dl>
+    </section>
+
+    <footer class="gfoot">
+      <h2>Ready?</h2>
+      <div class="gfoot-btns"><a class="pill-btn big" href="/#downloads">Open the Download Center</a><a class="pill-btn big ghost" href="/#create">Start editing</a></div>
+    </footer>
+  </main>
+  <script src="/guide.js"></script>
+</body>
+</html>

@@ -875,3 +875,20 @@ select.compact { width: auto; max-width: 55%; min-height: 28px; padding-top: 2px
 #mRam em { min-width: 5.5em; }
 #freeMem:disabled { color: var(--muted); text-decoration: none; cursor: default; }
 @media (max-width: 900px) { .meters { display: none; } }
+/* link to the beginner guide (guide.html) next to the Download Center button */
+.guidelink { margin: 0 12px 0 8px; color: var(--charcoal); font-size: 13px; text-decoration: none; white-space: nowrap; }
+.guidelink:hover { color: var(--ink); text-decoration: underline; }
+@media (max-width: 700px) { .guidelink { display: none; } }
+/* Download Center: section jump bar (setup.js buildToc) */
+.setup-toc {
+  position: sticky; top: -24px; z-index: 5; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
+  margin: 0 -16px; padding: 10px 16px; background: var(--canvas); border-bottom: 1px solid var(--hairline);
+}
+.setup-toc::-webkit-scrollbar { display: none; }
+.setup-toc button {
+  flex: none; min-height: 30px; padding: 0 12px; border: 0; border-radius: var(--r-pill); background: none;
+  color: var(--body); font-size: 13px; font-weight: 600; box-shadow: none;
+}
+.setup-toc button:hover { color: var(--ink); background: var(--surface); }
+.setup-toc button.on { color: var(--ink); background: var(--selected); }
+.setup .plist { scroll-margin-top: 64px; }

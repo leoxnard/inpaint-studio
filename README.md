@@ -14,6 +14,9 @@ It runs on top of **ComfyUI** (`http://127.0.0.1:8188`) and starts it for you if
 - Masks with **SAM3** (type what to mask), then touch them up with a brush
 - Live preview of every step, a server-side queue and a full run history
 
+New to AI images? **How it works** in the top bar opens a visual guide (`/guide.html`): the parts, the three
+model files, the node graph, the sampling loop, quantisations, a model recommendation and a first edit.
+
 ## Contents
 
 - [Quick start](#quick-start)
@@ -231,7 +234,9 @@ The × on a single result tile hides just that one.
 
 The model picker is in the top bar. The **Download Center** installs and deletes models, upscalers and LoRAs.
 For each model you pick a quantisation in an LM Studio style list (format, RAM fit, recommended for
-this Mac, downloaded, size).
+this Mac, downloaded, size). Q4 (Q4_K_M where there is one) is preselected; models without a Q4 file get the largest
+quantisation that fits. A bar at the top jumps between the sections (Components, Models, Upscalers, Control,
+LoRAs, Your files).
 
 | Model | Edit | Generate |
 |---|:-:|:-:|

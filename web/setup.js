@@ -116,6 +116,7 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
       inner.appendChild(buildControl());
       inner.appendChild(buildLoras());
       inner.appendChild(buildImports());
+      inner.insertBefore(buildToc(inner), ui.panel);
     } else {
       seedFirstRun();
       inner.appendChild(buildGuided());
@@ -123,6 +124,27 @@ export function createSetup({ api, postJson, root, onReady, onBack, onChanged })
     inner.appendChild(buildPaths());
     updateAll();
     root.scrollTop = scroll;
+  }
+
+  // ---------------------------------------------------------------- section jump bar (ready mode)
+  // one button per section heading; sticks to the top while scrolling and marks the section in view
+  function buildToc(inner) {
+    const nav = el("nav", "setup-toc");
+    nav.setAttribute("aria-label", "Sections");
+    const links = [...inner.querySelectorAll(".plist > h3.sec")].map((h) => {
+      const b = el("button", null, h.textContent);
+      b.onclick = () => h.parentElement.scrollIntoView({ behavior: "smooth", block: "start" });
+      nav.appendChild(b);
+      return [b, h.parentElement];
+    });
+    const mark = () => {
+      const line = root.getBoundingClientRect().top + nav.offsetHeight + 48;
+      const cur = links.filter(([, s]) => s.getBoundingClientRect().top <= line).pop() || links[0];
+      for (const l of links) l[0].classList.toggle("on", l === cur);
+    };
+    root.onscroll = mark;
+    requestAnimationFrame(mark);
+    return nav;
   }
 
   // ---------------------------------------------------------------- progress panel

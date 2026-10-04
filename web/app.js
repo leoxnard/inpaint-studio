@@ -3228,9 +3228,13 @@ async function restoreSession() {
   }
 }
 
+// #downloads (links on the guide page) opens the Download Center on top of Create; read before anything rewrites the hash
+const openDownloads = location.hash === "#downloads";
 async function startSession() {
   await Promise.all([restoreSession(), loadStoredRuns()]);
+  if (openDownloads) history.replaceState(null, "", "#create");
   route();
+  if (openDownloads) showSetup();
   connectJobs();
   // the viewer starts on the latest result
   if (!state.run && !state.wantRun) showLatest();

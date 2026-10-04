@@ -207,7 +207,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "recommended": True,
         "title": "Qwen-Image 2.1 UC", "family": "qwen21", "modes": ["edit", "generate"],
         "note": "Uncensored fine-tune of Qwen-Image 2.1. Edits by instruction and generates.",
-        "repo": "abenzerps/Qwen-Image-2.1-Uncensored-GGUF", "default_quant": "Q8_0",
+        "repo": "abenzerps/Qwen-Image-2.1-Uncensored-GGUF", "default_quant": "Q4_K_M",
         "quants": _quants("qwen-image-2.1-UC", {
             "Q4_0": 4_151_573_280, "Q4_K_M": 4_604_558_112, "Q5_K_M": 5_221_284_640, "Q6_K": 5_876_556_576,
             "int8_convrot": 7_256_796_840, "Q8_0": 7_591_557_920, "BF16": 14_230_272_800}),
@@ -218,7 +218,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "good_for": "Same as UC, but the official model with its usual content limits. Good default to share with others.",
         "title": "Qwen-Image 2.1", "family": "qwen21", "modes": ["edit", "generate"],
         "note": "Official Qwen-Image 2.1 (GGUF by unsloth). Edits by instruction and generates.",
-        "repo": "unsloth/Qwen-Image-2.1-GGUF", "default_quant": "Q8_0",
+        "repo": "unsloth/Qwen-Image-2.1-GGUF", "default_quant": "Q4_K_M",
         "quants": _quants("qwen-image-2.1", {
             "Q2_K": 2_466_137_824, "Q3_K_S": 2_724_742_880, "Q3_K_M": 3_168_290_528, "Q3_K_XL": 3_612_493_536,
             "Q4_K_S": 3_906_356_960, "Q4_K_M": 4_199_565_024, "Q5_K_S": 4_501_948_128, "Q5_K_M": 5_390_223_072,
@@ -231,7 +231,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "recommended": True,
         "title": "Qwen-Image 2.1 Viggle Turbo", "family": "qwen21_turbo", "modes": ["edit", "generate"],
         "note": "Few-step distilled Qwen-Image 2.1 (v0.3, LoRA merged): 6 steps, no CFG, about 5x faster.",
-        "repo": "Viggle/Qwen-Image-2.1-viggle-turbo", "default_quant": "Q8_0",
+        "repo": "Viggle/Qwen-Image-2.1-viggle-turbo", "default_quant": "Q4_K_M",
         "quants": _quants("Qwen-Image-2.1-viggle-turbo-v0.3-6step", {
             "Q4_K_M": 4_335_931_552, "Q5_K_M": 5_141_237_920, "Q6_K": 5_996_875_936,
             "int8_convrot": 7_256_783_064, "Q8_0": 7_687_180_448}),
@@ -242,7 +242,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "good_for": "The hardest edits: keeping the identity of a person, group photos, relighting, new viewpoints, product and material swaps.",
         "title": "Qwen-Image-Edit 2511", "family": "qwen_edit", "modes": ["edit"], "experimental": True,
         "note": "20B edit model (GGUF by unsloth). Strong edits, but large and slow on 32 GB.",
-        "repo": "unsloth/Qwen-Image-Edit-2511-GGUF", "default_quant": "Q4_K_S",
+        "repo": "unsloth/Qwen-Image-Edit-2511-GGUF", "default_quant": "Q4_K_M",
         "quants": _quants("qwen-image-edit-2511", {
             "Q2_K": 7_468_022_368, "Q3_K_S": 9_218_914_912, "Q3_K_M": 9_920_805_472, "Q3_K_L": 10_581_408_352,
             "Q4_0": 11_852_773_984, "Q4_K_S": 12_410_747_488, "Q4_1": 12_843_678_304, "Q4_K_M": 13_244_758_624,
@@ -255,7 +255,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "good_for": "Top photorealism and rendered text for text-to-image: posters, slides, realistic people and nature.",
         "title": "Qwen-Image 2512", "family": "qwen", "modes": ["generate"], "experimental": True,
         "note": "20B text-to-image model (Dec 2025, GGUF by unsloth): very realistic people and text. Large and slow on 32 GB.",
-        "repo": "unsloth/Qwen-Image-2512-GGUF", "default_quant": "Q4_K_S",
+        "repo": "unsloth/Qwen-Image-2512-GGUF", "default_quant": "Q4_K_M",
         "quants": _quants("qwen-image-2512", {
             "Q2_K": 7_333_837_344, "Q3_K_S": 9_223_928_352, "Q3_K_M": 9_932_896_800, "Q4_0": 11_852_773_920,
             "Q4_K_S": 12_268_010_016, "Q4_1": 12_843_678_240, "Q4_K_M": 13_244_758_560, "Q5_K_S": 14_298_184_224,
@@ -269,7 +269,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "recommended": True,
         "title": "Z-Image Turbo", "family": "zimage", "modes": ["generate", "edit"],
         "note": "Fast text-to-image (8 steps, GGUF by unsloth). Edit = img2img/inpaint only, no instructions.",
-        "repo": "unsloth/Z-Image-Turbo-GGUF", "default_quant": "Q8_0",
+        "repo": "unsloth/Z-Image-Turbo-GGUF", "default_quant": "Q4_K_M",
         "quants": _quants("z-image-turbo", {
             "Q2_K": 3_639_683_136, "Q3_K_S": 3_951_806_016, "Q3_K_M": 4_186_161_216, "Q4_0": 4_585_244_736,
             "Q4_K_S": 4_710_950_976, "Q4_1": 4_850_665_536, "Q4_K_M": 5_017_613_376, "Q5_K_S": 5_237_860_416,
@@ -328,9 +328,17 @@ def memory_fit(need: int, ram: int) -> str:
     return "no"
 
 
+# preferred default quantisation, best Q4 first
+Q4_ORDER = ("Q4_K_M", "Q4_K_S", "Q4_1", "Q4_0")
+
+
 def recommended_quant(pid: str, ram: int) -> str:
-    """Largest quant that fits comfortably, preferring Q8_0 over bigger 16-bit files."""
+    """Q4 when the model has one (small, almost the same quality); otherwise the largest quant that fits
+    comfortably, preferring Q8_0 over bigger 16-bit files."""
     pr = PRESETS[pid]
+    q4 = next((q for q in Q4_ORDER if q in pr["quants"]), None)
+    if q4:
+        return q4
     fitting = [q for q in pr["quants"] if memory_fit(memory_need(pid, q), ram) == "good"]
     if not fitting:
         return min(pr["quants"], key=lambda q: pr["quants"][q]["size"])

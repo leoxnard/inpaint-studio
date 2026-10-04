@@ -12,7 +12,7 @@ const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postAlign", "postColors", "postWarp", "postPoisson", "postGrain", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
   "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg",
-  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleLong", "upscaleMB", "upscaleGrain", "colorCorrection", "cropStitch", "cropContext",
+  "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleLong", "upscaleMB", "upscaleGrain", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
 // Post-processing options start at the HTML default (on) and keep a stored value only once the user clicked them

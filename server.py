@@ -469,6 +469,37 @@ async def delete_run(run_id: str):
     return {"deleted": run_id}
 
 
+class GrainReq(BaseModel):
+    on: bool = True
+
+
+@app.post("/api/runs/{run_id}/grain")
+async def grain_run(run_id: str, req: GrainReq):
+    """Adds the original's grain to a finished result afterwards (prepare.add_grain) -> <run>_grain.png and
+    run["grain_url"], which the viewer and downloads then prefer; on: false goes back to the result without it."""
+    f = (RUNS / run_id / "run.json").resolve()
+    if f.parent.parent != RUNS.resolve() or not f.is_file():
+        raise HTTPException(404, "run not found")
+    run = json.loads(f.read_text())
+    if not req.on:
+        run.pop("grain_url", None)
+        save_run(run)
+        return run
+    if not (run.get("before_url") and run.get("result_url")):
+        raise HTTPException(400, "adding grain needs an original image (not for generated images)")
+    fixed = RUNS / run_id / "aligned.png"
+    result = Image.open(fixed) if run.get("aligned") and fixed.exists() else await _fetch_view(run["result_url"])
+    orig = await _fetch_view(run["before_url"])
+    out = await asyncio.to_thread(prepare.add_grain, orig, result, int(run.get("params", {}).get("seed") or 0))
+    out_dir = COMFY_OUTPUT or Path(installer.load_config()["output_dir"])
+    (out_dir / "InpaintStudio").mkdir(parents=True, exist_ok=True)
+    name = f"{run_id}_grain.png"
+    await asyncio.to_thread(out.save, out_dir / "InpaintStudio" / name)
+    run["grain_url"] = view_url({"filename": name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={int(time.time() * 1000)}"
+    save_run(run)
+    return run
+
+
 @app.post("/api/runs/{run_id}/hide")
 async def hide_run(run_id: str):
     """Removes a run from the history without deleting any file (run.json gets hidden: true)."""

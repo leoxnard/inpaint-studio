@@ -126,6 +126,9 @@ factor (1–4×), a target width in px (each image of a folder gets that width) 
 (estimated from how well the original compresses as PNG, `prepare.size_for_megabytes`; usually within ±25 %). Upscalers come out clean and
 lose the camera's grain, so by default the original's grain is added back at its original size
 (`prepare.add_grain`, saved as `<run>_grain.png`; the clean upscale stays as `<run>.png`, "Clean" in Runs).
+Any finished edit or upscale can also get the grain afterwards: **Add grain** in Runs (`POST /api/runs/{id}/grain`,
+measured on the run's original; **Remove grain** goes back). Compare sorts the picked results by model, then
+parameter count and quantisation.
 Pixel-space upscalers to download: UltraSharp (V1/V2), UltraMix Balanced, Remacri, NMKD Siax, RealESRGAN 2x/4x.
 
 ## Requirements & setup

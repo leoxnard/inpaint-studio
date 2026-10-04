@@ -1660,6 +1660,8 @@ function visibleFrames(run) {
   return out;
 }
 
+// the result as shown and downloaded: with grain added afterwards, else the fixed one, else the plain result
+const shownResult = (run) => run.grainUrl || run.aligned?.url || run.resultUrl;
 const hasRaw = (run) => !!(run && (run.rawUrl || run.frames.some((f) => f.variant === "raw")));
 
 // one step frame in the viewer
@@ -1682,7 +1684,7 @@ function showFinal() {
   run.shown = null;
   for (const img of $("filmstrip").children) img.classList.remove("active");
   $("resultEmpty").hidden = true;
-  const after = $("viewRaw").checked && run.rawUrl ? run.rawUrl : (run.aligned?.url || run.resultUrl);
+  const after = $("viewRaw").checked && run.rawUrl ? run.rawUrl : shownResult(run);
   if (!run.beforeUrl || !$("compareToggle").checked) {
     $("liveImg").src = after;
     $("liveImg").hidden = false;
@@ -2007,9 +2009,13 @@ function renderDetails(run, status) {
     : "The settings of this run are not known to this page (it was queued elsewhere)";
   $("useResult").hidden = !(done && run.resultUrl);
   $("alignBtn").hidden = !(done && run.serverId && run.rawUrl && run.maskUrl && !run.params?.outpaint);
+  // grain afterwards: needs an original; upscales made with grain have it already ("With grain / Clean")
+  $("grainBtn").hidden = !(done && run.serverId && run.beforeUrl && run.resultUrl && runTask(run) !== "generate"
+    && !(runTask(run) === "upscale" && run.params?.grain));
+  $("grainBtn").textContent = run.grainUrl ? "Remove grain" : "Add grain";
   $("downloadBtn").hidden = !(done && run.resultUrl);
   if (done && run.resultUrl) {
-    $("downloadBtn").href = run.aligned?.url || run.resultUrl;
+    $("downloadBtn").href = shownResult(run);
     $("downloadBtn").download = run.filename || "result.png";
   }
   $("downloadUpscaled").hidden = !(done && run.upscaledUrl);
@@ -2056,7 +2062,7 @@ function runFromStored(r) {
     frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
-    aligned: r.aligned || null, task: r.params?.task || "edit", preset: r.params?.preset || null,
+    aligned: r.aligned || null, grainUrl: r.grain_url || null, task: r.params?.task || "edit", preset: r.params?.preset || null,
     value: r.params?.steps, max: r.params?.steps, created: r.created, finished: r.finished || null,
     started: r.started || null, took: r.took || null,
     status: r.status || "done", error: r.error || null, params: r.params || null, size: r.size || null,
@@ -2289,7 +2295,7 @@ $("useResult").onclick = async () => {
   const run = state.run;
   if (!run || !run.resultUrl) return;
   try {
-    const blob = await (await fetch(run.aligned?.url || run.resultUrl)).blob();
+    const blob = await (await fetch(shownResult(run))).blob();
     if (!ensureEditTask()) return;
     await setImageFile(new File([blob], run.filename || "result.png", { type: blob.type || "image/png" }));
     setView("create");
@@ -2885,6 +2891,21 @@ $("alignBtn").onclick = () => {
   setAlignValues(run.aligned || { dx: 0, dy: 0, scale: 1, colors: true, warp: false, poisson: false });
   $("alignInfo").textContent = "Try Auto-align and the fixes, then fine-tune with the arrows (Shift = 5 px).";
   schedulePreview();
+};
+$("grainBtn").onclick = async () => {
+  const run = state.run;
+  if (!run?.serverId) return;
+  const on = !run.grainUrl;
+  $("grainBtn").disabled = true;
+  $("grainBtn").textContent = on ? "Adding grain..." : "Removing...";
+  try {
+    const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/grain`, { on });
+    run.grainUrl = res.grain_url || null;
+    showToast(on ? "Grain added." : "Grain removed.");
+  } catch (e) { showError(e.message); } finally {
+    $("grainBtn").disabled = false;
+    renderViewer();
+  }
 };
 $("alignClose").onclick = () => { $("alignPanel").hidden = true; showFinal(); };
 $("alignAuto").onclick = () => alignRequest({ auto: true, save: false });

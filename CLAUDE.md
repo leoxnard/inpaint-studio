@@ -56,7 +56,7 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - Encoder resolution is matched to the working size by default (`graphs.matching_resolution`):
   a different reference size shifts/scales the free edit.
 - Uploads go to ComfyUI `input/inpaint-studio/`. Results: `output/InpaintStudio/<run>.png`,
-  `<run>_raw.png`, `<run>_fixed.png`, `<run>_x2.png`, `<run>_full.png` (crop & stitch); `<run>/before.png` and
+  `<run>_raw.png`, `<run>_fixed.png`, `<run>_x2.png`, `<run>_full.png` (crop & stitch), `<run>_grain.png` (grain added, `run.grain_url` when added afterwards); `<run>/before.png` and
   `<run>/step_NN_TOTAL.png` (+ `raw_step_…`), `<run>/config.json` (all params, encoder prompt, graph). The server strips ComfyUI's `_00001_` counter.
 - Run history: `~/Library/Application Support/Inpaint Studio/runs/<id>/run.json` + live preview
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by

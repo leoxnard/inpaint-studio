@@ -612,7 +612,6 @@ details.sec { padding-top: 12px; }
 .runbox { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
 #settingsCol .runbox .row > button.big { flex: 1; }
 button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
-.runbox .row #runOne { min-height: 44px; flex: none; }
 .toast { background: var(--ink); color: var(--on-ink); }
 .toast.error { background: var(--canvas); color: var(--bad); border: 1px solid var(--bad); }
 .toast a { color: inherit; font-weight: 600; white-space: nowrap; }
@@ -866,7 +865,7 @@ body.mode-outpaint:not(.task-generate) #display.op-paint { cursor: crosshair; }
 .sel-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 250px; display: flex; flex-direction: column; gap: 2px;
   padding: 4px; background: var(--canvas, var(--surface)); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .14); }
 .sel-menu[hidden] { display: none; }
-.sel-menu button { display: flex; gap: 10px; align-items: flex-start; text-align: left; border: 0; border-radius: 7px; padding: 8px 10px; min-height: 0; background: transparent; }
+.sel-menu button { display: flex; gap: 10px; align-items: flex-start; justify-content: flex-start; text-align: left; border: 0; border-radius: 7px; padding: 8px 10px; min-height: 0; background: transparent; }
 .sel-menu button svg { margin-top: 2px; flex: none; }
 .sel-menu button span { display: flex; flex-direction: column; gap: 2px; }
 .sel-menu button small { color: var(--mute); font-size: 12px; font-weight: 400; }

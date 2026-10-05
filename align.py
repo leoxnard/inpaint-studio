@@ -27,13 +27,33 @@ def _gray(img: Image.Image, size: tuple[int, int]) -> np.ndarray:
     return np.asarray(img.convert("L").resize(size, Image.BILINEAR), dtype=np.float64)
 
 
-def transform(img: Image.Image, dx: float, dy: float, scale: float, fill=0) -> Image.Image:
-    """Scale around the image centre, then shift by (dx, dy) pixels."""
+def transform(img: Image.Image, dx: float, dy: float, scale: float, fill=0,
+              sx: float = 1.0, sy: float = 1.0, corners: list | None = None) -> Image.Image:
+    """Scale around the image centre, then shift by (dx, dy) pixels. sx / sy stretch one axis on top of scale;
+    corners ([[dx, dy]] for top-left, top-right, bottom-right, bottom-left, in pixels) then move each image corner
+    on its own (a perspective warp)."""
+    if sx != 1 or sy != 1 or (corners and any(c[0] or c[1] for c in corners)):
+        return _perspective(img, dx, dy, scale, fill, sx, sy, corners)
     w, h = img.size
     cx, cy = w / 2, h / 2
     inv = 1.0 / scale
     coeffs = (inv, 0, cx - (cx + dx) * inv, 0, inv, cy - (cy + dy) * inv)
     return img.transform(img.size, Image.AFFINE, coeffs, resample=Image.BICUBIC, fillcolor=fill)
+
+
+def _perspective(img: Image.Image, dx: float, dy: float, scale: float, fill, sx: float, sy: float,
+                 corners: list | None) -> Image.Image:
+    w, h = img.size
+    cx, cy = w / 2, h / 2
+    src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+    dst = np.float32([[cx + (x - cx) * scale * sx + dx, cy + (y - cy) * scale * sy + dy] for x, y in src])
+    if corners:
+        dst += np.float32(corners)
+    mat = cv2.getPerspectiveTransform(src, dst)
+    a = np.asarray(img)
+    border = fill if a.ndim == 2 else (fill,) * a.shape[2]
+    out = cv2.warpPerspective(a, mat, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=border)
+    return Image.fromarray(out)
 
 
 def _phase_shift(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
@@ -278,7 +298,8 @@ def unchanged(o: np.ndarray, m: np.ndarray) -> np.ndarray:
 def compose(original: Image.Image, raw: Image.Image, mask: Image.Image | None,
             dx: float, dy: float, scale: float,
             colors: bool = False, warp: bool = False, poisson: bool = False,
-            color_gain: bool = False, whole: bool = False) -> tuple[Image.Image, dict]:
+            color_gain: bool = False, whole: bool = False,
+            sx: float = 1.0, sy: float = 1.0, corners: list | None = None) -> tuple[Image.Image, dict]:
     """Paste the masked area of the transformed (and optionally fixed) raw image into the original.
     mask None (whole-image edit): the whole transformed image is used, the fixes are measured on the pixels the
     edit did not change (`unchanged`), and only edges the shift uncovers keep the original.
@@ -287,8 +308,8 @@ def compose(original: Image.Image, raw: Image.Image, mask: Image.Image | None,
     raw = raw.convert("RGB").resize(original.size, Image.BICUBIC)
     want_whole, whole = whole, mask is None
     mask_l = Image.new("L", original.size, 255) if whole else mask.convert("L").resize(original.size, Image.BILINEAR)
-    moved = transform(raw, dx, dy, scale)
-    valid = transform(Image.new("L", original.size, 255), dx, dy, scale)
+    moved = transform(raw, dx, dy, scale, sx=sx, sy=sy, corners=corners)
+    valid = transform(Image.new("L", original.size, 255), dx, dy, scale, sx=sx, sy=sy, corners=corners)
     o = np.asarray(original, dtype=np.float64)
     m = np.asarray(moved, dtype=np.float64)
     mk = np.asarray(mask_l)

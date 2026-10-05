@@ -1,0 +1,20 @@
+/* Mask editor modal (web/maskedit.js); the frame uses the ie- classes of imageedit.css. */
+.me-canvas { cursor: none; }
+.me-cursor {
+  position: absolute; pointer-events: none; border-radius: 50%; transform: translate(-50%, -50%);
+  border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.6);
+}
+.me-cursor.me-erase { border-style: dashed; }
+.me-cursor[hidden] { display: none; }
+
+/* corner handles of the perspective fix, on top of the Runs viewer */
+.corner-layer { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.corner-layer[hidden] { display: none; }
+.corner-handle {
+  position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; padding: 0; min-height: 0;
+  border-radius: 50%; border: 2px solid #fff; background: rgba(255, 60, 60, .55); box-shadow: 0 0 0 1px rgba(0,0,0,.6);
+  pointer-events: auto; cursor: grab; touch-action: none;
+}
+.corner-handle:active { cursor: grabbing; }
+.corner-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.corner-lines polygon { fill: none; stroke: #fff; stroke-width: 1.5; stroke-dasharray: 5 4; filter: drop-shadow(0 0 1px #000); }

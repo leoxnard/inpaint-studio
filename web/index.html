@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700&display=swap">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/imageedit.css">
+  <link rel="stylesheet" href="/maskedit.css">
 </head>
 <body>
   <header class="topbar">
@@ -79,10 +80,9 @@
           <div class="hint" id="batchInfo"></div>
           <div class="row wrap" id="batchMenu">
             <button id="batchSkip" title="Skip this image: it is left out of the batch (also of the submit-all buttons) and the next open image opens. Submitting it later still works.">Skip</button>
+            <button id="runOne" hidden title="Queue only the image that is open now, then open the next one">Only this image</button>
             <button id="batchMaskAll" class="needs-mask" title="Compute masks for all open images one after another (nothing is queued). Then review them with ← → and submit.">Mask all</button>
-            <button id="batchSubmitMasked" class="needs-mask" title="Queue every image that has a mask (computed or painted)">Submit all masked</button>
             <button id="batchAutoAll" class="needs-mask" title="Compute a mask with the current mask settings for every open image and queue them; images where nothing is found are skipped">Auto-mask and submit all</button>
-            <button id="batchNoMaskAll" title="Queue every open image without a mask (whole image is edited)">Submit all without mask</button>
           </div>
         </div>
       </section>
@@ -394,7 +394,6 @@
             <option value="1">×1</option><option value="2">×2</option><option value="3">×3</option><option value="4">×4</option>
             <option value="6">×6</option><option value="8">×8</option>
           </select>
-          <button id="runOne" hidden title="Queue only the image that is open now">Only this image</button>
         </div>
       </div>
     </aside>
@@ -462,6 +461,14 @@
               <label>dx <input type="number" id="alignDx" step="0.5" value="0"></label>
               <label>dy <input type="number" id="alignDy" step="0.5" value="0"></label>
               <label>scale % <input type="number" id="alignScale" step="0.1" value="100"></label>
+            </div>
+            <div class="row wrap post-fix post-geo">
+              <label title="Stretch the edit horizontally">stretch x % <input type="number" id="alignSx" step="0.1" value="100"></label>
+              <label title="Stretch the edit vertically">stretch y % <input type="number" id="alignSy" step="0.1" value="100"></label>
+              <button id="cornersBtn" aria-pressed="false" title="Drag the four corners on the image to tilt the edit (perspective)">Corners</button>
+              <button id="cornersReset" title="Put the four corners back">Reset corners</button>
+              <button id="maskEditBtn" class="post-paste" title="Paint or erase where the edit is pasted in">Adjust mask…</button>
+              <button id="maskOrigBtn" class="post-paste" hidden title="Back to the mask the run was made with">Original mask</button>
             </div>
             <div class="row wrap">
               <label class="check post-fix"><input type="checkbox" id="fixColors"> Colours &amp; exposure</label>

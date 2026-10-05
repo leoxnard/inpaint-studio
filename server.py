@@ -889,6 +889,10 @@ _align_cache: dict[str, tuple] = {}
 
 
 async def _fetch_view(url: str) -> Image.Image:
+    if urlsplit(url).path.startswith("/data/runs/"):   # kept in the run dir (raw.png / source.png of post-processing)
+        img = Image.open(local_file(url))
+        await asyncio.to_thread(img.load)
+        return img
     params = dict(httpx.URL(url).params)
     r = await client.get("/view", params=params)
     if r.status_code != 200:
@@ -911,6 +915,10 @@ class PostReq(BaseModel):
     dx: float = 0
     dy: float = 0
     scale: float = 1.0
+    sx: float = 1.0        # stretch along x / y on top of scale
+    sy: float = 1.0
+    corners: list[list[float]] | None = None   # perspective: [dx, dy] px for top-left, top-right, bottom-right, bottom-left
+    mask: str | None = None   # a paste's mask adjusted in Post-processing (uploaded mask name), "original" = the run's own
     colors: bool = False
     warp: bool = False
     poisson: bool = False  # seamless edges (masked edits only)
@@ -963,7 +971,7 @@ def untouched_url(run: dict, kind: str | None) -> str:
 async def _post_inputs(run: dict, kind: str | None) -> tuple:
     """(original, untouched image, mask) for a run, kept in memory for the run being adjusted."""
     src = untouched_url(run, kind)
-    key = f"{run['id']}:{kind}:{src}"
+    key = f"{run['id']}:{kind}:{src}:{run.get('mask_url')}"
     if key not in _align_cache:
         _align_cache.clear()
         mask = await _fetch_view(run["mask_url"]) if kind == "paste" else None
@@ -994,6 +1002,10 @@ async def fix_image(run: dict, req: PostReq, kind: str, whole: bool = False) -> 
     if outpaint and moved.get("moved"):
         result["reframed"] = {k: round(moved[k], 3) for k in ("dx", "dy", "scale")}
     dx, dy, scale = req.dx, req.dy, req.scale
+    sx, sy = req.sx, req.sy
+    corners = req.corners if req.corners and len(req.corners) == 4 and any(c[0] or c[1] for c in req.corners) else None
+    if not (0.8 <= sx <= 1.25 and 0.8 <= sy <= 1.25) or (corners and max(abs(v) for c in corners for v in c[:2]) > 0.25 * max(original.size)):
+        raise HTTPException(400, "stretch or corner values out of range")
     if req.auto:
         est_mask = mask if mask is not None else Image.new("L", original.size, 0)
         est = await asyncio.to_thread(align.estimate, original, raw, est_mask)
@@ -1003,14 +1015,15 @@ async def fix_image(run: dict, req: PostReq, kind: str, whole: bool = False) -> 
         raise HTTPException(400, "alignment values out of range")
     opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson and kind == "paste" and not outpaint}
     composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts,
-                                              color_gain=outpaint, whole=whole)
+                                              color_gain=outpaint, whole=whole, sx=sx, sy=sy, corners=corners)
     if whole:
         result["whole"] = stats["whole"]
-    key = (run["id"], kind, run.get("result_url"))
+    key = (run["id"], kind, run.get("result_url"), run.get("mask_url"))
     if key not in _BASE_DIFF:   # the same for every slider position: compute once per run
         _, base = await asyncio.to_thread(align.compose, original, raw, mask, 0, 0, 1.0)
         _BASE_DIFF[key] = base["outside_diff"]
-    result.update({"dx": dx, "dy": dy, "scale": scale, **opts, "outside_diff": stats["outside_diff"],
+    result.update({"dx": dx, "dy": dy, "scale": scale, "sx": sx, "sy": sy, "corners": corners, **opts,
+                   "outside_diff": stats["outside_diff"],
                    "unaligned_diff": _BASE_DIFF[key]})
     return composed, result
 
@@ -1020,7 +1033,19 @@ def _grain_mask_url(run: dict) -> str | None:
     p = run.get("params") or {}
     if p.get("crop_box") and p.get("orig_mask"):
         return input_mask_url(p["orig_mask"])
-    return run.get("mask_url")
+    return run.get("post_mask_url") or run.get("mask_url")
+
+
+def post_mask_url(run: dict, req: PostReq) -> str | None:
+    """The mask a paste is composed with: the one adjusted in Post-processing (req.mask while adjusting, then
+    run["post_mask_url"]) or the run's own."""
+    if req.mask == "original":
+        return run.get("mask_url")
+    if req.mask:
+        if not req.mask.startswith(f"{SUBFOLDER}/masks/") or ".." in req.mask:
+            raise HTTPException(400, "unknown mask")
+        return input_mask_url(req.mask)
+    return run.get("post_mask_url") or run.get("mask_url")
 
 
 def _output_dir() -> Path:
@@ -1042,19 +1067,22 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
     if kind == "upscale":
         fixes = req.colors
     else:
-        fixes = kind is not None and (req.auto or req.dx or req.dy or req.scale != 1 or req.colors or req.warp or req.poisson)
+        fixes = kind is not None and (req.auto or req.dx or req.dy or req.scale != 1 or req.sx != 1 or req.sy != 1
+                                      or any(v for c in req.corners or [] for v in c) or req.colors or req.warp or req.poisson)
     result: dict[str, Any] = {"kind": kind}
-    original, untouched, _ = await _post_inputs(run, kind)
+    mask_url = post_mask_url(run, req) if kind == "paste" else run.get("mask_url")
+    view = {**run, "mask_url": mask_url, "post_mask_url": None}   # the run as composed now (an adjusted mask)
+    original, untouched, _ = await _post_inputs(view, kind)
     whole = None
     if fixes or kind == "paste":   # a paste is composed again even without fixes (its untouched part is the raw image)
-        img, info = await fix_image(run, req, kind, whole=req.save and kind == "paste" and not internal)
+        img, info = await fix_image(view, req, kind, whole=req.save and kind == "paste" and not internal)
         whole = info.pop("whole", None)
         result.update(info)
     else:
         img = untouched
     stamp = int(time.time() * 1000)
     if req.save and fixes:
-        run["aligned"] = {k: result[k] for k in ("dx", "dy", "scale", "colors", "warp", "poisson", "outside_diff")}
+        run["aligned"] = {k: result.get(k) for k in ("dx", "dy", "scale", "sx", "sy", "corners", "colors", "warp", "poisson", "outside_diff")}
         if internal:   # crop & stitch pastes this one into the original
             await asyncio.to_thread(img.save, RUNS / run_id / "aligned.png")
             run["aligned"]["url"] = f"/data/runs/{run_id}/aligned.png?t={stamp}"
@@ -1063,16 +1091,23 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
     if req.grain:
         if not run.get("before_url"):
             raise HTTPException(400, "grain needs an original image (not for generated images)")
-        mask_url = _grain_mask_url(run)
-        mask = await _fetch_view(mask_url) if mask_url else None
+        grain_mask = _grain_mask_url(view)
+        mask = await _fetch_view(grain_mask) if grain_mask else None
         seed = int((run.get("params") or {}).get("seed") or 0)
         img = await asyncio.to_thread(prepare.add_grain, original, img, seed, mask, req.grain_strength)
         if whole is not None:   # the whole generated image gets the grain everywhere
             whole = await asyncio.to_thread(prepare.add_grain, original, whole, seed, None, req.grain_strength)
     if req.save:
         run["grain"], run["grain_strength"] = req.grain, req.grain_strength
+        if kind == "paste":
+            if mask_url != run.get("mask_url"):
+                run["post_mask_url"] = mask_url
+            else:
+                run.pop("post_mask_url", None)
         if not internal:
-            await save_post_files(run, kind, untouched, img, whole, stamp, changed=fixes or req.grain)
+            await save_post_files(run, kind, untouched, img, whole, stamp, changed=fixes or req.grain or mask_url != run.get("mask_url"))
+        for old in (RUNS / run_id).glob("post_preview*.jpg"):   # the panel's previews are not needed any more
+            old.unlink(missing_ok=True)
         save_run(run)
         result["url"] = run["result_url"]
     else:

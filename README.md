@@ -151,12 +151,12 @@ Drop several images or a whole folder on the image area, or click **Choose image
 (the **Open** button next to *Image* does the same). They show up as a thumbnail grid and nothing starts on its own.
 
 - Go through them with ← →. Each image keeps its own mask.
-- **Add edit to queue** queues all open images, **Only this image** just the current one and then opens the next open image.
+- **Add edit to queue** queues all open images. **Only this image** (next to **Skip**) queues just the current one and then opens the next open image.
   **Enter** does what the big button says.
 - **Skip** leaves an image out of the batch.
 - **Mask all** computes masks for every image (nothing is queued), so you can check them first.
-- **Submit all masked**, **Auto-mask and submit all** (images without a match are skipped) or
-  **Submit all without mask**.
+- **Auto-mask and submit all** computes and queues in one go (images without a match are skipped). For edits without
+  a mask, use the Whole image mode.
 - The **+** tile adds more images (also to a single open image, which then becomes a batch). Hover a tile: **−** removes the image, the pencil opens the editor.
 **Clear** (next to *Images*) closes the batch, **Reactivate batch** makes queued and skipped images open again.
 - **Editor:** rotate by 90°, straighten (the image zooms in so no corner stays empty), flip and crop with ratio presets
@@ -190,6 +190,8 @@ The same options are in Create and run automatically when the job is done.
 | Fix | Free edit + paste | Whole image | Upscale | Other edits |
 |---|:-:|:-:|:-:|:-:|
 | Shift & scale (Auto-align, then the arrows, Shift = 5 px) | ✓ | ✓ | | |
+| Stretch x / y, and **Corners**: drag each of the four corners on the image (perspective) | ✓ | ✓ | | |
+| **Adjust mask…**: paint or erase where the edit is pasted in (**Original mask** goes back) | ✓ | | | |
 | Colours & exposure | ✓ | ✓ | ✓ | |
 | Local warp | ✓ | ✓ | | |
 | Clean edges at the mask | ✓ | | | |

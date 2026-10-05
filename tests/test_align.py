@@ -140,3 +140,15 @@ def test_upscale_colours_fix_the_drift_at_full_size():
     assert out.size == (640, 480)
     back = np.asarray(out.resize((160, 120), Image.BOX), float)
     assert np.abs(back - np.asarray(o, float)).mean() < 3 and stats["outside_diff"] < stats["unaligned_diff"]
+
+
+def test_transform_stretch_and_corners():
+    img = Image.new("L", (100, 80), 255)
+    # stretch x only: the left and right edges move in, top and bottom stay covered
+    out = np.asarray(align.transform(img, 0, 0, 1.0, sx=0.9))
+    assert out[40, 2] == 0 and out[40, 50] == 255 and out[2, 50] == 255
+    # one corner moved: only that corner of the frame is uncovered
+    out = np.asarray(align.transform(img, 0, 0, 1.0, corners=[[10, 10], [0, 0], [0, 0], [0, 0]]))
+    assert out[2, 2] == 0 and out[2, 97] == 255 and out[77, 2] == 255
+    # no stretch, no corners: the plain affine path
+    assert np.array_equal(np.asarray(align.transform(img, 3, 0, 1.0, corners=[[0, 0]] * 4)), np.asarray(align.transform(img, 3, 0, 1.0)))

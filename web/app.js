@@ -2714,7 +2714,7 @@ $("loadSettings").onclick = () => { if (state.run?.params) loadRunSettings(state
 // a run's files after the server changed them (post-processing saved, one image deleted)
 function refreshRunFiles(run, stored) {
   const f = runFromStored(stored);
-  for (const k of ["resultUrl", "rawUrl", "wholeUrl", "sourceUrl", "aligned", "fixedUrl", "grainUrl", "grain", "grainStrength", "filename"]) run[k] = f[k];
+  for (const k of ["resultUrl", "rawUrl", "wholeUrl", "sourceUrl", "postMaskUrl", "aligned", "fixedUrl", "grainUrl", "grain", "grainStrength", "filename"]) run[k] = f[k];
   run.match = null;
 }
 function runFromStored(r) {
@@ -2722,7 +2722,7 @@ function runFromStored(r) {
     id: r.id, serverId: r.id, prompt: r.params?.prompt || "", seed: r.params?.seed, steps: r.params?.steps,
     frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
-    wholeUrl: r.whole_url || null, sourceUrl: r.source_url || null,
+    wholeUrl: r.whole_url || null, sourceUrl: r.source_url || null, postMaskUrl: r.post_mask_url || null,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
     aligned: r.aligned || null, fixedUrl: r.fixed_url || null, grainUrl: r.grain_url || null,
     grain: r.grain ?? (!!r.grain_url || (r.params?.task === "upscale" && !!r.params?.grain)), grainStrength: r.grain_strength ?? r.params?.grain_strength ?? GRAIN_STRENGTH, task: r.params?.task || "edit", preset: r.params?.preset || null,
@@ -3820,8 +3820,14 @@ function postOptions(run) {
   return fix || grain ? { fix, grain } : null;
 }
 let postTimer = 0;
+// what the open panel holds besides its inputs: the four corner offsets (perspective, image px) and the mask
+// (null = the run's current one, "original" = the run's own, else an uploaded mask name)
+const ZERO_CORNERS = () => [[0, 0], [0, 0], [0, 0], [0, 0]];
+const post = { corners: ZERO_CORNERS(), mask: null, cornersOn: false };
 function postValues() {
   return { dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100,
+           sx: (num("alignSx") || 100) / 100, sy: (num("alignSy") || 100) / 100, corners: post.corners,
+           ...(post.mask ? { mask: post.mask } : {}),
            colors: $("fixColors").checked, warp: $("fixWarp").checked, poisson: $("fixPoisson").checked,
            grain: $("fixGrain").checked, grain_strength: num("fixGrainStrength") / 100 };
 }
@@ -3829,6 +3835,9 @@ function setPostValues(v) {
   if ("dx" in v) $("alignDx").value = Math.round(v.dx * 10) / 10;
   if ("dy" in v) $("alignDy").value = Math.round(v.dy * 10) / 10;
   if ("scale" in v) $("alignScale").value = Math.round(v.scale * 10000) / 100;
+  if ("sx" in v) $("alignSx").value = Math.round(v.sx * 10000) / 100;
+  if ("sy" in v) $("alignSy").value = Math.round(v.sy * 10000) / 100;
+  if ("corners" in v) post.corners = (v.corners || ZERO_CORNERS()).map((c) => [c[0], c[1]]);
   for (const [id, k] of [["fixColors", "colors"], ["fixWarp", "warp"], ["fixPoisson", "poisson"], ["fixGrain", "grain"]]) {
     if (k in v) $(id).checked = !!v[k];
   }
@@ -3873,7 +3882,10 @@ $("postBtn").onclick = () => {
   for (const el of $("postPanel").querySelectorAll(".post-grain")) el.hidden = !opt.grain;
   // the panel starts at what the run has now
   const a = opt.fix && run.aligned ? run.aligned : {};
-  setPostValues({ dx: a.dx || 0, dy: a.dy || 0, scale: a.scale || 1, colors: !!a.colors, warp: !!a.warp,
+  post.mask = null;
+  syncMaskButtons();
+  setPostValues({ dx: a.dx || 0, dy: a.dy || 0, scale: a.scale || 1, sx: a.sx || 1, sy: a.sy || 1, corners: a.corners,
+                  colors: !!a.colors, warp: !!a.warp,
                   poisson: !!a.poisson, grain: !!run.grain, grain_strength: run.grainStrength ?? GRAIN_STRENGTH });
   $("postPanel").hidden = false;
   schedulePreview();
@@ -3881,11 +3893,104 @@ $("postBtn").onclick = () => {
 $("postClose").onclick = () => { $("postPanel").hidden = true; showFinal(); };
 $("alignAuto").onclick = () => postRequest({ ...postValues(), auto: true, save: false });
 $("postReset").onclick = () => {
-  setPostValues({ dx: 0, dy: 0, scale: 1, colors: false, warp: false, poisson: false, grain: false, grain_strength: GRAIN_STRENGTH });
+  setPostValues({ dx: 0, dy: 0, scale: 1, sx: 1, sy: 1, corners: null, colors: false, warp: false, poisson: false, grain: false, grain_strength: GRAIN_STRENGTH });
+  post.mask = state.run?.postMaskUrl ? "original" : null;
+  syncMaskButtons();
   schedulePreview();
 };
 $("postSave").onclick = () => postRequest({ ...postValues(), save: true });
-for (const id of ["alignDx", "alignDy", "alignScale"]) $(id).addEventListener("input", schedulePreview);
+for (const id of ["alignDx", "alignDy", "alignScale", "alignSx", "alignSy"]) $(id).addEventListener("input", schedulePreview);
+
+// ---- perspective: four handles on the viewer image, one per corner of the edit; dragging one moves only that corner
+const cornerLayer = document.createElement("div");
+cornerLayer.className = "corner-layer";
+cornerLayer.hidden = true;
+cornerLayer.innerHTML = '<svg class="corner-lines"><polygon/></svg>';
+const cornerHandles = ["top left", "top right", "bottom right", "bottom left"].map((name, i) => {
+  const h = document.createElement("button");
+  h.type = "button"; h.className = "corner-handle"; h.title = `Drag the ${name} corner`;
+  h.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try { h.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+    const box = cornerImageBox();
+    if (!box) return;
+    const start = { x: e.clientX, y: e.clientY, c: [...post.corners[i]] };
+    const move = (ev) => {
+      post.corners[i] = [Math.round((start.c[0] + (ev.clientX - start.x) / box.s) * 2) / 2,
+                         Math.round((start.c[1] + (ev.clientY - start.y) / box.s) * 2) / 2];
+      placeCorners();
+      schedulePreview();
+    };
+    const up = () => { h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up); };
+    h.addEventListener("pointermove", move);
+    h.addEventListener("pointerup", up);
+    h.addEventListener("pointercancel", up);
+  });
+  cornerLayer.append(h);
+  return h;
+});
+bigArea.append(cornerLayer);
+// where the shown image sits inside the viewer (object-fit: contain, zoom and pan included), in viewer px
+function cornerImageBox() {
+  const img = !$("compare").hidden ? $("cmpAfter") : $("liveImg");
+  if (img.hidden || !img.naturalWidth) return null;
+  const r = img.getBoundingClientRect(), a = bigArea.getBoundingClientRect();
+  const s = Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight);
+  return { s, w: img.naturalWidth, h: img.naturalHeight,
+           x: r.left - a.left + (r.width - img.naturalWidth * s) / 2, y: r.top - a.top + (r.height - img.naturalHeight * s) / 2 };
+}
+// a corner as the server places it (align.transform): scaled and stretched around the centre, shifted, then moved
+function placeCorners() {
+  const box = cornerImageBox();
+  cornerLayer.style.visibility = box ? "" : "hidden";
+  if (!box) return;
+  const v = postValues(), cx = box.w / 2, cy = box.h / 2;
+  const pts = [[0, 0], [box.w, 0], [box.w, box.h], [0, box.h]].map(([x, y], i) => [
+    box.x + (cx + (x - cx) * v.scale * v.sx + v.dx + post.corners[i][0]) * box.s,
+    box.y + (cy + (y - cy) * v.scale * v.sy + v.dy + post.corners[i][1]) * box.s]);
+  pts.forEach(([x, y], i) => { cornerHandles[i].style.left = `${x}px`; cornerHandles[i].style.top = `${y}px`; });
+  cornerLayer.querySelector("polygon").setAttribute("points", pts.map((p) => p.join(",")).join(" "));
+}
+function setCornersMode(on) {
+  post.cornersOn = on;
+  $("cornersBtn").setAttribute("aria-pressed", String(on));
+  cornerLayer.hidden = !on;
+  if (on) placeCorners();
+  if (on) requestAnimationFrame(function tick() {   // follows zoom, pan and resizing while it is on
+    if (!post.cornersOn || $("postPanel").hidden) { setCornersMode(false); return; }
+    placeCorners();
+    requestAnimationFrame(tick);
+  });
+}
+$("cornersBtn").onclick = () => setCornersMode(!post.cornersOn);
+for (const id of ["cmpAfter", "liveImg"]) $(id).addEventListener("load", () => { if (post.cornersOn) placeCorners(); });
+$("cornersReset").onclick = () => { post.corners = ZERO_CORNERS(); placeCorners(); schedulePreview(); };
+
+// ---- the paste mask, adjusted after the run (web/maskedit.js); Apply keeps it as the run's post_mask_url
+function syncMaskButtons() {
+  const run = state.run;
+  $("maskOrigBtn").hidden = !(post.mask && post.mask !== "original") && !(post.mask === null && run?.postMaskUrl);
+}
+function panelMaskUrl(run) {
+  if (post.mask === "original") return run.maskUrl;
+  if (post.mask) return inputViewUrl(post.mask);
+  return run.postMaskUrl || run.maskUrl;
+}
+$("maskEditBtn").onclick = async () => {
+  const run = state.run;
+  if (!run?.maskUrl) return;
+  const images = [{ label: "Result", url: $("compare").hidden ? $("liveImg").src : $("cmpAfter").src },
+                  { label: "Original", url: run.beforeUrl }, { label: "Raw", url: run.rawUrl }].filter((i) => i.url);
+  try {
+    const { openMaskEditor } = await import("/maskedit.js");
+    const blob = await openMaskEditor({ maskUrl: panelMaskUrl(run), images });
+    if (!blob) return;
+    post.mask = await uploadMaskBlob(blob);
+    syncMaskButtons();
+    schedulePreview();
+  } catch (e) { showError(e.message); }
+};
+$("maskOrigBtn").onclick = () => { post.mask = "original"; syncMaskButtons(); schedulePreview(); };
 $("fixGrainStrength").addEventListener("input", () => { if ($("fixGrain").checked) schedulePreview(); });
 for (const id of ["fixColors", "fixWarp", "fixPoisson", "fixGrain"]) $(id).addEventListener("change", schedulePreview);
 for (const b of document.querySelectorAll("#postPanel [data-nudge]")) {
@@ -4275,7 +4380,7 @@ function maskCanvasFromImage(im) {
 
 function setBatchBusy(on) {
   state.batchBusy = on;
-  for (const id of ["batchSkip", "batchMaskAll", "batchSubmitMasked", "batchAutoAll", "batchNoMaskAll", "runEdit", "runOne"]) $(id).disabled = on;
+  for (const id of ["batchSkip", "batchMaskAll", "batchAutoAll", "runEdit", "runOne"]) $(id).disabled = on;
 }
 
 // step 1 for the whole batch: masks only, nothing is queued
@@ -4316,43 +4421,7 @@ async function batchMaskAll() {
 }
 
 // step 2 for the whole batch: queue everything that has a mask
-async function batchSubmitMasked() {
-  if (!state.maskAvailable) return;
-  if (state.batchBusy) return;
-  stashCurrentMask();
-  const todo = state.batch.filter((it) => it.status === "masked" && it.mask);
-  if (!todo.length) { showError("No masked images to submit."); return; }
-  if (!presetById($("preset").value)) { showError("No model installed. Open the Download Center to get one."); return; }
-  saveForm();
-  setBatchBusy(true);
-  let n = 0, queued = 0;
-  try {
-    for (const it of todo) {
-      $("batchInfo").textContent = `Queueing ${++n} / ${todo.length}: ${it.label}`;
-      try {
-        const size = await sizeFor(it);
-        const { blob, white } = await exportMaskBlob(maskAtSize(it.mask, size));
-        if (!white) throw new Error("mask is empty");
-        const maskName = await uploadMaskBlob(blob);
-        await submitVariants(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: true,
-          megapixels: size.megapixels, resolution: size.resolution }), { quiet: true });
-        it.status = "queued";
-        queued++;
-      } catch (e) {
-        it.status = "error";
-        showError(`${it.label}: ${e.message}`);
-      }
-      renderBatch();
-    }
-  } finally {
-    setBatchBusy(false);
-    renderBatch();
-  }
-  batchSummary(todo.length, queued);
-}
-
 $("batchMaskAll").onclick = batchMaskAll;
-$("batchSubmitMasked").onclick = batchSubmitMasked;
 $("batchSkip").onclick = () => {
   const it = currentBatchItem();
   if (!it) { showError("No batch image open."); return; }
@@ -4362,7 +4431,6 @@ $("batchSkip").onclick = () => {
   openNextBatchItem();
 };
 $("batchAutoAll").onclick = () => batchSubmitAll(true);
-$("batchNoMaskAll").onclick = () => batchSubmitAll(false);
 // queued, skipped and failed images become open again (their masks are kept)
 $("reactivateBatch").onclick = () => {
   for (const it of state.batch) if (["queued", "skipped", "error"].includes(it.status)) it.status = it.mask ? "masked" : "open";
@@ -4375,10 +4443,6 @@ $("batchClear").onclick = () => {
 };
 
 // ------------------------------------------------------------------ setup page & no-mask mode
-const MASK_TEXTS = {
-  all: ["Submit all without mask", "Submit all"],
-  allTitle: ["Queue every open image without a mask (whole image is edited)", "Queue every open image"],
-};
 
 // masks are used when SAM3 is installed and the mode is not "No mask"
 function maskOn() { return !!state.maskAvailable && !["none", "outpaint"].includes($("mode").value) && !upscaling(); }
@@ -4401,18 +4465,12 @@ function applyMaskMode(available) {
 
 // hides / renames everything about masks when SAM3 is missing or the mode is "No mask"
 function applyMaskTexts() {
-  const i = maskOn() ? 0 : 1;
   document.body.classList.toggle("no-mask", !maskOn());
   document.body.classList.toggle("mode-outpaint", $("mode").value === "outpaint");
   $("keepWholeRow").hidden = !wholeImage();
   syncPostOptions();
   syncRunButtons();
   syncKeepNote();
-  const up = state.task === "upscale";
-  $("batchNoMaskAll").textContent = up ? "Upscale all" : MASK_TEXTS.all[i];
-  $("batchNoMaskAll").title = up ? "Queue every open image for upscaling" : MASK_TEXTS.allTitle[i];
-  // without masks the main button already queues every image, so the second "Submit all" would only repeat it
-  $("batchNoMaskAll").hidden = !maskOn();
   setMode(state.mode);
   render();
 }

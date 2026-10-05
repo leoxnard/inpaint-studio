@@ -109,3 +109,21 @@ def test_save_with_nothing_on_restores_the_originals(env):
     assert up["source_url"] == "/data/runs/r/source.png" and Image.open(out / "r.png").getpixel((0, 0)) == (2, 2, 2)
     asyncio.run(server.save_post_files(up, "upscale", img(1), img(1), None, 10, changed=False))
     assert "source_url" not in up and not (d / "source.png").exists() and Image.open(out / "r.png").getpixel((0, 0)) == (1, 1, 1)
+
+
+def test_post_mask_url():
+    run = {"mask_url": "/m", "post_mask_url": "/adjusted"}
+    assert server.post_mask_url(run, server.PostReq()) == "/adjusted"
+    assert server.post_mask_url(run, server.PostReq(mask="original")) == "/m"
+    assert "mask_ab.png" in server.post_mask_url(run, server.PostReq(mask=f"{server.SUBFOLDER}/masks/mask_ab.png"))
+    for bad in ("other/x.png", f"{server.SUBFOLDER}/masks/../../x.png"):
+        with pytest.raises(server.HTTPException):
+            server.post_mask_url(run, server.PostReq(mask=bad))
+
+
+def test_fetch_view_reads_the_run_dir(env):
+    import asyncio
+    from PIL import Image
+    _, _, d, _ = env
+    Image.new("RGB", (3, 2), (5, 6, 7)).save(d / "raw.png")
+    assert asyncio.run(server._fetch_view("/data/runs/r/raw.png")).getpixel((0, 0)) == (5, 6, 7)

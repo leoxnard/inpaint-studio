@@ -4059,6 +4059,16 @@ function maskHasWhite(im) {
   return false;
 }
 
+// a stored mask at the working size of a run: the size can change after the mask was made (another megapixel value,
+// auto-fix), the mask is then scaled instead of being computed again
+function maskAtSize(mask, size) {
+  if (!size.work_w || (mask.width === size.work_w && mask.height === size.work_h)) return mask;
+  const c = document.createElement("canvas");
+  c.width = size.work_w; c.height = size.work_h;
+  c.getContext("2d").drawImage(mask, 0, 0, c.width, c.height);
+  return c;
+}
+
 // open images a submit-all queues; "without mask" also takes images where auto-masking found nothing
 function batchTodo(withMask) {
   if (state.task === "upscale") return state.batch.filter((it) => ["open", "masked", "nomask"].includes(it.status));
@@ -4087,30 +4097,46 @@ async function batchSubmitAll(withMask) {
   setBatchBusy(true);
   let done = 0, queued = 0, nomatch = 0;
   try {
+    // 1) every image gets its size and mask first. A new mask has to wait for the prompt ComfyUI is running, so
+    //    computed between the jobs it would wait for each job this loop just queued.
+    const ready = [];
     for (const it of todo) {
-      $("batchInfo").textContent = `${withMask ? "Masking and queueing" : "Queueing"} ${++done} / ${todo.length}: ${it.label}`;
+      $("batchInfo").textContent = `${withMask ? "Preparing masks" : "Preparing"} ${++done} / ${todo.length}: ${it.label}`;
       try {
         await ensureUploaded(it);
         const size = await sizeFor(it);
+        let mask = null;
+        if (withMask && it.mask) mask = maskAtSize(it.mask, size);   // a mask you made or painted, scaled if the size changed
+        else if (withMask) {
+          const res = await postJson("/api/mask", {
+            image: it.name, megapixels: size.megapixels, text: $("maskText").value.trim(),
+            threshold: num("threshold"), refine: parseInt($("refine").value, 10) || 0,
+            expand: parseInt($("expand").value, 10) || 0, invert: $("invert").checked,
+          });
+          const { canvas, white } = maskCanvasFromImage(await loadImage(res.mask_url));
+          if (!white) { it.status = "nomask"; nomatch++; renderBatch(); continue; }
+          it.mask = mask = canvas; it.maskMeta = { w: canvas.width, h: canvas.height, mp: size.megapixels };
+          it.status = "masked";
+        }
+        ready.push({ it, size, mask });
+      } catch (e) {
+        it.status = "error";
+        showError(`${it.label}: ${e.message}`);
+      }
+      renderBatch();
+    }
+    // 2) then all jobs go into the queue in one go
+    done = 0;
+    for (const { it, size, mask } of ready) {
+      $("batchInfo").textContent = `Queueing ${++done} / ${ready.length}: ${it.label}`;
+      try {
         let maskName = null;
-        if (withMask) {
-          let blob;
-          if (it.mask && it.maskMeta && it.maskMeta.w === size.work_w && it.maskMeta.h === size.work_h) {
-            ({ blob } = await exportMaskBlob(it.mask)); // keep a mask you already made/painted
-          } else {
-            if (!$("maskText").value.trim()) throw new Error("its mask was made for another size and there is no mask text to compute a new one");
-            const res = await postJson("/api/mask", {
-              image: it.name, megapixels: size.megapixels, text: $("maskText").value.trim(),
-              threshold: num("threshold"), refine: parseInt($("refine").value, 10) || 0,
-              expand: parseInt($("expand").value, 10) || 0, invert: $("invert").checked,
-            });
-            const im = await loadImage(res.mask_url);
-            if (!maskHasWhite(im)) { it.status = "nomask"; nomatch++; renderBatch(); continue; }
-            blob = await (await fetch(res.mask_url)).blob();
-          }
+        if (mask) {
+          const { blob, white } = await exportMaskBlob(mask);
+          if (!white) throw new Error("the mask is empty");
           maskName = await uploadMaskBlob(blob);
         }
-        await submitVariants(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: withMask,
+        await submitVariants(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: !!mask,
           megapixels: size.megapixels, resolution: size.resolution }), { quiet: true });
         it.status = "queued";
         queued++;
@@ -4233,10 +4259,7 @@ async function batchSubmitMasked() {
       $("batchInfo").textContent = `Queueing ${++n} / ${todo.length}: ${it.label}`;
       try {
         const size = await sizeFor(it);
-        if (it.maskMeta && (it.maskMeta.w !== size.work_w || it.maskMeta.h !== size.work_h)) {
-          throw new Error("size changed since the mask was made – open it and recompute the mask");
-        }
-        const { blob, white } = await exportMaskBlob(it.mask);
+        const { blob, white } = await exportMaskBlob(maskAtSize(it.mask, size));
         if (!white) throw new Error("mask is empty");
         const maskName = await uploadMaskBlob(blob);
         await submitVariants(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: true,

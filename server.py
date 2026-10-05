@@ -751,6 +751,70 @@ async def hide_run(run_id: str):
 
 @app.post("/api/runs/{run_id}/retry")
 async def retry_run(run_id: str):
+class VersionReq(BaseModel):
+    kind: str   # "post" (fixes + grain), "result" (pasted result / result) or "raw" (raw / clean upscale)
+
+
+def run_versions(run: dict) -> list[str]:
+    """The result files a run offers, as in the viewer: post-processed, result, raw (only when it is its own file)."""
+    out = []
+    if run.get("fixed_url") or run.get("grain_url") or (run.get("aligned") or {}).get("url"):
+        out.append("post")
+    if run.get("result_url"):
+        out.append("result")
+    if run.get("raw_url") and run.get("raw_url") != run.get("result_url"):
+        out.append("raw")
+    return out
+
+
+@app.post("/api/runs/{run_id}/delete-version")
+async def delete_version(run_id: str, req: VersionReq):
+    """Deletes one result file of a run and keeps the rest; the last version can only go with the whole run."""
+    f = (RUNS / run_id / "run.json").resolve()
+    if f.parent.parent != RUNS.resolve() or not f.is_file():
+        raise HTTPException(404, "run not found")
+    if run_id in JOBS:
+        raise HTTPException(409, "the run is still queued or running")
+    run = json.loads(f.read_text())
+    versions = run_versions(run)
+    if req.kind not in versions:
+        raise HTTPException(400, "this run has no such version")
+    if len(versions) < 2:
+        raise HTTPException(400, "this is the run's only result; delete the run instead")
+
+    def unlink(url: str | None) -> None:
+        if not url:
+            return
+        try:
+            local_file(url).unlink(missing_ok=True)
+        except HTTPException:   # already gone or not a result file
+            pass
+
+    if req.kind == "post":
+        for url in (run.get("fixed_url"), run.get("grain_url"), (run.get("aligned") or {}).get("url")):
+            unlink(url)
+        for k in ("fixed_url", "grain_url", "aligned"):
+            run.pop(k, None)
+        run["grain"] = False
+    elif req.kind == "raw":
+        unlink(run["raw_url"])
+        run["raw_url"] = None
+    else:   # the result goes: the raw image takes its place, else the post-processed one does
+        unlink(run["result_url"])
+        if run.get("raw_url") == run["result_url"]:   # upscales: the clean upscale is the result file itself
+            run["raw_url"] = None
+        if "raw" in versions:
+            run["result_url"], run["raw_url"] = run["raw_url"], None
+        else:
+            run["result_url"] = run.pop("fixed_url", None) or run.pop("grain_url", None) or run["aligned"]["url"]
+            run.pop("aligned", None)
+            run["grain"] = False
+        run["filename"] = httpx.QueryParams(urlsplit(run["result_url"]).query).get("filename") \
+            or Path(urlsplit(run["result_url"]).path).name
+    save_run(run)
+    return run
+
+
     """Queues a failed (or any) run again with the same settings, as a new run."""
     stored = load_job(run_id) if (RUNS / run_id).resolve().parent == RUNS.resolve() else None
     if not stored:

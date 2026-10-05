@@ -75,7 +75,8 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   `<run>/step_NN_TOTAL.png` (+ `raw_step_…`), `<run>/config.json` (all params, encoder prompt, graph). The server strips ComfyUI's `_00001_` counter.
 - Run history: `~/Library/Application Support/Inpaint Studio/runs/<id>/run.json` + live preview
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by
-  `GET /api/runs`, removed by `DELETE /api/runs/{id}`. × on a result tile or Select → remove → hide hides a run
+  `GET /api/runs`, removed by `DELETE /api/runs/{id}`; `POST …/delete-version {kind}` deletes one image (post / result / raw,
+  `run_versions`) and keeps the rest (the last one goes only with the run). × on a result tile or Select → remove → hide hides a run
   (`POST …/hide`, files kept); `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed).
   Results → Select works on picked runs: compare, post-process, use as input, repeat, download, remove; the same tools act on the open run
   when nothing is picked (`targetRuns()`). Post-process and use-as-input ask first (`askDialog`), download asks for a folder

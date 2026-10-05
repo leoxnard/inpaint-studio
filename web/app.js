@@ -1843,10 +1843,13 @@ const shownResult = (run) => run.fixedUrl || run.grainUrl || run.aligned?.url ||
 function viewedImage(run) {
   const f = run.shown != null ? visibleFrames(run)[run.shown] : null;
   if (f) return { url: f.url, suffix: `_step${f.step}${f.variant === "raw" ? "_raw" : ""}` };
-  if ($("viewRaw").checked && run.rawUrl) return { url: run.rawUrl, suffix: "_raw" };
+  if ($("viewRaw").checked && hasRaw(run) && run.rawUrl) return { url: run.rawUrl, suffix: "_raw" };
   return { url: shownResult(run), suffix: "" };
 }
-const hasRaw = (run) => !!(run && (run.rawUrl || run.frames.some((f) => f.variant === "raw")));
+// a finished run has a raw view only while its raw file exists and differs from the shown result
+// (an upscale's clean file is its result: without post-processing there is nothing to switch)
+const hasRaw = (run) => !!run && (run.done ? !!run.rawUrl && run.rawUrl !== shownResult(run)
+  : !!(run.rawUrl || run.frames.some((f) => f.variant === "raw")));
 
 // one step frame in the viewer
 function showFrame(i) {
@@ -2406,6 +2409,7 @@ function closeRemoveMenu() {
 $("selRemove").onclick = (e) => {
   e.stopPropagation();
   const open = $("selRemoveMenu").hidden;
+  if (open) renderVersionItems();
   $("selRemoveMenu").hidden = !open;
   $("selRemove").setAttribute("aria-expanded", String(open));
 };
@@ -2434,6 +2438,49 @@ async function removeSelected(deleteFiles) {
     state.follow = false;
     if (next) showRun(next); else showLatest();
   }
+}
+// ---- Delete one version: a run with several results (post-processed, pasted result, raw / clean) can lose one of them
+function versionName(run, kind) {
+  const up = runTask(run) === "upscale";
+  if (kind === "post") return "Post-processed";
+  if (kind === "raw") return up ? "Clean upscale" : "Raw (full generated image)";
+  return up ? "Clean upscale" : run.rawUrl && run.rawUrl !== run.resultUrl ? "Pasted result" : "Result";
+}
+function renderVersionItems() {
+  const box = $("selVersions");
+  box.innerHTML = "";
+  const runs = targetRuns();
+  const vs = runs.length === 1 && runStatus(runs[0]) === "done" ? inputVersions(runs[0]) : [];
+  box.hidden = vs.length < 2;
+  if (box.hidden) return;
+  const head = document.createElement("small");
+  head.className = "sel-menu-head";
+  head.textContent = "Delete only one image";
+  box.appendChild(head);
+  for (const v of vs) {
+    const b = document.createElement("button");
+    b.setAttribute("role", "menuitem");
+    b.className = "danger";
+    b.textContent = versionName(runs[0], v.kind);
+    b.onclick = () => deleteVersion(runs[0], v.kind);
+    box.appendChild(b);
+  }
+}
+async function deleteVersion(run, kind) {
+  closeRemoveMenu();
+  const name = versionName(run, kind);
+  if (!confirm(`Delete the ${name.toLowerCase()} image of this run? This cannot be undone.`)) return;
+  try {
+    const stored = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/delete-version`, { kind });
+    const fresh = runFromStored(stored);
+    Object.assign(run, { resultUrl: fresh.resultUrl, rawUrl: fresh.rawUrl, aligned: fresh.aligned, fixedUrl: fresh.fixedUrl,
+      grainUrl: fresh.grainUrl, grain: fresh.grain, filename: fresh.filename, match: null });
+    if (!hasRaw(run)) $("viewRaw").checked = false;
+    showToast(`Deleted the ${name.toLowerCase()} image.`);
+    syncCompareUi();
+    renderHistory();
+    if (state.run === run) renderViewer();
+  } catch (e) { showError(e.message); }
 }
 $("selHide").onclick = () => removeSelected(false);
 $("selDelete").onclick = () => removeSelected(true);

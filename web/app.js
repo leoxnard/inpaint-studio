@@ -3919,12 +3919,15 @@ function setPostValues(v) {
   if ("grain_strength" in v) $("fixGrainStrength").value = Math.round(v.grain_strength * 100);
   syncRangeOutputs();
 }
+let postSeq = 0;   // newest preview request; older answers are dropped
 async function postRequest(body) {
   const run = state.run;
   if (!run?.serverId) return;
   $("postInfo").textContent = "Working...";
+  const seq = ++postSeq;
   try {
     const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, body);
+    if (seq !== postSeq && !res.saved) return;
     // only the shift Auto-align found: everything else stays as the user set it (the response carries the run's saved values)
     if (res.dx != null) setPostValues({ dx: res.dx, dy: res.dy, scale: res.scale });
     if (res.saved) {
@@ -3994,9 +3997,12 @@ const cornerHandles = ["top left", "top right", "bottom right", "bottom left"].m
       post.corners[i] = [Math.round((start.c[0] + (ev.clientX - start.x) / box.s) * 2) / 2,
                          Math.round((start.c[1] + (ev.clientY - start.y) / box.s) * 2) / 2];
       placeCorners();
-      schedulePreview();
+      fastPreview();
     };
-    const up = () => { h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up); };
+    const up = () => {
+      h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up);
+      schedulePreview();   // the full preview (warp, colours, seam, grain) once the corner is let go
+    };
     h.addEventListener("pointermove", move);
     h.addEventListener("pointerup", up);
     h.addEventListener("pointercancel", up);
@@ -4006,13 +4012,36 @@ const cornerHandles = ["top left", "top right", "bottom right", "bottom left"].m
 });
 bigArea.append(cornerLayer);
 // where the shown image sits inside the viewer (object-fit: contain, zoom and pan included), in viewer px
+// (image px of the original: the live drag preview is smaller, the before image keeps the full size)
 function cornerImageBox() {
-  const img = !$("compare").hidden ? $("cmpAfter") : $("liveImg");
-  if (img.hidden || !img.naturalWidth) return null;
+  const cmp = !$("compare").hidden, img = cmp ? $("cmpAfter") : $("liveImg"), ref = cmp ? $("cmpBefore") : img;
+  if (img.hidden || !ref.naturalWidth) return null;
+  const nw = ref.naturalWidth, nh = ref.naturalHeight;
   const r = img.getBoundingClientRect(), a = bigArea.getBoundingClientRect();
-  const s = Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight);
-  return { s, w: img.naturalWidth, h: img.naturalHeight,
-           x: r.left - a.left + (r.width - img.naturalWidth * s) / 2, y: r.top - a.top + (r.height - img.naturalHeight * s) / 2 };
+  const s = Math.min(r.width / nw, r.height / nh);
+  return { s, w: nw, h: nh, x: r.left - a.left + (r.width - nw * s) / 2, y: r.top - a.top + (r.height - nh * s) / 2 };
+}
+// live preview while a corner is dragged: geometry only and small (server: PostReq.fast), one request at a time,
+// the newest position wins; a full preview started later is never overwritten (postSeq)
+let fastBusy = false, fastAgain = false;
+async function fastPreview() {
+  const run = state.run;
+  if (!run?.serverId) return;
+  if (fastBusy) { fastAgain = true; return; }
+  fastBusy = true;
+  const seq = ++postSeq;
+  try {
+    const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, { ...postValues(), save: false, fast: true });
+    if (seq === postSeq && state.run === run && !$("postPanel").hidden) {
+      $("cmpBefore").src = run.beforeUrl;
+      $("cmpAfter").src = res.url;
+      $("liveImg").hidden = true; $("compare").hidden = false;
+    }
+  } catch { /* the full preview after the drag reports errors */ }
+  finally {
+    fastBusy = false;
+    if (fastAgain) { fastAgain = false; fastPreview(); }
+  }
 }
 // a corner as the server places it (align.transform): scaled and stretched around the centre, shifted, then moved
 function placeCorners() {

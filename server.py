@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import cv2
 import httpx
 import websockets
 import numpy as np
@@ -927,6 +928,7 @@ class PostReq(BaseModel):
     grain: bool = False    # the original's film / sensor grain (prepare.add_grain)
     grain_strength: float = Field(prepare.GRAIN_STRENGTH, ge=0, le=3)   # 1 = what the result lacks compared with the original
     save: bool = False
+    fast: bool = False     # live preview while dragging: geometry only, at most FAST_PX, no warp / colours / seam / grain
 
 
 def grain_strength(params: dict) -> float:
@@ -981,6 +983,7 @@ async def _post_inputs(run: dict, kind: str | None) -> tuple:
     return _align_cache[key]
 
 
+FAST_PX = 1024   # long side of the live drag preview
 _BASE_DIFF: dict[tuple, float] = {}   # (run, kind, result) -> outside_diff of the unaligned paste
 
 
@@ -1023,6 +1026,17 @@ async def fix_image(run: dict, req: PostReq, kind: str, whole: bool = False) -> 
     if not 0.8 <= scale <= 1.25 or abs(dx) > 500 or abs(dy) > 500:
         raise HTTPException(400, "alignment values out of range")
     opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson and kind == "paste" and not outpaint}
+    if req.fast and not req.save:   # the slow fixes wait for the full preview after the drag
+        f = min(1.0, FAST_PX / max(original.size))
+        size = (max(1, round(original.width * f)), max(1, round(original.height * f)))
+        original, raw = original.resize(size, Image.BILINEAR), raw.resize(size, Image.BILINEAR)
+        mask = mask.resize(size, Image.BILINEAR) if mask is not None else None
+        force = cv2.resize(force, size, interpolation=cv2.INTER_NEAREST) if force is not None else None
+        dx, dy = dx * f, dy * f
+        corners = [[c[0] * f, c[1] * f] for c in corners] if corners else None
+        composed, _ = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, sx=sx, sy=sy,
+                                              corners=corners, force=force)
+        return composed, {"fast": True}
     composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts,
                                               color_gain=outpaint, whole=whole, sx=sx, sy=sy, corners=corners, force=force)
     if whole:
@@ -1097,7 +1111,7 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
             run["aligned"]["url"] = f"/data/runs/{run_id}/aligned.png?t={stamp}"
     elif req.save and not (run.get("aligned") or {}).get("outpaint"):
         run.pop("aligned", None)
-    if req.grain:
+    if req.grain and not (req.fast and not req.save):
         if not run.get("before_url"):
             raise HTTPException(400, "grain needs an original image (not for generated images)")
         grain_mask = _grain_mask_url(view)

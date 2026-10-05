@@ -192,8 +192,8 @@ The same options are in Create and run automatically when the job is done.
 | Fix | Free edit + paste | Whole image | Upscale | Other edits |
 |---|:-:|:-:|:-:|:-:|
 | Shift & scale (Auto-align, then the arrows, Shift = 5 px) | ✓ | ✓ | | |
-| Stretch x / y, and **Corners**: drag each of the four corners on the image (perspective) | ✓ | ✓ | | |
-| **Adjust mask…**: paint or erase where the edit is pasted in (**Original mask** goes back) | ✓ | | | |
+| Stretch x / y, and **Corners**: drag each of the four corners on the image (perspective, a quick preview follows the drag; pinch or ⌘ + scroll zooms the viewer) | ✓ | ✓ | | |
+| **Adjust mask…**: paint or erase where the edit is pasted in, zoom with pinch or ⌘ + scroll (**Original mask** goes back) | ✓ | | | |
 | Colours & exposure | ✓ | ✓ | ✓ | |
 | Local warp | ✓ | ✓ | | |
 | Clean edges at the mask | ✓ | | | |

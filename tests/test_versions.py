@@ -128,3 +128,16 @@ def test_fetch_view_reads_the_run_dir(env):
     _, _, d, _ = env
     Image.new("RGB", (3, 2), (5, 6, 7)).save(d / "raw.png")
     assert asyncio.run(server._fetch_view("/data/runs/r/raw.png")).getpixel((0, 0)) == (5, 6, 7)
+
+
+def test_fast_preview_is_small(env, monkeypatch):
+    import asyncio
+    from PIL import Image
+    imgs = (Image.new("RGB", (2048, 1024), (10, 10, 10)), Image.new("RGB", (2048, 1024), (200, 200, 200)), Image.new("L", (2048, 1024), 255))
+
+    async def inputs(run, kind):
+        return imgs
+    monkeypatch.setattr(server, "_post_inputs", inputs)
+    run = {"id": "r", "mask_url": "/m", "params": {}}
+    img, info = asyncio.run(server.fix_image(run, server.PostReq(dx=4, corners=[[8, 0], [0, 0], [0, 0], [0, 0]], fast=True), "paste"))
+    assert img.size == (server.FAST_PX, 512) and info == {"fast": True}

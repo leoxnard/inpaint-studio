@@ -53,7 +53,7 @@ export async function openMaskEditor({ maskUrl, images }) {
   const saveBtn = el("button", { textContent: "Use this mask", type: "button", className: "primary" });
   const box = el("div", { className: "ie-box" },
     el("div", { className: "ie-head" }, el("h3", { textContent: "Adjust the mask" }),
-      el("span", { className: "hint ie-label", textContent: "Red is pasted from the edit, the rest stays the original. [ ] change the brush size." })),
+      el("span", { className: "hint ie-label", textContent: "Red is pasted from the edit, the rest stays the original. [ ] brush size · pinch or ⌘ + scroll zooms · Space + drag pans" })),
     stage,
     el("div", { className: "row wrap" }, toolSeg,
       el("label", { className: "range-row" }, "Brush ", sizeOut, sizeIn),
@@ -63,11 +63,29 @@ export async function openMaskEditor({ maskUrl, images }) {
   document.body.append(overlay);
   overlay.focus();
 
-  let fit = { s: 1, x: 0, y: 0 };
+  // fit-to-stage times the zoom (pinch, ⌘/Ctrl + wheel, + / − / 0), panned with two fingers, Space or the middle button
+  let fit = { s: 1, x: 0, y: 0 }, base = { s: 1, x: 0, y: 0 };
+  const view = { z: 1, tx: 0, ty: 0 };
+  function applyView() {
+    fit = { s: base.s * view.z, x: base.x + view.tx, y: base.y + view.ty };
+    draw();
+    sync();
+  }
+  function zoomAt(z, cx, cy) {   // cx, cy in stage px stay on the same image point
+    z = Math.min(16, Math.max(1, z));
+    const ix = (cx - fit.x) / fit.s, iy = (cy - fit.y) / fit.s;
+    view.z = z;
+    if (z === 1) { view.tx = view.ty = 0; } else {
+      view.tx = cx - ix * base.s * z - base.x;
+      view.ty = cy - iy * base.s * z - base.y;
+    }
+    applyView();
+  }
   function layout() {
     const r = stage.getBoundingClientRect();
     const s = Math.min(r.width / W, r.height / H);
-    fit = { s, x: (r.width - W * s) / 2, y: (r.height - H * s) / 2 };
+    base = { s, x: (r.width - W * s) / 2, y: (r.height - H * s) / 2 };
+    fit = { s: s * view.z, x: base.x + view.tx, y: base.y + view.ty };
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(r.width * dpr); canvas.height = Math.round(r.height * dpr);
     canvas.style.width = `${r.width}px`; canvas.style.height = `${r.height}px`;
@@ -115,7 +133,27 @@ export async function openMaskEditor({ maskUrl, images }) {
     cursor.style.left = `${e.clientX - r.left}px`; cursor.style.top = `${e.clientY - r.top}px`;
     cursor.classList.toggle("me-erase", erase);
   }
+  let pan = null, spaceDown = false;
+  stage.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = stage.getBoundingClientRect();
+    if (e.ctrlKey || e.metaKey) zoomAt(view.z * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.01)), e.clientX - r.left, e.clientY - r.top);
+    else if (view.z > 1) { view.tx -= e.deltaX; view.ty -= e.deltaY; applyView(); }
+  }, { passive: false });
+  let gestureZ = 1;   // Safari trackpad pinch
+  stage.addEventListener("gesturestart", (e) => { e.preventDefault(); gestureZ = view.z; });
+  stage.addEventListener("gesturechange", (e) => {
+    e.preventDefault();
+    const r = stage.getBoundingClientRect();
+    zoomAt(gestureZ * e.scale, e.clientX - r.left, e.clientY - r.top);
+  });
   stage.addEventListener("pointerdown", (e) => {
+    if (e.button === 1 || (e.button === 0 && spaceDown)) {
+      e.preventDefault();
+      try { stage.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+      pan = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
+      return;
+    }
     if (e.button !== 0) return;
     try { stage.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
     undo.push(mx.getImageData(0, 0, W, H));
@@ -125,6 +163,11 @@ export async function openMaskEditor({ maskUrl, images }) {
     sync(); draw();
   });
   stage.addEventListener("pointermove", (e) => {
+    if (pan) {
+      view.tx = pan.tx + e.clientX - pan.x; view.ty = pan.ty + e.clientY - pan.y;
+      applyView();
+      return;
+    }
     moveCursor(e);
     if (!last) return;
     const p = toImg(e);
@@ -132,7 +175,7 @@ export async function openMaskEditor({ maskUrl, images }) {
     last = p;
     draw();
   });
-  const end = () => { last = null; };
+  const end = () => { last = null; pan = null; };
   stage.addEventListener("pointerup", end);
   stage.addEventListener("pointercancel", end);
   stage.addEventListener("pointerleave", () => { cursor.hidden = true; });
@@ -153,10 +196,18 @@ export async function openMaskEditor({ maskUrl, images }) {
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); doUndo(); }
       else if (e.key === "[" || e.key === "]") { size = Math.max(2, Math.min(+sizeIn.max, Math.round(size * (e.key === "]" ? 1.2 : 1 / 1.2)))); sync(); }
       else if (e.key.toLowerCase() === "x" && !e.metaKey && !e.ctrlKey) { erase = !erase; sync(); }
+      else if (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "0") {
+        const r = stage.getBoundingClientRect();
+        if (e.key === "0") zoomAt(1, 0, 0); else zoomAt(view.z * (e.key === "-" ? 1 / 1.5 : 1.5), r.width / 2, r.height / 2);
+      }
+      else if (e.key === " ") { e.preventDefault(); spaceDown = true; stage.style.cursor = "grab"; }
       else return;
       e.stopPropagation();
     }
+    const onKeyUp = (e) => { if (e.key === " ") { spaceDown = false; stage.style.cursor = ""; } };
+    document.addEventListener("keyup", onKeyUp, true);
     function close(result) {
+      document.removeEventListener("keyup", onKeyUp, true);
       ro.disconnect();
       document.removeEventListener("keydown", onKey, true);
       overlay.remove();

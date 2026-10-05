@@ -147,15 +147,20 @@ Checkboxes under the prompt:
 
 ## Folders (batch)
 
-Click **Open folder…** or drop several images. They show up as a thumbnail grid and nothing starts on its own.
+Drop several images or a whole folder on the image area, or click **Choose images…** / **Choose a folder…**
+(the **Open** button next to *Image* does the same). They show up as a thumbnail grid and nothing starts on its own.
 
 - Go through them with ← →. Each image keeps its own mask.
-- **Add edit to queue** queues all open images, **Only this image** just the current one.
+- **Add edit to queue** queues all open images, **Only this image** just the current one and then opens the next open image.
+  **Enter** does what the big button says.
 - **Skip** leaves an image out of the batch.
 - **Mask all** computes masks for every image (nothing is queued), so you can check them first.
 - **Submit all masked**, **Auto-mask and submit all** (images without a match are skipped) or
   **Submit all without mask**.
-- The **+** tile adds more images (also to a single open image, which then becomes a batch). Hover a tile and click **−** to remove that image. **Clear batch** closes the folder.
+- The **+** tile adds more images (also to a single open image, which then becomes a batch). Hover a tile: **−** removes the image, the pencil opens the editor.
+**Clear** (next to *Images*) closes the batch, **Reactivate batch** makes queued and skipped images open again.
+- **Editor:** rotate by 90°, straighten (the image zooms in so no corner stays empty), flip and crop with ratio presets
+  (1:1, 4:3, 3:2, 16:9, 5:4, landscape / portrait) or freely. The edited picture replaces the input; its mask is dropped.
 
 ## Upscaling
 
@@ -218,7 +223,10 @@ The same options are in Create and run automatically when the job is done.
 - Jobs keep running when you reload or close the page. The queue cannot be reordered or paused.
 - If the server restarts while ComfyUI keeps running, unfinished runs are followed again (without live
   progress). A crashed run can be queued again with **Retry**.
-- Shortcuts in Create: **B** paint, **E** erase, **W** wand, **G** bucket, **[ ]** brush size, **⌘↵** add to queue.
+- **Clear queue** (Runs, next to *Queue*) removes every waiting run; the running one goes on.
+- Shortcuts: **Tab** switches between Create and Runs. In Create **B** paint, **E** erase, **W** wand, **G** bucket, **[ ]** brush size,
+  **Enter** or **⌘↵** add to queue. In Runs **← →** previous / next run, **↑ ↓** a row up / down, **Shift** + arrow extends
+  the selection (and starts it), **Delete** deletes the run (asks first), **+ − 0** zoom the image, **Alt + ← →** steps through saved steps.
 - **Recent…** above the prompt and the mask field remember your last prompts and mask texts.
 - Hover a result tile to see the original on its right half. **Download for ComfyUI** saves the result with its
   workflow inside: drop it onto ComfyUI to open the exact graph.
@@ -226,20 +234,26 @@ The same options are in Create and run automatically when the job is done.
 **Variations:** the ×1 … ×8 menu next to the queue button runs the same edit several times, each with
 its own seed (random, or seed, seed + 1, …). They show as a strip under the image in Runs.
 
-**Select:** next to the result filters. Click tiles to pick them, Shift+click picks a range,
-**All** / **None** work on the current filter. The icons then work on all picked results:
-- compare (two or more)
-- post-process (every fix that fits each run, plus grain)
-- use as input (a new batch in Create)
-- download
+**Select:** next to the result filters. Click tiles to pick them, Shift+click picks a range (also from the open run),
+**All** / **None** work on the current filter. The icons work on all picked results, or on the open run when nothing is picked:
+- compare (two or more picked)
+- post-process: asks which steps to apply (all that any picked run can get are listed and on, grain with its strength)
+- use as input (a new batch in Create); asks which versions (post-processed, pasted result, raw) when a run has several
+- repeat: queues the run again with the same settings
+- download: asks for a folder and saves the results there
 - remove: hide from the results (files kept, see filter **Removed**) or delete the files
+
+**Viewer:** the divider between original and result keeps its place when another run opens. Zoom with the mouse wheel,
+⌘ + wheel or a trackpad pinch (double-click zooms in and out), move a zoomed image by dragging or two-finger scrolling.
+**Open in Finder** shows the result file. Result tiles are cut to the middle when they are wider than 3:2 or taller than 2:3.
 
 The × on a single result tile hides just that one.
 
 **Compare**
 - **Detail** (default): a grid where every tile shows the same part. Scroll or pinch to zoom, drag to pan, all tiles follow.
 - **Split:** one frame cut into strips, the borders can be dragged.
-- Labels show the model and every setting that differs. Drag a label to change the order.
+- Labels show the model and every setting that differs (e.g. colour correction, grain, scale). Drag a label to change the order.
+- **Add original** puts the original image in as one more tile.
 
 ## Models and Download Center
 
@@ -290,7 +304,7 @@ saved with the run.
 **App data** (`~/Library/Application Support/Inpaint Studio/`):
 - `config.json`: setup config
 - `runs/<id>/`: run history (`run.json`, `job.json`, live previews). Failed runs stay listed (filter
-  **Failed**), cancelled runs are not kept. **Delete run** removes this folder but keeps the images in
+  **Failed**), cancelled runs are not kept. Deleting a run removes this folder but keeps the images in
   the ComfyUI output folder.
 
 **Logs:** `~/Library/Logs/InpaintStudio.log` and `~/Library/Logs/InpaintStudio-ComfyUI.log`.

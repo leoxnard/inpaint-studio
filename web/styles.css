@@ -201,7 +201,7 @@ button.primary:disabled { background: var(--surface); border-color: var(--hairli
 }
 .dropzone:hover, body.dragging .dropzone { border-color: var(--accent); color: var(--text); }
 body.dragging::after {
-  content: "Drop image to load"; position: fixed; inset: 0; z-index: 50; display: flex;
+  content: "Drop images or a folder to load"; position: fixed; inset: 0; z-index: 50; display: flex;
   align-items: center; justify-content: center; font-size: 24px;
   background: color-mix(in srgb, var(--canvas) 85%, transparent); color: var(--ink); border: 2px dashed var(--ink); pointer-events: none;
 }
@@ -318,7 +318,7 @@ label .lbl { display: flex; justify-content: space-between; gap: 8px; }
 /* below ~1100px three columns get too narrow: stack them and let the page scroll */
 @media (max-width: 1100px) {
   body { overflow: auto; }
-  .layout, .layout.runs { grid-template-columns: 1fr; }
+  .layout, .layout.runs { grid-template-columns: minmax(0, 1fr); }   /* minmax: a long prompt in the queue must not widen the page */
   .col-resizer { display: none; }
   .runs-center { overflow: visible; padding: 16px; }
   .views > .layout { flex: none; }
@@ -359,7 +359,22 @@ label .lbl { display: flex; justify-content: space-between; gap: 8px; }
   display: none; align-items: center; justify-content: center; font-size: 15px; line-height: 1;
   background: #000; color: #fff; cursor: pointer;
 }
-.batch-item:hover .remove, .batch-item:focus-visible .remove { display: flex; }
+.batch-item .edit {
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+  display: none; align-items: center; justify-content: center;
+  background: #000; color: #fff; cursor: pointer;
+}
+.batch-item .edit svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.batch-item .edit:hover { background: #fff; color: #000; }
+.batch-item:hover .remove, .batch-item:focus-visible .remove, .batch-item:hover .edit, .batch-item:focus-visible .edit { display: flex; }
+/* image section: title on the left, Reactivate / Clear / Open on the right */
+.imagehead { align-items: center; gap: 8px; }
+.imagehead .h { margin: 0; }
+.imagehead .row { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.dropzone { display: flex; flex-direction: column; gap: 10px; }
+.dropzone[hidden] { display: none; }
+.drop-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.pop-menu { position: fixed; z-index: 70; min-width: 240px; }
 .batch-item .remove:hover { background: #fff; color: #000; }
 .batch-item .tag { position: absolute; top: auto; right: 3px; bottom: 3px; font-size: 11px; padding: 0 5px; border-radius: var(--r-pill); background: #000; color: #fff; }
 .batch-item .tag:empty { display: none; }
@@ -894,3 +909,21 @@ select.compact { width: auto; max-width: 55%; min-height: 28px; padding-top: 2px
 .setup .plist { scroll-margin-top: 64px; }
 #guideType { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 #guideType button { padding: 0 10px; }
+
+/* viewer zoom + pan (the image is moved with a CSS transform) */
+.bigarea.zoomed { touch-action: none; cursor: grab; }
+.bigarea.zoomed .compare { cursor: grab; }
+.bigarea.panning, .bigarea.panning .compare { cursor: grabbing; }
+.bigarea .zoom-badge { z-index: 6; }
+
+/* small dialogs (post-process, use as input) */
+.dialog-box { max-width: 460px; }
+.dialog-body { display: flex; flex-direction: column; gap: 10px; }
+.dialog-check { align-items: flex-start; }
+.dialog-check input { margin-top: 3px; }
+.dialog-check span { display: flex; flex-direction: column; gap: 1px; }
+.dialog-check small { color: var(--body); font-size: 12px; font-weight: 400; }
+.dialog-range { margin-left: 26px; }
+
+/* compare view: the "Add original" switch next to the mode buttons */
+.mc-orig { white-space: nowrap; }

@@ -1,0 +1,90 @@
+/* Image editor modal (web/imageedit.js). Every class is prefixed ie-. */
+.ie-overlay {
+  position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: rgba(0,0,0,.4); outline: none;
+}
+.ie-box {
+  width: 100%; max-width: 1000px; height: 100%; max-height: 880px; min-height: 0;
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--canvas); color: var(--ink); border: 1px solid var(--hairline); border-radius: var(--r-card); padding: 16px;
+}
+.ie-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.ie-head h3 { margin: 0; font: 600 16px/1.3 var(--font-head); color: var(--ink); flex: none; }
+.ie-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+.ie-stage {
+  position: relative; flex: 1 1 auto; min-height: 160px; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-img);
+  touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.ie-canvas { position: absolute; left: 0; top: 0; display: block; }
+.ie-status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 16px; }
+.ie-status[hidden], .ie-crop[hidden] { display: none; }
+
+/* crop rectangle: thin white border, the dim outside is a huge black shadow clipped by the stage */
+.ie-crop {
+  position: absolute; box-sizing: border-box; border: 1px solid #fff; cursor: move; touch-action: none;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,.55);
+}
+.ie-grid {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .12s;
+  background:
+    linear-gradient(rgba(255,255,255,.7), rgba(255,255,255,.7)) 33.333% 0 / 1px 100% no-repeat,
+    linear-gradient(rgba(255,255,255,.7), rgba(255,255,255,.7)) 66.666% 0 / 1px 100% no-repeat,
+    linear-gradient(rgba(255,255,255,.7), rgba(255,255,255,.7)) 0 33.333% / 100% 1px no-repeat,
+    linear-gradient(rgba(255,255,255,.7), rgba(255,255,255,.7)) 0 66.666% / 100% 1px no-repeat;
+}
+.ie-crop.ie-grid-on .ie-grid { opacity: 1; }
+
+/* handles: a 36px hit area with the visible mark drawn by ::after */
+.ie-h { position: absolute; touch-action: none; }
+.ie-h::after { content: ""; position: absolute; border: 0 solid #fff; }
+.ie-h-nw, .ie-h-ne, .ie-h-se, .ie-h-sw { width: 36px; height: 36px; z-index: 2; }
+.ie-h-nw { left: -18px; top: -18px; cursor: nwse-resize; }
+.ie-h-se { right: -18px; bottom: -18px; cursor: nwse-resize; }
+.ie-h-ne { right: -18px; top: -18px; cursor: nesw-resize; }
+.ie-h-sw { left: -18px; bottom: -18px; cursor: nesw-resize; }
+.ie-h-nw::after { left: 15px; top: 15px; width: 20px; height: 20px; border-width: 3px 0 0 3px; }
+.ie-h-ne::after { right: 15px; top: 15px; width: 20px; height: 20px; border-width: 3px 3px 0 0; }
+.ie-h-se::after { right: 15px; bottom: 15px; width: 20px; height: 20px; border-width: 0 3px 3px 0; }
+.ie-h-sw::after { left: 15px; bottom: 15px; width: 20px; height: 20px; border-width: 0 0 3px 3px; }
+.ie-h-n, .ie-h-s { left: 18px; right: 18px; height: 28px; cursor: ns-resize; }
+.ie-h-n { top: -14px; }
+.ie-h-s { bottom: -14px; }
+.ie-h-n::after, .ie-h-s::after { left: 50%; margin-left: -12px; width: 24px; border-width: 3px 0 0; }
+.ie-h-n::after { top: 12px; }
+.ie-h-s::after { bottom: 12px; border-width: 0 0 3px; }
+.ie-h-e, .ie-h-w { top: 18px; bottom: 18px; width: 28px; cursor: ew-resize; }
+.ie-h-e { right: -14px; }
+.ie-h-w { left: -14px; }
+.ie-h-e::after, .ie-h-w::after { top: 50%; margin-top: -12px; height: 24px; border-width: 0 0 0 3px; }
+.ie-h-w::after { left: 12px; }
+.ie-h-e::after { right: 12px; border-width: 0 3px 0 0; }
+
+/* tool rows */
+.ie-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.ie-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }
+.ie-pill[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--on-ink); font-weight: 600; }
+.ie-pill[aria-pressed="true"]:hover:not(:disabled) { background: var(--ink); border-color: var(--ink); color: var(--on-ink); opacity: .85; }
+.ie-orient { margin-left: 4px; }
+.ie-straighten { flex: 1 1 320px; flex-wrap: nowrap; min-width: 0; }
+.ie-name { font-size: 13px; color: var(--body); flex: none; }
+.ie-slider { flex: 1 1 120px; min-width: 80px; accent-color: var(--ink); margin: 0; height: 32px; }
+.ie-angle { width: 4.2em; text-align: right; font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; flex: none; }
+.ie-icon { display: inline-flex; flex: none; }
+.ie-actions { display: flex; align-items: center; gap: 8px; }
+.ie-spacer { flex: 1; }
+
+@media (max-width: 560px) {
+  .ie-straighten { flex-wrap: wrap; }
+  .ie-name { width: 100%; }
+  .ie-slider { flex-basis: 140px; }
+}
+@media (max-width: 480px) {
+  .ie-overlay { padding: 8px; }
+  .ie-box { padding: 12px; gap: 10px; }
+  .ie-lbl { display: none; }
+  .ie-tool { padding: 0 12px; }
+  .ie-actions button { flex: 1 1 0; }
+  .ie-actions .ie-spacer { display: none; }
+}

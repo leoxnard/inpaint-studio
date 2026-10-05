@@ -1032,11 +1032,27 @@ const zEnd = (e) => {
 };
 stageEl.addEventListener("pointerup", zEnd, true);
 stageEl.addEventListener("pointercancel", zEnd, true);
+// a dialog, the Download Center or the image editor has the keyboard
+const appBusy = () => setupOpen || document.body.classList.contains("dialog-open") || !!document.querySelector(".modal:not([hidden])");
+// Tab switches between Create and Runs from anywhere (Shift+Tab still moves the focus backwards)
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab" || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey || !appStarted || appBusy()) return;
+  e.preventDefault();
+  setView(state.view === "create" ? "runs" : "create");
+});
 document.addEventListener("keydown", (e) => {
   if (state.view !== "create") return;
   const t = document.activeElement;
   // ⌘↵ queues from anywhere in Create, also while typing the prompt
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); if (!$("runEdit").disabled) $("runEdit").click(); return; }
+  // Enter alone queues too (what the main button at the bottom says: this image, or the whole batch), unless it is typing
+  // or pressing a button
+  if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.isComposing && !appBusy()) {
+    const tag = t.tagName;
+    const typing = (/INPUT/.test(tag) && !["checkbox", "radio", "range", "button"].includes(t.type)) || /TEXTAREA|SELECT/.test(tag) || t.isContentEditable;
+    const pressing = (tag === "BUTTON" && !t.classList.contains("batch-item")) || tag === "A" || tag === "SUMMARY";
+    if (!typing && !pressing) { e.preventDefault(); if (!$("runEdit").disabled) $("runEdit").click(); return; }
+  }
   if (!state.imgEl || e.metaKey || e.ctrlKey || e.altKey) return;
   if (/INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable) return;
   if (t.tagName === "BUTTON" && (e.key === " " || e.key === "Enter")) return;   // a focused button still clicks
@@ -1095,8 +1111,8 @@ document.addEventListener("keydown", (e) => {
     openBatchItem(i);
     return;
   }
-  // arrow keys step through the visible filmstrip; past the last frame shows the final comparison
-  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && state.view === "runs") {
+  // Alt + arrow keys step through the visible filmstrip; past the last frame shows the final comparison
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.altKey && !typing && state.view === "runs") {
     const run = state.run;
     const frames = run ? visibleFrames(run) : [];
     if (!frames.length) return;
@@ -1141,14 +1157,57 @@ async function setImageFile(file) {
 }
 $("fileInput").addEventListener("change", (e) => { openFiles([...e.target.files]); e.target.value = ""; });
 $("folderInput").addEventListener("change", (e) => { openFiles([...e.target.files]); e.target.value = ""; });
+$("pickFiles").onclick = (e) => { e.stopPropagation(); $("fileInput").click(); };
+$("pickFolder").onclick = (e) => { e.stopPropagation(); $("folderInput").click(); };
+$("dropzone").addEventListener("click", () => $("fileInput").click());
+// "Open" in the header and the + tile: a small menu (images or a whole folder)
+function closeOpenMenu() { $("openMenu").hidden = true; }
+function toggleOpenMenu(anchor) {
+  const m = $("openMenu");
+  if (!m.hidden && m.dataset.anchor === anchor.id) { closeOpenMenu(); return; }
+  m.hidden = false;
+  m.dataset.anchor = anchor.id || "";
+  const r = anchor.getBoundingClientRect();
+  m.style.left = `${Math.max(8, Math.min(window.innerWidth - m.offsetWidth - 8, r.right - m.offsetWidth))}px`;
+  m.style.top = `${r.bottom + 6}px`;
+}
+$("openImages").onclick = (e) => { e.stopPropagation(); toggleOpenMenu($("openImages")); };
+$("openMenuFiles").onclick = () => { closeOpenMenu(); $("fileInput").click(); };
+$("openMenuFolder").onclick = () => { closeOpenMenu(); $("folderInput").click(); };
+document.addEventListener("click", (e) => { if (!e.target.closest?.("#openMenu")) closeOpenMenu(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeOpenMenu(); });
+
+// A dropped folder arrives as a directory entry: walk it for the images inside (sub-folders too).
+// The entries have to be taken from the event before the first await.
+async function filesFromDrop(dt) {
+  const entries = [...(dt.items || [])].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.some((en) => en.isDirectory)) return [...dt.files];
+  const out = [];
+  const walk = async (entry, path) => {
+    if (entry.isFile) {
+      const f = await new Promise((res, rej) => entry.file(res, rej));
+      Object.defineProperty(f, "webkitRelativePath", { value: path + f.name });
+      out.push(f);
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (;;) {   // readEntries returns the list in chunks until it is empty
+        const chunk = await new Promise((res, rej) => reader.readEntries(res, rej));
+        if (!chunk.length) break;
+        for (const child of chunk) await walk(child, `${path}${entry.name}/`);
+      }
+    }
+  };
+  for (const en of entries) await walk(en, "");
+  return out;
+}
 let dragDepth = 0;
 window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
 window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => {
   e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragging");
-  const files = e.dataTransfer ? [...e.dataTransfer.files] : [];
-  if (files.length) openFiles(files);
+  if (!e.dataTransfer) return;
+  filesFromDrop(e.dataTransfer).then((files) => { if (files.length) openFiles(files); }).catch((err) => showError(err.message));
 });
 
 // ------------------------------------------------------------------ step 1: compute mask
@@ -1560,6 +1619,7 @@ function renderQueue() {
   const box = $("queue");
   const jobs = [...state.jobs.values()].sort((a, b) => a.created - b.created);
   $("queueEmpty").hidden = !!jobs.length;
+  $("clearQueue").hidden = !jobs.some((j) => j.status === "queued");
   box.innerHTML = "";
   let pos = 0;
   for (const job of jobs) {
@@ -1600,6 +1660,12 @@ function renderQueue() {
   }
   renderQueueLabel();
 }
+
+$("clearQueue").onclick = async () => {   // every waiting run, not the one that is running
+  const waiting = [...state.jobs.values()].filter((j) => j.status === "queued" && !j.cancelling);
+  await Promise.all(waiting.map(cancelJob));
+  if (waiting.length) showToast(`Removed ${waiting.length} waiting run${waiting.length > 1 ? "s" : ""} from the queue`);
+};
 
 // black badge on the Runs switch: running + waiting jobs
 function renderQueueLabel() {
@@ -1809,7 +1875,8 @@ function showFinal() {
   $("cmpAfter").src = after;
   $("liveImg").hidden = true;
   $("compare").hidden = false;
-  setDivider(50);
+  setDivider(state.divider);
+  applyViewZoom();
 }
 
 function renderSteps() {
@@ -1932,37 +1999,89 @@ function renderViewer() {
   renderQueue();
   renderHistory();
   syncRunHash();
+  applyViewZoom();
 }
 
-function settingsRows(run) {
+// Every setting of a run, in the order of the details column. The compare labels reuse them: only the facts that
+// differ between the compared runs go into a label (tag; null = never, row: false = not a details row).
+const upscalerInfo = (key) => (state.setup?.components || []).find((c) => c.key === key);
+const clip = (t, n) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+function runFacts(run) {
   const p = run.params || {};
   const task = p.task || run.task;   // unknown for jobs queued elsewhere
+  const up = task === "upscale", gen = task === "generate";
   const area = !p.use_mask ? "whole image" : p.mode === "paste" ? "free edit + paste" : "inpaint";
   const preset = presetById(p.preset);
+  const comp = up ? upscalerInfo(p.upscaler) : null;
   const size = run.size || {};
-  const rows = [
-    ["Run ID", run.serverId || run.id],   // the folder name in the data dir, e.g. to point Claude at a run
-    ["Task", !task ? "" : task === "generate" ? "Generate" : task === "upscale" ? "Upscale" : p.mode || p.use_mask != null ? `Edit, ${area}` : "Edit"],
-    ["Model", preset ? `${preset.title}${p.quant ? ` · ${p.quant}` : ""}` : p.unet || ""],
-    ["Size", size.work_w ? `${size.work_w} × ${size.work_h}` : ""],
-    ["Steps", p.steps ?? run.steps ?? ""],
-    ["Seed", p.seed ?? run.seed ?? ""],
-    ["CFG", p.cfg ?? ""],
-  ];
-  if (task !== "generate" && p.denoise != null && p.denoise !== 1) rows.push(["Denoise", p.denoise]);
+  const facts = [];
+  const add = (k, name, v, tag, row = true) => {
+    if (v === "" || v == null || v === false) return;
+    facts.push({ k, name, v: String(v), tag: tag === undefined ? `${name.toLowerCase()} ${v}` : tag, row });
+  };
+  add("id", "Run ID", run.serverId || run.id, null);   // the folder name in the data dir, e.g. to point Claude at a run
+  add("task", "Task", !task ? "" : gen ? "Generate" : up ? "Upscale" : p.mode || p.use_mask != null ? `Edit, ${area}` : "Edit",
+    !task || gen || up || (p.mode == null && p.use_mask == null) ? null : area);
+  const model = up ? comp?.title || p.upscaler : preset ? `${preset.title}${p.quant ? ` · ${p.quant}` : ""}` : p.unet || "";
+  add("model", "Model", model, null);
+  add("size", "Size", size.work_w ? `${size.work_w} × ${size.work_h}` : "", size.work_w ? `${size.work_w}×${size.work_h}` : null);
+  if (up) {
+    const long = p.upscale_long_side, mb = p.upscale_mb;
+    add("scale", "Scale", long ? `long side ${long} px` : mb ? `about ${mb} MB` : p.upscale > 0 ? `${p.upscale}×` : "");
+    add("colour", "Colour correction", p.color_correction || "", p.color_correction ? `colour ${p.color_correction}` : null);
+  } else {
+    add("steps", "Steps", p.steps ?? run.steps ?? "");
+  }
+  add("seed", "Seed", p.seed ?? run.seed ?? "", up ? null : undefined);   // an upscale's seed is rarely what sets two runs apart
+  if (!up) {
+    add("cfg", "CFG", p.cfg ?? "");
+    add("sampler", "Sampler", p.sampler || "", p.sampler || null);
+    add("scheduler", "Scheduler", p.scheduler || "", p.scheduler || null);
+  }
+  if (!gen && !up && p.denoise != null && p.denoise !== 1) add("denoise", "Denoise", p.denoise);
+  if (!gen && !up && p.use_mask && p.feather) add("feather", "Feather", `${p.feather} px`, `feather ${p.feather}`);
+  if (!gen && !up && p.resolution) add("resolution", "Encoder resolution", p.resolution, `res ${p.resolution}`);
+  if (p.negative) add("negative", "Negative prompt", p.negative, `no "${clip(p.negative, 20)}"`);
   if (p.control) {
     const src = { drawing: " from a drawing", map: " (own map)" }[p.control.source || (p.control.is_map ? "map" : "")] || "";
-    rows.push(["Guidance", `${p.control.type === "depth" ? "Depth" : "Edges"}${src}, ${p.control.strength}`]);
+    add("guidance", "Guidance", `${p.control.type === "depth" ? "Depth" : "Edges"}${src}, ${p.control.strength}`, `guidance ${p.control.type} ${p.control.strength}`);
   }
-  if (p.upscale > 1) rows.push(["Upscale", `${p.upscale}×`]);
-  if (p.clean_overlays) rows.push(["Watermarks", "Removed"]);
-  if (p.remove_bg) rows.push(["Background", "Removed (transparent)"]);
-  if (p.loras?.length) rows.push(["LoRAs", p.loras.map((l) => `${l.name.replace(/\.safetensors$/, "")} (${l.strength})`).join(", ")]);
-  if (p.crop_box) rows.push(["Crop", `${p.crop_box.w} × ${p.crop_box.h} of ${(p.orig_size || []).join(" × ")}`]);
+  if (!up && p.upscale > 1) {
+    const u = upscalerInfo(p.upscaler);
+    add("upscale", "Upscale", `${p.upscale}×${u ? ` · ${u.title}` : ""}`, `upscale ${p.upscale}×`);
+  }
+  if (p.clean_overlays) add("overlays", "Watermarks", "Removed", "no watermarks");
+  if (p.remove_bg) add("removebg", "Background", "Removed (transparent)", "no background");
+  if (p.loras?.length) {
+    const txt = p.loras.map((l) => `${l.name.replace(/\.safetensors$/, "")} (${l.strength})`).join(", ");
+    add("loras", "LoRAs", txt, p.loras.map((l) => `${l.name.replace(/\.safetensors$/, "")} ${l.strength}`).join(", "));
+  }
+  if (p.crop_box) {
+    add("crop", "Crop & stitch", `${p.crop_box.w} × ${p.crop_box.h} of ${(p.orig_size || []).join(" × ")}${p.crop_context != null ? `, context ${Math.round(p.crop_context * 100)} %` : ""}`, "crop & stitch");
+  }
+  if (p.outpaint) add("outpaint", "Extend canvas", `${p.outpaint.canvas_w} × ${p.outpaint.canvas_h}`, "extended canvas");
+  if (p.refs?.length) add("refs", "References", p.refs.length, `${p.refs.length} ref${p.refs.length > 1 ? "s" : ""}`, false);
+  if (!up && p.prompt) add("prompt", "Prompt", p.prompt, `"${clip(p.prompt, 28)}"`, false);
+  // post-processing as it is on the result now (changed later in Runs → Post-processing)
+  if (run.aligned) {
+    const a = run.aligned, on = [];
+    if (a.dx || a.dy || (a.scale && a.scale !== 1)) on.push("aligned");
+    if (a.colors) on.push("colours");
+    if (a.warp) on.push("warp");
+    if (a.poisson) on.push("seamless edges");
+    add("post", "Post-processing", on.join(", "), `fixed: ${on.join(", ")}`);
+  }
+  if (task && !gen && (run.grain != null || p.post_grain != null || p.grain != null)) {
+    const g = run.grain ?? !!(up ? p.grain : p.post_grain), pct = Math.round((run.grainStrength ?? p.grain_strength ?? GRAIN_STRENGTH) * 100);
+    add("grain", "Film grain", g ? `On, strength ${pct} %` : "Off", g ? `grain ${pct} %` : "no grain");
+  }
+  if (p.group != null && p.variant != null) add("variant", "Variation", `${p.variant + 1}`, null);
+  if (p.save_every) add("saveevery", "Saved steps", p.save_last ? `every ${p.save_every}, last ${p.save_last}` : `every ${p.save_every}`, null);
   const took = runTook(run);
-  rows.push(["Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : ""]);
-  return rows.filter(([, v]) => v !== "" && v != null);
+  add("time", "Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : "", null);
+  return facts;
 }
+const settingsRows = (run) => runFacts(run).filter((f) => f.row).map((f) => [f.name, f.v]);
 
 // ------------------------------------------------------------------ compare several runs
 // "Compare" next to the result filters: pick two or more results (dashed tiles), then they are shown side by
@@ -1974,66 +2093,73 @@ const cmpPickable = (run) => !!run.resultUrl && run.status !== "error" && !!run.
 const cmpSource = (r) => (runTask(r) === "generate" ? "" : r.params?.image || r.beforeUrl || "");
 const multiCmp = createMultiCompare($("multiCmp"), { onExit: () => exitCompare() });
 
-// tile label: the model, plus every setting that differs between the compared runs
-const CMP_KEYS = [["steps", "steps"], ["cfg", "CFG"], ["sampler", ""], ["scheduler", ""], ["denoise", "denoise"],
-  ["megapixels", "MP"], ["mode", ""], ["seed", "seed"], ["loras", ""], ["upscaler", ""], ["prompt", ""]];
+// tile label: the model, plus every setting that differs between the compared runs (runFacts)
 function cmpLabels(runs) {
-  const val = (r, k) => {
-    const v = r.params?.[k];
-    if (runTask(r) === "upscale" && ["seed", "prompt", "upscaler"].includes(k)) return "";   // in the title already
-    if (k === "loras") return (v || []).map((l) => `${l.name.replace(/\.safetensors$/, "")} ${l.strength}`).join(", ");
-    return v == null ? "" : String(v);
-  };
-  const differs = CMP_KEYS.filter(([k]) => new Set(runs.map((r) => val(r, k))).size > 1);
-  return runs.map((r) => {
-    const p = r.params || {};
-    const up = runTask(r) === "upscale" && (state.setup?.components || []).find((c) => c.key === p.upscaler);
-    const model = up ? `${up.title} ×${p.upscale}`
-      : presetById(p.preset)?.title || (p.unet || "").replace(/\.(gguf|safetensors)$/, "") || runTask(r);
-    const parts = [p.quant ? `${model} · ${p.quant}` : model];
-    for (const [k, name] of differs) {
-      let v = val(r, k);
-      if (!v) continue;
-      if (k === "prompt") v = `"${v.length > 28 ? `${v.slice(0, 27)}…` : v}"`;
-      parts.push(name ? `${name} ${v}` : v);
+  const facts = runs.map(runFacts);
+  const val = (fs, k) => fs.find((f) => f.k === k)?.v ?? "";
+  const keys = [...new Set(facts.flatMap((fs) => fs.filter((f) => f.tag !== null).map((f) => f.k)))]
+    .filter((k) => new Set(facts.map((fs) => val(fs, k))).size > 1);
+  return runs.map((r, i) => {
+    const model = val(facts[i], "model") || (r.params?.unet || "").replace(/\.(gguf|safetensors)$/, "") || runTask(r);
+    const parts = [model];
+    for (const k of keys) {
+      const f = facts[i].find((x) => x.k === k);
+      if (f?.tag) parts.push(f.tag);
     }
     return { label: parts.join(" · "), title: `${parts.join("\n")}\n\n${r.prompt || ""}` };
   });
 }
 
-// Results: "Select" picks tiles; the icon actions next to it work on the picked runs (Compare needs two)
+// Results: "Select" picks tiles. The tools next to it work on the picked runs; without Select they work on the run
+// that is open in the viewer. Only Compare needs two picks.
+// the runs the tools act on
+function targetRuns() {
+  const c = state.cmp;
+  if (c.picking || c.active) return selectedRuns();
+  const r = state.run;
+  return r && r.serverId && !state.jobs.has(r.id) ? [r] : [];
+}
 function syncCompareUi() {
   const c = state.cmp, n = c.picking ? c.keys.length : 0;
   $("selectBtn").textContent = c.picking ? (n ? `Cancel (${n})` : "Cancel") : "Select";
-  $("selectBtn").title = c.picking ? "Stop selecting" : "Select results to compare, post-process, reuse, download or remove";
+  $("selectBtn").title = c.picking ? "Stop selecting" : "Select several results (the tools next to it also work on the open run)";
   $("selAll").hidden = !c.picking;
   const all = shownRuns().filter(cmpPickable);
   $("selAll").textContent = all.length && all.every((r) => c.keys.includes(r.serverId)) ? "None" : "All";
+  const runs = targetRuns();
+  const some = (f) => runs.some(f);
   $("selCompare").disabled = n < 2;
-  for (const id of ["selPost", "selInput", "selDownload", "selRemove"]) $(id).disabled = n < 1;
-  if (n < 1) closeRemoveMenu();
+  $("selPost").disabled = !some((r) => r.status === "done" && postOptions(r));
+  $("selInput").disabled = $("selDownload").disabled = !some((r) => r.resultUrl);
+  $("selRepeat").disabled = $("selRemove").disabled = !runs.length;
+  if (!runs.length) closeRemoveMenu();
 }
 const selectedRuns = () => state.cmp.keys.map((k) => state.runs.find((r) => r.serverId === k)).filter(Boolean);
 function stopSelecting() {
   state.cmp.picking = false;
+  state.cmp.base = null;
   if (!state.cmp.active) state.cmp.keys = [];
   syncCompareUi();
   renderHistory();
 }
-$("selectBtn").onclick = () => {
+function startPicking(anchor = null) {
   const c = state.cmp;
-  if (c.picking) { stopSelecting(); return; }
   c.picking = true;   // an open comparison keeps its runs picked
-  c.anchor = null;
+  c.anchor = anchor; c.cursor = anchor; c.base = null;
   if (!c.active) c.keys = [];
   if (state.resultFilter === "removed") setResultFilter("all");
-  showToast("Click the results to select them");
   syncCompareUi();
   renderHistory();
+}
+$("selectBtn").onclick = () => {
+  if (state.cmp.picking) { stopSelecting(); return; }
+  startPicking();
+  showToast("Click the results to select them");
 };
 // All: every result of the current filter (None when they all are)
 $("selAll").onclick = () => {
   const c = state.cmp, all = shownRuns().filter(cmpPickable);
+  c.base = null;
   if (all.length && all.every((r) => c.keys.includes(r.serverId))) c.keys = c.keys.filter((k) => !all.some((r) => r.serverId === k));
   else for (const r of all) if (!c.keys.includes(r.serverId)) c.keys.push(r.serverId);
   syncCompareUi();
@@ -2046,20 +2172,116 @@ $("selCompare").onclick = () => {
   syncCompareUi();
   renderHistory();
 };
-// every fix that fits the run (as in Runs → Post-processing), plus grain, saved into <run>_fixed.png
+
+// ---- a small dialog: title, a body the caller fills, Cancel + one action; resolves with collect(body) or null
+function askDialog({ title, intro = "", build, action = "OK", collect }) {
+  return new Promise((resolve) => {
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    const box = document.createElement("div");
+    box.className = "modal-box dialog-box";
+    box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "true");
+    const h = document.createElement("h3"); h.textContent = title;
+    box.append(h);
+    if (intro) { const p = document.createElement("p"); p.className = "hint"; p.textContent = intro; box.append(p); }
+    const body = document.createElement("div"); body.className = "dialog-body";
+    build(body);
+    const actions = document.createElement("div"); actions.className = "modal-actions";
+    const cancel = document.createElement("button"); cancel.textContent = "Cancel";
+    const ok = document.createElement("button"); ok.className = "primary"; ok.textContent = action;
+    actions.append(cancel, ok);
+    box.append(body, actions);
+    modal.append(box);
+    const close = (value) => {
+      document.removeEventListener("keydown", onKey, true);
+      modal.remove();
+      document.body.classList.remove("dialog-open");
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(null); }
+      else if (e.key === "Enter" && !/TEXTAREA|BUTTON/.test(e.target.tagName)) { e.preventDefault(); e.stopPropagation(); ok.click(); }
+    };
+    ok.onclick = () => close(collect(body));
+    cancel.onclick = () => close(null);
+    modal.addEventListener("pointerdown", (e) => { if (e.target === modal) close(null); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.classList.add("dialog-open");
+    document.body.append(modal);
+    ok.focus();
+  });
+}
+// a labelled checkbox row for a dialog; hint = small grey text under the label
+function checkRow(label, checked, hint = "") {
+  const row = document.createElement("label");
+  row.className = "check dialog-check";
+  const box = document.createElement("input"); box.type = "checkbox"; box.checked = checked;
+  const text = document.createElement("span");
+  text.textContent = label;
+  if (hint) { const s = document.createElement("small"); s.textContent = hint; text.append(s); }
+  row.append(box, text);
+  return { row, box };
+}
+
+// ---- Post-process: pick the steps (all that any picked run can get are listed and on), then apply to every run they fit
+const POST_STEPS = [
+  { id: "align", label: "Align", hint: "Shift and scale to line up with the original", fits: (o) => o.fix === "paste" || o.fix === "whole" },
+  { id: "colors", label: "Colours & exposure", hint: "Match the colours to the original", fits: (o) => !!o.fix },
+  { id: "warp", label: "Local warp", hint: "Fix small shifts of details", fits: (o) => o.fix === "paste" || o.fix === "whole" },
+  { id: "poisson", label: "Seamless edges", hint: "Blend the edge of the edited area", fits: (o) => o.fix === "paste" },
+  { id: "grain", label: "Film grain", hint: "Give the original's grain back", fits: (o) => o.grain },
+];
+function askPostSteps(runs) {
+  const opts = runs.map((r) => postOptions(r));
+  const boxes = {};
+  let strength;
+  return askDialog({
+    title: runs.length > 1 ? `Post-process ${runs.length} results` : "Post-process this result",
+    intro: "Choose what to apply. Every run only gets the steps that fit it, and the result replaces its earlier post-processing.",
+    action: "Apply",
+    build(body) {
+      for (const st of POST_STEPS) {
+        const n = opts.filter(st.fits).length;
+        if (!n) continue;
+        const { row, box } = checkRow(st.label, true, `${st.hint}${runs.length > 1 ? ` · ${n} of ${runs.length} runs` : ""}`);
+        boxes[st.id] = box;
+        body.append(row);
+        if (st.id === "grain") {
+          const rr = document.createElement("label");
+          rr.className = "range-row dialog-range";
+          rr.append("Grain strength ");
+          const out = document.createElement("output"); out.textContent = `${Math.round(GRAIN_STRENGTH * 100)} %`;
+          strength = document.createElement("input"); strength.type = "range"; strength.min = 0; strength.max = 200; strength.step = 10;
+          strength.value = Math.round(GRAIN_STRENGTH * 100);
+          rr.append(out, strength);
+          body.append(rr);
+        }
+      }
+    },
+    collect() {
+      const pick = Object.fromEntries(Object.entries(boxes).map(([k, b]) => [k, b.checked]));
+      pick.strength = strength ? (parseFloat(strength.value) || 0) / 100 : GRAIN_STRENGTH;
+      return pick;
+    },
+  });
+}
 $("selPost").onclick = async () => {
-  const runs = selectedRuns().filter((r) => r.status === "done" && postOptions(r));
-  if (!runs.length) { showError("None of the selected results can be post-processed."); return; }
+  const runs = targetRuns().filter((r) => r.status === "done" && postOptions(r));
+  if (!runs.length) { showError("None of these results can be post-processed."); return; }
+  const pick = await askPostSteps(runs);
+  if (!pick) return;
   $("selPost").disabled = true;
   let n = 0, failed = 0;
   for (const run of runs) {
     showToast(`Post-processing ${++n} / ${runs.length}…`);
     const { fix, grain } = postOptions(run);
-    const body = { save: true, grain, grain_strength: run.grainStrength ?? GRAIN_STRENGTH,
-      colors: !!fix, auto: fix === "paste" || fix === "whole", warp: fix === "paste" || fix === "whole", poisson: fix === "paste" };
+    const geo = fix === "paste" || fix === "whole";
+    const body = { save: true, grain: grain && !!pick.grain, grain_strength: pick.strength,
+      colors: !!fix && !!pick.colors, auto: geo && !!pick.align, warp: geo && !!pick.warp, poisson: fix === "paste" && !!pick.poisson };
     try {
       const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, body);
       run.aligned = res.aligned || null; run.fixedUrl = res.fixed_url || null; run.grainUrl = null; run.grain = !!res.grain;
+      run.grainStrength = res.grain_strength ?? run.grainStrength;
     } catch (e) { failed++; showError(`${run.prompt || run.serverId}: ${e.message}`); }
   }
   showToast(failed ? `Post-processed ${runs.length - failed} of ${runs.length}.` : `Post-processed ${runs.length} result${runs.length > 1 ? "s" : ""}.`);
@@ -2067,13 +2289,66 @@ $("selPost").onclick = async () => {
   renderHistory();
   if (state.run && runs.includes(state.run)) renderViewer();
 };
+
+// ---- Use as input: every version a run has (post-processed, pasted result / result, raw / clean)
+function inputVersions(run) {
+  const shown = shownResult(run), fixed = shown !== run.resultUrl;
+  const out = [];
+  if (fixed) out.push({ kind: "post", url: shown, suffix: "_fixed" });
+  out.push({ kind: "result", url: run.resultUrl, suffix: "" });
+  if (run.rawUrl && run.rawUrl !== run.resultUrl) out.push({ kind: "raw", url: run.rawUrl, suffix: "_raw" });
+  return out;
+}
+async function chooseInputVersions(runs) {
+  const versions = runs.map(inputVersions);
+  if (versions.every((v) => v.length < 2)) return runs.map((run, i) => ({ run, ver: versions[i][0] }));
+  const ups = runs.map((r) => runTask(r) === "upscale");
+  const names = {
+    post: "Post-processed",
+    result: runs.some((r) => r.rawUrl && runTask(r) !== "upscale") ? "Pasted result"
+      : ups.every(Boolean) && runs.some((r) => shownResult(r) !== r.resultUrl) ? "Clean upscale" : "Result",
+    raw: ups.every(Boolean) ? "Clean upscale" : ups.some(Boolean) ? "Raw / clean upscale" : "Raw (full generated image)",
+  };
+  const hints = {
+    post: "With the fixes and grain you applied",
+    result: runs.some((r) => shownResult(r) !== r.resultUrl) ? "The result before any post-processing" : "The finished result",
+    raw: "What the model made, before it was pasted into the original",
+  };
+  const kinds = ["post", "result", "raw"].filter((k) => versions.some((vs) => vs.some((v) => v.kind === k)));
+  const firstKinds = new Set(versions.map((vs) => vs[0].kind));   // what the viewer shows by default
+  const boxes = {};
+  const pick = await askDialog({
+    title: "Which versions should become inputs?",
+    intro: "Some results have more than one version. Every ticked version is opened as its own image.",
+    action: "Use as input",
+    build(body) {
+      for (const k of kinds) {
+        const n = versions.filter((vs) => vs.some((v) => v.kind === k)).length;
+        const { row, box } = checkRow(names[k], firstKinds.has(k), `${hints[k]}${runs.length > 1 ? ` · ${n} of ${runs.length} runs` : ""}`);
+        boxes[k] = box;
+        body.append(row);
+      }
+    },
+    collect: () => new Set(kinds.filter((k) => boxes[k].checked)),
+  });
+  if (!pick) return null;
+  const out = [];
+  runs.forEach((run, i) => {
+    const chosen = versions[i].filter((v) => pick.has(v.kind));
+    for (const ver of chosen.length ? chosen : [versions[i][0]]) out.push({ run, ver });
+  });
+  return out;
+}
 $("selInput").onclick = async () => {
-  const runs = selectedRuns().filter((r) => r.resultUrl);
+  const runs = targetRuns().filter((r) => r.resultUrl);
   if (!runs.length || !ensureEditTask()) return;
   try {
-    const files = await Promise.all(runs.map(async (run) => {
-      const blob = await (await fetch(shownResult(run))).blob();
-      return new File([blob], run.filename || `${run.serverId}.png`, { type: blob.type || "image/png" });
+    const picks = await chooseInputVersions(runs);
+    if (!picks) return;
+    const files = await Promise.all(picks.map(async ({ run, ver }) => {
+      const blob = await (await fetch(ver.url)).blob();
+      const name = (run.filename || `${run.serverId}.png`).replace(/(\.\w+)?$/, `${ver.suffix}$1`);
+      return new File([blob], name, { type: blob.type || "image/png" });
     }));
     if (state.batch.length) $("batchClear").click();   // a new batch, not added to the open images
     if (files.length > 1 && state.imgEl) clearImage();
@@ -2082,16 +2357,44 @@ $("selInput").onclick = async () => {
     setView("create");
   } catch (e) { showError(e.message); }
 };
-$("selDownload").onclick = async () => {
-  for (const run of selectedRuns().filter((r) => r.resultUrl)) {
-    const a = document.createElement("a");
-    a.href = shownResult(run);
-    a.download = (run.filename || `${run.serverId}.png`).replace(/\.png$/, run.fixedUrl ? "_fixed.png" : ".png");
-    document.body.appendChild(a); a.click(); a.remove();
-    await new Promise((r) => setTimeout(r, 200));
+
+// ---- Repeat: the same settings again, as a new run
+$("selRepeat").onclick = async () => {
+  const runs = targetRuns();
+  if (!runs.length) return;
+  let first = null, ok = 0;
+  for (const run of runs) {
+    try {
+      const sum = await api(`/api/runs/${encodeURIComponent(run.serverId)}/retry`, { method: "POST" });
+      first ||= jobFromSummary(sum);
+      ok++;
+    } catch (e) { showError(`${run.prompt || run.serverId}: ${e.message}`); }
   }
+  if (!ok) return;
+  renderQueue();
+  showToast(ok === 1 ? "Queued again" : `${ok} runs queued again`, { runsLink: true });
+  if (runs.length === 1 && first && !state.cmp.picking && !state.cmp.active) { state.follow = true; viewJob(first); }
 };
-// Remove: one button, a small menu with "hide" (files kept) and "delete files" (asks first)
+
+// ---- Download: asks for a folder (the Mac's folder dialog, opened by the server) and copies the files there
+const SAVE_KEY = "inpaint-studio-save-folder";
+$("selDownload").onclick = async () => {
+  const runs = targetRuns().filter((r) => r.resultUrl);
+  if (!runs.length) return;
+  try {
+    let start = "";
+    try { start = localStorage.getItem(SAVE_KEY) || ""; } catch { /* optional */ }
+    const { path } = await postJson("/api/pick-folder", { start });
+    if (!path) return;
+    try { localStorage.setItem(SAVE_KEY, path); } catch { /* optional */ }
+    const items = runs.map((run) => ({ url: shownResult(run),
+      name: (run.filename || `${run.serverId}.png`).replace(/\.png$/, shownResult(run) !== run.resultUrl ? "_fixed.png" : ".png") }));
+    const res = await postJson("/api/export", { folder: path, items });
+    showToast(`Saved ${res.saved.length} file${res.saved.length === 1 ? "" : "s"} to ${path.replace(/\/$/, "").split("/").pop() || path}`);
+  } catch (e) { showError(e.message); }
+};
+
+// ---- Remove: one button, a small menu with "hide" (files kept) and "delete files" (asks first)
 function closeRemoveMenu() {
   $("selRemoveMenu").hidden = true;
   $("selRemove").setAttribute("aria-expanded", "false");
@@ -2106,9 +2409,10 @@ document.addEventListener("click", (e) => { if (!e.target.closest?.(".sel-remove
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRemoveMenu(); });
 async function removeSelected(deleteFiles) {
   closeRemoveMenu();
-  const runs = selectedRuns();
+  const runs = targetRuns();
   if (!runs.length) return;
   if (deleteFiles && !confirm(`Delete ${runs.length} run${runs.length > 1 ? "s" : ""} and all their files? This cannot be undone.`)) return;
+  const list = shownRuns(), at = list.indexOf(state.run);
   for (const run of runs) {
     try {
       if (deleteFiles) await api(`/api/runs/${encodeURIComponent(run.serverId)}`, { method: "DELETE" });
@@ -2120,10 +2424,70 @@ async function removeSelected(deleteFiles) {
   state.cmp.keys = [];
   stopSelecting();
   showToast(deleteFiles ? `Deleted ${runs.length}.` : `Hidden ${runs.length} (see Removed).`);
-  if (state.run && runs.includes(state.run)) { state.follow = false; showLatest(); }
+  if (state.run && runs.includes(state.run)) {   // open the run that moved into the place of the removed one
+    const rest = shownRuns();
+    const next = rest[Math.min(Math.max(at, 0), rest.length - 1)];
+    state.follow = false;
+    if (next) showRun(next); else showLatest();
+  }
 }
 $("selHide").onclick = () => removeSelected(false);
 $("selDelete").onclick = () => removeSelected(true);
+
+// ---- keyboard in Runs: ←/→ previous / next run, ↑/↓ a row up / down, Shift extends the selection, Delete removes
+// (Alt+←/→ steps through the saved step frames)
+function gridColumns() {
+  const tiles = [...$("history").children];
+  if (!tiles.length) return 1;
+  const n = tiles.findIndex((t) => t.offsetTop !== tiles[0].offsetTop);
+  return n < 0 ? tiles.length : n;
+}
+function openRun(run) {
+  if (state.cmp.active) exitCompare();
+  if (state.jobs.has(run.id)) { state.follow = true; viewJob(run); return; }
+  state.follow = false;
+  showRun(run);
+}
+function moveRuns(dx, dy, extend) {
+  const list = shownRuns();
+  if (!list.length || state.resultFilter === "removed") return;
+  const c = state.cmp;
+  const cur = c.picking && list.includes(c.cursor) ? c.cursor : state.run;
+  const i = list.indexOf(cur);
+  const n = i < 0 ? 0 : Math.max(0, Math.min(list.length - 1, i + (dx || dy * gridColumns())));
+  if (i >= 0 && n === i) return;
+  if (!extend) {
+    if (c.picking) { c.anchor = c.cursor = list[n]; c.base = null; }
+    openRun(list[n]);
+  } else {
+    if (!c.picking) startPicking(list.includes(state.run) ? state.run : list[n]);
+    if (c.base == null) c.base = [...c.keys];
+    if (!c.anchor || !list.includes(c.anchor)) c.anchor = list[i >= 0 ? i : n];
+    c.cursor = list[n];
+    const a = list.indexOf(c.anchor);
+    const range = list.slice(Math.min(a, n), Math.max(a, n) + 1).filter(cmpPickable).map((r) => r.serverId);
+    c.keys = [...new Set([...c.base, ...range])];
+    openRun(list[n]);
+  }
+  // keep the tile in view only when the page is scrolled down to the results (at the viewer it should not jump away)
+  requestAnimationFrame(() => { if ($("history").getBoundingClientRect().top < window.innerHeight * 0.35) $("history").children[n]?.scrollIntoView({ block: "nearest" }); });
+}
+document.addEventListener("keydown", (e) => {
+  if (state.view !== "runs" || appBusy() || e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = document.activeElement;
+  if (/INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable) return;
+  if (e.key === "Escape" && state.cmp.picking && !state.cmp.active) { stopSelecting(); return; }
+  if (e.key === "Delete" || e.key === "Backspace") {
+    if (!targetRuns().length) return;
+    e.preventDefault();
+    removeSelected(true);
+    return;
+  }
+  const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (!dir || state.cmp.active) return;
+  e.preventDefault();
+  moveRuns(dir[0], dir[1], e.shiftKey);
+});
 // Compare starts sorted: runs of the same model side by side (models in the order they were picked),
 // within a model by parameter count (1.4B < 3B < 7B), then quantisation (Q4 < Q8 < fp16; _S < _M < _L)
 function cmpModelKey(r) {
@@ -2155,8 +2519,10 @@ function startCompare() {
   state.cmp.active = true;
   document.body.classList.add("cmp-active");
   $("multiCmp").hidden = false;
+  const src = runs.find((r) => r.beforeUrl && runTask(r) !== "generate");   // the original to offer as one more tile
   multiCmp.show(runs.map((r, i) => ({ key: r.serverId, url: r.fixedUrl || r.grainUrl || r.aligned?.url || r.upscaledUrl || r.resultUrl, ...labels[i] })),
-    { note: sources.size > 1 ? "Different source images" : "" });
+    { note: sources.size > 1 ? "Different source images" : "",
+      original: src ? { url: src.beforeUrl, label: "Original", title: "The original image" } : null });
 }
 function exitCompare() {
   state.cmp.active = false;
@@ -2222,11 +2588,7 @@ function renderDetails(run, status) {
     : "The settings of this run are not known to this page (it was queued elsewhere)";
   $("useResult").hidden = !(done && run.resultUrl);
   $("postBtn").hidden = !(done && run.serverId && postOptions(run));
-  $("downloadBtn").hidden = !(done && run.resultUrl);
-  if (done && run.resultUrl) {
-    $("downloadBtn").href = shownResult(run);
-    $("downloadBtn").download = run.filename || "result.png";
-  }
+  $("revealBtn").hidden = !(done && run.resultUrl && run.serverId);
   $("downloadUpscaled").hidden = !(done && run.upscaledUrl);
   if (done && run.upscaledUrl) {
     $("downloadUpscaled").href = run.upscaledUrl;
@@ -2247,14 +2609,20 @@ function renderDetails(run, status) {
   }
   $("cancelRun").textContent = run.cancelling ? "Cancelling…" : "Cancel run";
   $("removeRun").textContent = run.cancelling ? "Removing…" : "Remove from queue";
-  $("deleteRun").hidden = !(done || status === "error");
   $("retryRun").hidden = status !== "error";
   $("matchInfo").textContent = run.match || "";
 }
 
 $("cancelRun").onclick = () => { if (state.run && state.jobs.has(state.run.id)) cancelJob(state.run); };
 $("removeRun").onclick = $("cancelRun").onclick;
-$("deleteRun").onclick = () => { if (state.run) deleteRun(state.run); };
+// Open in Finder: the file on screen (post-processed result, raw, or a saved step), else the result
+$("revealBtn").onclick = async () => {
+  const run = state.run;
+  if (!run?.resultUrl) return;
+  let url = viewedImage(run).url;
+  if (!/^\/(api\/view|data\/runs\/)/.test(url)) url = shownResult(run);
+  try { await postJson("/api/reveal", { url }); } catch (e) { showError(e.message); }
+};
 $("retryRun").onclick = async () => {
   const run = state.run;
   if (!run?.serverId) return;
@@ -2300,16 +2668,6 @@ function showLatest() {
   else { clearInterval(state.progressTimer); state.run = null; renderViewer(); }
 }
 
-async function deleteRun(run) {
-  if (!confirm("Delete this run and its files?")) return;
-  try {
-    if (run.serverId) await api(`/api/runs/${encodeURIComponent(run.serverId)}`, { method: "DELETE" });
-    state.runs = state.runs.filter((r) => r !== run);
-    if (state.run === run) { state.follow = false; showLatest(); } else renderHistory();
-  } catch (e) { showError(e.message); }
-}
-
-
 function loadImg(url) {
   return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
 }
@@ -2334,22 +2692,128 @@ async function measureMatch(run) {
   } catch { /* measurement is optional */ }
 }
 
+// ---- the viewer image: the before / after divider and zoom + pan. Both stay as they are when another run opens,
+// so the same spot of different runs can be compared one after the other.
+state.divider = 50;
 function setDivider(pct) {
   pct = Math.max(0, Math.min(100, pct));
+  state.divider = pct;
   $("cmpDivider").style.left = `${pct}%`;
   $("cmpAfter").style.clipPath = `inset(0 0 0 ${pct}%)`;
 }
+const bigArea = $("bigArea"), viewBadge = $("viewZoomBadge");
+const viewZoom = { z: 1, tx: 0, ty: 0 }, VIEW_ZOOM_MAX = 16;
+const zoomTarget = () => (!$("compare").hidden ? $("compare") : !$("liveImg").hidden ? $("liveImg") : null);
+// CSS transform (origin 0 0) on top of the fitted layout, so getBoundingClientRect() stays the truth for pointer maths
+function applyViewZoom() {
+  const v = viewZoom, el = zoomTarget();
+  if (v.z <= 1.001 || !el) { v.z = 1; v.tx = v.ty = 0; }
+  else {   // keep at least a margin of the image inside the area
+    const sw = bigArea.clientWidth, sh = bigArea.clientHeight, w = el.offsetWidth * v.z, h = el.offsetHeight * v.z;
+    if (w && h) {
+      const ox = el.offsetLeft, oy = el.offsetTop, m = Math.min(80, sw / 3, sh / 3);
+      v.tx = Math.min(sw - m - ox, Math.max(m - w - ox, v.tx));
+      v.ty = Math.min(sh - m - oy, Math.max(m - h - oy, v.ty));
+    }
+  }
+  for (const e of [$("liveImg"), $("compare")]) {
+    e.style.transformOrigin = "0 0";
+    e.style.transform = v.z === 1 ? "" : `translate(${v.tx}px, ${v.ty}px) scale(${v.z})`;
+  }
+  viewBadge.hidden = v.z === 1;
+  viewBadge.textContent = `${Math.round(v.z * 100)} %`;
+  bigArea.classList.toggle("zoomed", v.z > 1);
+}
+// zoom to nz keeping the client point (cx, cy) fixed
+function viewZoomAt(nz, cx, cy) {
+  const v = viewZoom, el = zoomTarget();
+  if (!el) return;
+  const sr = bigArea.getBoundingClientRect();
+  nz = Math.min(VIEW_ZOOM_MAX, Math.max(1, nz));
+  const px = cx - sr.left - el.offsetLeft, py = cy - sr.top - el.offsetTop, k = nz / v.z;
+  v.tx = px - (px - v.tx) * k; v.ty = py - (py - v.ty) * k; v.z = nz;
+  applyViewZoom();
+}
+function viewZoomCenter(f) { const r = bigArea.getBoundingClientRect(); viewZoomAt(viewZoom.z * f, r.left + r.width / 2, r.top + r.height / 2); }
+viewBadge.onclick = () => { viewZoom.z = 1; applyViewZoom(); };
 {
   const cmp = $("compare");
-  let drag = false;
-  const move = (e) => { const r = cmp.getBoundingClientRect(); setDivider((e.clientX - r.left) / r.width * 100); };
-  // preventDefault: no text/image selection highlight while dragging the divider
-  cmp.addEventListener("pointerdown", (e) => { e.preventDefault(); drag = true; cmp.setPointerCapture(e.pointerId); move(e); });
-  cmp.addEventListener("dragstart", (e) => e.preventDefault());
-  cmp.addEventListener("pointermove", (e) => { if (drag) move(e); });
-  cmp.addEventListener("pointerup", () => { drag = false; });
-  cmp.addEventListener("pointercancel", () => { drag = false; });
+  const dividerX = () => { const r = cmp.getBoundingClientRect(); return r.left + (state.divider / 100) * r.width; };
+  const moveDivider = (e) => { const r = cmp.getBoundingClientRect(); setDivider((e.clientX - r.left) / r.width * 100); };
+  const ptrs = new Map();   // touches, for the pinch
+  let drag = null, pinch = null;   // drag: {id, mode: "divider" | "pan", x, y}
+  const pinchNow = () => { const [a, b] = [...ptrs.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 }; };
+  bigArea.addEventListener("pointerdown", (e) => {
+    const el = zoomTarget();
+    if (state.cmp.active || !el || e.target.closest("#viewZoomBadge")) return;
+    if (e.pointerType === "touch") {
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (ptrs.size === 2) { pinch = pinchNow(); pinch.z = viewZoom.z; drag = null; return; }
+      if (ptrs.size > 2) return;
+    }
+    const onCompare = el === cmp && !!e.target.closest("#compare");
+    const mode = onCompare && (viewZoom.z === 1 || Math.abs(e.clientX - dividerX()) < 18) ? "divider" : viewZoom.z > 1 || e.button === 1 ? "pan" : null;
+    if (!mode) return;
+    e.preventDefault();   // no text / image selection highlight while dragging
+    drag = { id: e.pointerId, mode, x: e.clientX, y: e.clientY };
+    bigArea.setPointerCapture(e.pointerId);
+    if (mode === "pan") bigArea.classList.add("panning"); else moveDivider(e);
+  });
+  bigArea.addEventListener("pointermove", (e) => {
+    if (ptrs.has(e.pointerId)) ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && ptrs.size >= 2) {
+      const n = pinchNow();
+      viewZoom.tx += n.cx - pinch.cx; viewZoom.ty += n.cy - pinch.cy;   // two-finger pan
+      viewZoomAt(pinch.z * n.d / pinch.d, n.cx, n.cy);
+      pinch.cx = n.cx; pinch.cy = n.cy;
+    } else if (drag && e.pointerId === drag.id) {
+      if (drag.mode === "divider") moveDivider(e);
+      else { viewZoom.tx += e.clientX - drag.x; viewZoom.ty += e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY; applyViewZoom(); }
+    }
+  });
+  const end = (e) => {
+    if (ptrs.delete(e.pointerId) && ptrs.size < 2) pinch = null;
+    if (drag && e.pointerId === drag.id) { drag = null; bigArea.classList.remove("panning"); }
+  };
+  bigArea.addEventListener("pointerup", end);
+  bigArea.addEventListener("pointercancel", end);
+  bigArea.addEventListener("dragstart", (e) => e.preventDefault());
+  // wheel: ⌘ / Ctrl (and a trackpad pinch in Chrome) zoom; a mouse wheel zooms too; trackpad scrolling pans a zoomed image
+  bigArea.addEventListener("wheel", (e) => {
+    if (state.cmp.active || !zoomTarget()) return;
+    const mouse = e.deltaMode !== 0 || (e.deltaX === 0 && !!e.wheelDeltaY && e.wheelDeltaY % 120 === 0);
+    if (e.ctrlKey || e.metaKey || mouse) {
+      e.preventDefault();
+      const k = e.ctrlKey || e.metaKey ? 0.01 : e.deltaMode ? 0.05 : 0.0015;
+      viewZoomAt(viewZoom.z * Math.exp(-e.deltaY * k), e.clientX, e.clientY);
+    } else if (viewZoom.z > 1) {
+      e.preventDefault();
+      viewZoom.tx -= e.deltaX; viewZoom.ty -= e.deltaY;
+      applyViewZoom();
+    }
+  }, { passive: false });
+  // a trackpad pinch in Safari / the Mac app arrives as gesture events
+  let gz = 1;
+  bigArea.addEventListener("gesturestart", (e) => { if (state.cmp.active || !zoomTarget()) return; e.preventDefault(); gz = viewZoom.z; });
+  bigArea.addEventListener("gesturechange", (e) => { if (state.cmp.active || !zoomTarget()) return; e.preventDefault(); viewZoomAt(gz * e.scale, e.clientX, e.clientY); });
+  bigArea.addEventListener("gestureend", (e) => e.preventDefault());
+  // double-click: in on the picture, back out when zoomed (on the compare slider only back out)
+  bigArea.addEventListener("dblclick", (e) => {
+    const el = zoomTarget();
+    if (state.cmp.active || !el || e.target.closest("#viewZoomBadge")) return;
+    if (viewZoom.z > 1) { viewZoom.z = 1; applyViewZoom(); } else if (el !== cmp) viewZoomAt(2.5, e.clientX, e.clientY);
+  });
+  window.addEventListener("resize", debounce(applyViewZoom, 100));
 }
+// + / - / 0 zoom the viewer image
+document.addEventListener("keydown", (e) => {
+  if (state.view !== "runs" || appBusy() || e.metaKey || e.ctrlKey || e.altKey || state.cmp.active) return;
+  const t = document.activeElement;
+  if (/INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable) return;
+  if (e.key === "+" || e.key === "=") viewZoomCenter(1.5);
+  else if (e.key === "-") viewZoomCenter(1 / 1.5);
+  else if (e.key === "0") { viewZoom.z = 1; applyViewZoom(); }
+});
 
 // Results: finished and failed runs as tiles, filtered by task
 // a filter with no runs in it is not shown (All always is); if the shown one runs empty, back to All
@@ -2373,7 +2837,7 @@ function tileImage(run, pic) {
   if (!run.resultUrl) return null;
   const img = document.createElement("img"); img.src = thumbUrl(run.resultUrl); img.alt = ""; img.loading = "lazy"; pic.append(img);
   // hover: result on the left, original on the right (only when the original has the result's shape)
-  if (run.beforeUrl && runTask(run) !== "generate" && !run.params?.outpaint) {
+  if (run.beforeUrl && !["generate", "upscale"].includes(runTask(run)) && !run.params?.outpaint) {
     const before = document.createElement("img"); before.className = "rbefore"; before.alt = "";
     const line = document.createElement("span"); line.className = "rsplit";
     pic.append(before, line);
@@ -2407,6 +2871,13 @@ function sizeLabel(el, run) {
   el.textContent = out ? `${out[0]} × ${out[1]}` : "";
 }
 
+// tiles keep the shape of the result between 2:3 and 3:2; wider or taller ones are cut to it around the centre (the
+// image fills the tile with object-fit: cover)
+function tileAspect(out) {
+  const r = out ? out[0] / out[1] : 1;
+  return Math.min(3 / 2, Math.max(2 / 3, r));
+}
+
 // the runs the results grid shows for the current filter, in its order
 function shownRuns() {
   const f = state.resultFilter;
@@ -2436,7 +2907,7 @@ function renderHistory() {
     b.setAttribute("aria-label", `Open run: ${run.prompt || "untitled"}`);
     const pic = document.createElement("span"); pic.className = "rpic";
     const out = runOutSize(run);
-    if (out) pic.style.aspectRatio = `${out[0]} / ${out[1]}`;
+    if (out) pic.style.aspectRatio = String(tileAspect(out));
     const img = tileImage(run, pic);
     const meta = document.createElement("span"); meta.className = "rmeta";
     const model = document.createElement("span"); model.className = "rmodel"; model.textContent = runModelName(run);
@@ -2486,7 +2957,7 @@ function renderRemoved(box) {
     b.setAttribute("aria-label", `Restore the run from ${relTime(run.finished || run.created)}`);
     const pic = document.createElement("span"); pic.className = "rpic";
     const out = runOutSize(run);
-    if (out) pic.style.aspectRatio = `${out[0]} / ${out[1]}`;
+    if (out) pic.style.aspectRatio = String(tileAspect(out));
     const img = tileImage(run, pic);
     const meta = document.createElement("span"); meta.className = "rmeta";
     const l = document.createElement("span"); l.textContent = "Restore";
@@ -2652,8 +3123,14 @@ function route() {
 window.addEventListener("hashchange", route);
 const findRun = (id) => state.jobs.get(id) || state.runs.find((r) => r.serverId === id) || null;
 function selectRun(run, shift = false) {
+  // Shift+click while a run is open starts the select tool: everything from the open run to this one is picked
+  if (shift && !state.cmp.picking && !state.cmp.active && state.run && state.run !== run && cmpPickable(run)
+      && state.resultFilter !== "removed" && shownRuns().includes(state.run)) {
+    startPicking(state.run);
+  }
   if (state.cmp.picking) {   // selecting: a tile toggles; Shift+click selects everything from the last click to here
     if (!cmpPickable(run)) return;
+    state.cmp.base = null;
     const k = state.cmp.keys;
     const list = shownRuns(), from = list.indexOf(state.cmp.anchor), to = list.indexOf(run);
     if (shift && from >= 0 && to >= 0) {
@@ -2664,15 +3141,12 @@ function selectRun(run, shift = false) {
       const i = k.indexOf(run.serverId);
       if (i >= 0) k.splice(i, 1); else k.push(run.serverId);
     }
-    state.cmp.anchor = run;
+    state.cmp.anchor = state.cmp.cursor = run;
     syncCompareUi();
     renderHistory();
     return;
   }
-  if (state.cmp.active) exitCompare();
-  if (state.jobs.has(run.id)) { state.follow = true; viewJob(run); return; }
-  state.follow = false;
-  showRun(run);
+  openRun(run);
 }
 
 // ------------------------------------------------------------------ resizable columns
@@ -2819,7 +3293,11 @@ function initApp() {
   $("taskTabs").addEventListener("click", (e) => { if (e.target.dataset.task) setTask(e.target.dataset.task); });
   $("opacity").addEventListener("input", render);
   $("runEdit").onclick = () => (batchMode() ? batchSubmitAll(maskOn()) : runEdit());
-  $("runOne").onclick = () => runEdit();
+  $("runOne").onclick = async () => {   // queue the open image, then open the next one that is still open
+    const it = currentBatchItem();
+    await runEdit();
+    if (it && it.status === "queued" && state.batch[state.batchIdx] === it) openNextBatchItem({ quiet: true });
+  };
   $("maskText").addEventListener("keydown", (e) => { if (e.key === "Enter") computeMask(); });
   setMode("paint");
   renderHistory();
@@ -3372,15 +3850,51 @@ function currentBatchItem() {
   return it && it.name === state.imageName ? it : null;
 }
 
-// "+" tile at the end of the image grid: opens the file picker, the chosen images are added
+// "+" tile at the end of the image grid: the Open menu (images or a folder), the chosen images are added
 function addTile() {
-  const add = document.createElement("label");
+  const add = document.createElement("button");
   add.className = "batch-item add";
-  add.htmlFor = "fileInput";
-  add.title = "Add images";
+  add.id = "addTile";
+  add.title = "Add images or a folder";
   add.setAttribute("aria-label", "Add images");
+  add.setAttribute("aria-haspopup", "menu");
   add.textContent = "+";
+  add.onclick = (e) => { e.stopPropagation(); toggleOpenMenu(add); };
   return add;
+}
+
+// pencil shown on a tile while hovered: rotate and crop the image (web/imageedit.js)
+function editButton(onEdit) {
+  const x = document.createElement("span");
+  x.className = "edit";
+  x.setAttribute("role", "button");
+  x.title = "Rotate or crop this image";
+  x.setAttribute("aria-label", "Rotate or crop this image");
+  x.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z"/></svg>';
+  x.onclick = (e) => { e.stopPropagation(); e.preventDefault(); onEdit(); };
+  return x;
+}
+
+// the edited image replaces the input: a batch item keeps its place, its mask is gone (the picture changed)
+async function editInputImage(i) {
+  const it = i >= 0 ? state.batch[i] : null;
+  const url = it ? it.thumbUrl : state.imgEl?.src;
+  if (!url) return;
+  const label = it ? it.label : state.imageLabel || "image";
+  document.body.classList.add("dialog-open");
+  let blob = null;
+  try {
+    const { openImageEditor } = await import("/imageedit.js");
+    blob = await openImageEditor({ url, label });
+  } catch (e) { showError(`Image editor: ${e.message}`); } finally { document.body.classList.remove("dialog-open"); }
+  if (!blob) return;
+  const name = `${label.replace(/\.\w+$/, "")}.png`;
+  const file = new File([blob], name, { type: "image/png" });
+  if (!it) { await setImageFile(file); return; }
+  if (it.file) URL.revokeObjectURL(it.thumbUrl);
+  Object.assign(it, { file, label: name, thumbUrl: URL.createObjectURL(file), name: null, srcW: 0, srcH: 0, mask: null, maskMeta: null,
+    status: "open" });
+  if (i === state.batchIdx) { state.hasMask = false; state.imageName = null; await openBatchItem(i); } else renderBatch();
 }
 
 // "−" shown on a tile while hovered: removes that image
@@ -3422,6 +3936,8 @@ function renderBatch() {
   syncRunButtons();
   $("batchWrap").hidden = !state.batch.length;
   $("batchClear").hidden = !state.batch.length;
+  $("reactivateBatch").hidden = !state.batch.some((it) => ["queued", "skipped", "error"].includes(it.status));
+  $("imageTitle").textContent = state.batch.length > 1 ? "Images" : "Image";
   $("dropzone").hidden = !!(state.imgEl || state.batch.length);
   const grid = $("batchGrid");
   grid.hidden = !$("dropzone").hidden;
@@ -3432,7 +3948,7 @@ function renderBatch() {
       b.className = "batch-item active";
       b.title = $("imageInfo").textContent;
       const img = document.createElement("img"); img.src = state.imgEl.src; img.alt = "";
-      b.append(img, removeButton(clearImage));
+      b.append(img, editButton(() => editInputImage(-1)), removeButton(clearImage));
       grid.append(b, addTile());
     }
     return;
@@ -3446,7 +3962,7 @@ function renderBatch() {
     const img = document.createElement("img"); img.src = it.thumbUrl; img.alt = "";
     const tag = document.createElement("span"); tag.className = "tag";
     tag.textContent = { open: "", masked: "mask", queued: "✓", nomask: "∅", error: "!", skipped: "skip" }[it.status] || "";
-    b.append(img, tag, removeButton(() => removeBatchItem(i)));
+    b.append(img, tag, editButton(() => editInputImage(i)), removeButton(() => removeBatchItem(i)));
     b.onclick = () => openBatchItem(i);
     grid.appendChild(b);
   });
@@ -3506,13 +4022,13 @@ async function openBatchItem(i) {
   renderBatch();
 }
 
-function openNextBatchItem() {
+function openNextBatchItem({ quiet = false } = {}) {
   const n = state.batch.length;
   for (let k = 1; k <= n; k++) {
     const j = (state.batchIdx + k) % n;
     if (state.batch[j].status === "open" || state.batch[j].status === "masked") { openBatchItem(j); return; }
   }
-  showError("No open images left in the batch.");
+  if (!quiet) showError("No open images left in the batch.");
 }
 
 // size settings for one image: current form values, auto-fixed below the gray-noise limit
@@ -3726,6 +4242,11 @@ $("batchSkip").onclick = () => {
 };
 $("batchAutoAll").onclick = () => batchSubmitAll(true);
 $("batchNoMaskAll").onclick = () => batchSubmitAll(false);
+// queued, skipped and failed images become open again (their masks are kept)
+$("reactivateBatch").onclick = () => {
+  for (const it of state.batch) if (["queued", "skipped", "error"].includes(it.status)) it.status = it.mask ? "masked" : "open";
+  renderBatch();
+};
 $("batchClear").onclick = () => {
   for (const it of state.batch) if (it.file) URL.revokeObjectURL(it.thumbUrl);
   state.batch = []; state.batchIdx = -1;
@@ -3769,7 +4290,8 @@ function applyMaskTexts() {
   const up = state.task === "upscale";
   $("batchNoMaskAll").textContent = up ? "Upscale all" : MASK_TEXTS.all[i];
   $("batchNoMaskAll").title = up ? "Queue every open image for upscaling" : MASK_TEXTS.allTitle[i];
-  $("batchClear").textContent = up ? "Clear" : "Clear batch";
+  // without masks the main button already queues every image, so the second "Submit all" would only repeat it
+  $("batchNoMaskAll").hidden = !maskOn();
   setMode(state.mode);
   render();
 }

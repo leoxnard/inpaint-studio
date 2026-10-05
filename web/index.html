@@ -10,6 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700&display=swap">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/imageedit.css">
 </head>
 <body>
   <header class="topbar">
@@ -55,18 +56,25 @@
       </section>
 
       <section class="sec edit-only" id="imageSec">
-        <h2 class="h">Image</h2>
-        <label class="dropzone" id="dropzone">
-          <input type="file" id="fileInput" accept="image/*" multiple hidden>
-          <span id="dropText">Drop images here or click to choose</span>
-        </label>
+        <div class="row between imagehead">
+          <h2 class="h" id="imageTitle">Image</h2>
+          <div class="row">
+            <button id="reactivateBatch" class="small" hidden title="Make every image of the batch open again, also the ones already queued">Reactivate batch</button>
+            <button id="batchClear" class="small" hidden title="Close all open images">Clear</button>
+            <button id="openImages" class="small" aria-haspopup="menu" title="Open images or a whole folder">Open</button>
+          </div>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" multiple hidden>
+        <input type="file" id="folderInput" webkitdirectory multiple hidden>
+        <div class="dropzone" id="dropzone">
+          <span id="dropText">Drop images or a folder here</span>
+          <span class="drop-actions">
+            <button type="button" class="small" id="pickFiles">Choose images…</button>
+            <button type="button" class="small" id="pickFolder">Choose a folder…</button>
+          </span>
+        </div>
         <div class="batch-grid" id="batchGrid" hidden></div>
         <div class="hint" id="imageInfo">No image loaded.</div>
-        <div class="row wrap">
-          <label class="btn small" for="folderInput">Open folder…</label>
-          <input type="file" id="folderInput" webkitdirectory multiple hidden>
-          <button id="batchClear" class="small" hidden>Clear batch</button>
-        </div>
         <div id="batchWrap" class="stack" hidden>
           <div class="hint" id="batchInfo"></div>
           <div class="row wrap" id="batchMenu">
@@ -76,7 +84,6 @@
             <button id="batchAutoAll" class="needs-mask" title="Compute a mask with the current mask settings for every open image and queue them; images where nothing is found are skipped">Auto-mask and submit all</button>
             <button id="batchNoMaskAll" title="Queue every open image without a mask (whole image is edited)">Submit all without mask</button>
           </div>
-          <div class="hint" id="batchKeysHint">← → switch images.</div>
         </div>
       </section>
 
@@ -398,7 +405,10 @@
 
   <div class="layout runs" id="runsView" hidden>
     <aside class="sidebar col-left" aria-label="Queue">
-      <h2 class="h">Queue</h2>
+      <div class="row between">
+        <h2 class="h">Queue</h2>
+        <button id="clearQueue" class="small" hidden title="Remove every waiting run from the queue (the running one keeps going)">Clear queue</button>
+      </div>
       <div class="queue" id="queue"></div>
       <p class="hint" id="queueEmpty">Nothing running or waiting.</p>
       <p class="hint">New runs are added in <a href="#create">Create</a>. The queue keeps running when you close this page.</p>
@@ -436,6 +446,7 @@
           <span class="tag tl" id="cmpTagL">Before</span><span class="tag tr" id="cmpTagR">After</span>
         </div>
         <div class="mcmp" id="multiCmp" hidden></div>
+        <button type="button" class="zoom-badge" id="viewZoomBadge" hidden title="Reset zoom (0)">100 %</button>
       </div>
       <div class="variants" id="variantStrip" hidden></div>
       <div class="progress-wrap" id="progressWrap" hidden>
@@ -489,12 +500,13 @@
             <button data-filter="failed" aria-pressed="false" title="Runs that crashed (cancelled runs are not kept)">Failed</button>
             <button data-filter="removed" aria-pressed="false" title="Runs removed with ×; their files are kept">Removed</button>
           </div>
-          <button id="selectBtn" class="small" title="Select results to compare, post-process, reuse, download or remove">Select</button>
+          <button id="selectBtn" class="small" title="Select several results at once (the tools next to it also work on the open run)">Select</button>
           <button id="selAll" class="small" hidden title="Select every result of this filter (Shift+click selects a range)">All</button>
           <div class="sel-actions" id="selActions" role="group" aria-label="Selected results">
             <button class="icon-btn" id="selCompare" title="Compare side by side (select two or more)" aria-label="Compare" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></svg></button>
             <button class="icon-btn" id="selPost" title="Post-process: apply every fix that fits each run (and grain) and save it" aria-label="Post-process" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg></button>
             <button class="icon-btn" id="selInput" title="Use as input: open the results in Create (several become a new batch)" aria-label="Use as input" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg></button>
+            <button class="icon-btn" id="selRepeat" title="Repeat: queue the run again with the same settings" aria-label="Repeat" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
             <button class="icon-btn" id="selDownload" title="Download the results as shown (with their post-processing)" aria-label="Download" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg></button>
             <span class="sel-sep" aria-hidden="true"></span>
             <div class="sel-remove">
@@ -529,17 +541,16 @@
         </section>
         <section class="sec actions">
           <h2 class="h">Actions</h2>
-          <button class="primary" id="loadSettings" title="Switch to Create with this run's settings (the image stays)">Load settings in Create</button>
+          <button id="loadSettings" title="Switch to Create with this run's settings (the image stays)">Load settings in Create</button>
           <button id="useResult" title="Load the image shown in the viewer (raw or pasted result, or the picked step) as the new input">Use result as new input</button>
           <button id="postBtn" title="Align, fix colours, warp and edges, add grain: pick the steps, see a preview, apply. The plain result stays.">Post-processing</button>
-          <a class="btn" id="downloadBtn" download>Download</a>
+          <button id="revealBtn" title="Show the result file in the Finder">Open in Finder</button>
           <a class="btn" id="downloadUpscaled" download hidden>Download upscaled</a>
           <a class="btn" id="downloadComfy" hidden title="Saves the result with its ComfyUI workflow inside to Downloads. Drag the file onto ComfyUI to open the exact graph.">Download for ComfyUI</a>
           <button id="downloadSteps">Download shown steps</button>
           <button id="cancelRun">Cancel run</button>
           <button id="removeRun">Remove from queue</button>
           <button id="retryRun" class="primary" hidden title="Queue this run again with the same settings">Retry</button>
-          <button id="deleteRun" class="danger">Delete run</button>
           <span class="hint" id="matchInfo"></span>
         </section>
       </div>
@@ -577,6 +588,11 @@
         <button id="modalCancel">Cancel</button>
       </div>
     </div>
+  </div>
+
+  <div class="sel-menu pop-menu" id="openMenu" role="menu" hidden>
+    <button role="menuitem" id="openMenuFiles"><span><b>Images…</b><small>Pick one or several image files</small></span></button>
+    <button role="menuitem" id="openMenuFolder"><span><b>Folder…</b><small>Every image in a folder becomes a batch</small></span></button>
   </div>
 
   <div class="toast" id="toast" hidden><span id="toastText"></span><a id="toastLink" href="#runs" hidden>Open Runs</a><button id="toastClose" aria-label="Dismiss">&times;</button></div>

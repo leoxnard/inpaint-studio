@@ -77,7 +77,12 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by
   `GET /api/runs`, removed by `DELETE /api/runs/{id}`. × on a result tile or Select → remove → hide hides a run
   (`POST …/hide`, files kept); `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed).
-  Results → Select works on picked runs: compare, post-process all, use as input, download, remove.
+  Results → Select works on picked runs: compare, post-process, use as input, repeat, download, remove; the same tools act on the open run
+  when nothing is picked (`targetRuns()`). Post-process and use-as-input ask first (`askDialog`), download asks for a folder
+  (`POST /api/pick-folder` = osascript dialog, `POST /api/export` copies the files), `POST /api/reveal` = Open in Finder.
+  Runs keys: ←/→/↑/↓ move through the results, Shift extends the selection, Delete deletes, Tab switches Create/Runs.
+  The viewer keeps divider and zoom between runs (`state.divider`, `viewZoom`). `runFacts(run)` feeds the details column
+  and the compare labels (only the facts that differ). `web/imageedit.js` is the input editor (rotate / crop modal).
 - Jobs: `finish_job` runs once per job; a silent (30 s) or closed ComfyUI socket falls back to polling (`follow_job`,
   5 failed polls end the run); deleting a queued/running run is a 409; `POST /api/jobs` input is checked (`JobCheck`).
 - Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the

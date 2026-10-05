@@ -26,6 +26,8 @@ export function createMultiCompare(root, { onExit }) {
   let dragKey = null;
   let fresh = true;        // next detail layout starts with the largest part
   let bounds = [];         // split: the n+1 strip borders as fractions of the frame width (0 … 1)
+  let original = null;     // {url, label, title} of the original image the runs started from, or null (nothing to add)
+  const ORIG = "__original__";
 
   root.innerHTML = "";
   const bar = el("div", "mc-bar");
@@ -43,12 +45,26 @@ export function createMultiCompare(root, { onExit }) {
     modeBtns[m] = b;
     seg.append(b);
   }
+  // "Add original": the original image as one more tile / strip, in front
+  const origWrap = el("label", "check mc-orig");
+  const origBox = document.createElement("input");
+  origBox.type = "checkbox";
+  origWrap.append(origBox, " Add original");
+  origWrap.title = "Show the original image next to the results";
+  origWrap.hidden = true;
+  origBox.onchange = async () => {
+    items = items.filter((it) => it.key !== ORIG);
+    if (origBox.checked && original) items.unshift({ ...original, key: ORIG });
+    bounds = [];
+    await loadSizes();
+    render();
+  };
   const hint = el("span", "hint mc-hint");
   const spacer = el("span", "spacer");
   const exit = el("button", null, "Exit compare");
   exit.type = "button";
   exit.onclick = () => onExit();
-  bar.append(title, seg, hint, spacer, exit);
+  bar.append(title, seg, origWrap, hint, spacer, exit);
   const stage = el("div", "mc-stage");
   root.append(bar, stage);
   new ResizeObserver(() => { if (items.length) layout(); }).observe(stage);
@@ -273,16 +289,20 @@ export function createMultiCompare(root, { onExit }) {
 
   function render() {
     for (const [m, b] of Object.entries(modeBtns)) b.setAttribute("aria-pressed", String(m === mode));
-    title.textContent = `Comparing ${items.length} runs`;
+    const runs = items.filter((it) => it.key !== ORIG).length;
+    title.textContent = `Comparing ${runs} run${runs === 1 ? "" : "s"}`;
     hint.textContent = [note, mode === "detail" ? "Scroll or pinch to zoom, drag to pan" : "", mode === "split" ? "drag a border to move it" : "", "drag a label to reorder"]
       .filter(Boolean).join(" · ");
     layout();
   }
 
   return {
-    async show(list, { note: n = "" } = {}) {
+    async show(list, { note: n = "", original: orig = null } = {}) {
       items = list.slice();
       note = n;
+      original = orig;
+      origWrap.hidden = !orig;
+      origBox.checked = false;
       view.cx = 0.5; view.cy = 0.5; view.w = 1;
       bounds = [];
       fresh = true;

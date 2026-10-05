@@ -38,7 +38,8 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   (fixes + grain, `POST /api/runs/{id}/post`, `server.post_process`); the Create options run automatically after
   the job (`post_*` params). Every save writes the corrected images over the output files (`save_post_files`): `<run>.png` (result_url) and, for a paste,
   `<run>_raw.png` = the corrected whole image (`whole_url`, `align.compose(whole=True)`). The untouched image moves into the run
-  dir once (paste: `raw_url` → `raw.png`, else `source_url` → `source.png`) and is the input of every later save (`untouched_url`).
+  dir once (paste: `raw_url` → `raw.png`, else `source_url` → `source.png`) and is the input of every later save (`untouched_url`);
+  a save with nothing on writes the untouched images back and drops that copy (the output folder = what Runs shows).
   Older runs may still have `fixed_url` / `grain_url` (`<run>_fixed.png`); the next save migrates them.
 - `imports.py` – own files from the Download Center (Your files): a model, LoRA, upscaler or other model file on the
   Mac is symlinked into `models/<folder>` and registered as preset / component (`imports.apply`, `imports.json` in

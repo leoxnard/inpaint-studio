@@ -1072,7 +1072,7 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
     if req.save:
         run["grain"], run["grain_strength"] = req.grain, req.grain_strength
         if not internal:
-            await save_post_files(run, kind, untouched, img, whole, stamp)
+            await save_post_files(run, kind, untouched, img, whole, stamp, changed=fixes or req.grain)
         save_run(run)
         result["url"] = run["result_url"]
     else:
@@ -1088,20 +1088,15 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
 
 
 async def save_post_files(run: dict, kind: str | None, untouched: Image.Image, img: Image.Image,
-                          whole: Image.Image | None, stamp: int) -> None:
-    """Writes a saved post-processing: the untouched image into the run dir (first save only), the corrected
-    images over the output files, and removes the files older versions used (<run>_fixed.png, <run>_grain.png,
-    aligned.png)."""
+                          whole: Image.Image | None, stamp: int, changed: bool = True) -> None:
+    """Writes a saved post-processing so the output folder holds exactly what Runs shows. changed: the corrected
+    images go over the output files and the untouched image is kept in the run dir (first save only; the Raw / Clean
+    view and the input of later saves). Nothing on: the output files are the untouched images again and the run dir
+    copy goes. Either way the files older versions used (<run>_fixed.png, <run>_grain.png, aligned.png) are removed."""
     run_id, d, out = run["id"], RUNS / run["id"], _output_dir()
-    if kind == "paste":
-        if not run["raw_url"].startswith("/data/runs/"):
-            await asyncio.to_thread(untouched.save, d / "raw.png")
-            run["raw_url"] = f"/data/runs/{run_id}/raw.png"
-    elif not run.get("source_url"):
-        await asyncio.to_thread(untouched.save, d / "source.png")
-        run["source_url"] = f"/data/runs/{run_id}/source.png"
-        if kind == "upscale":   # the clean upscale is source.png now
-            run["raw_url"] = None
+    name = run.get("filename") or f"{run_id}.png"
+    whole_name = f"{Path(name).stem}_raw.png"
+    out_url = lambda n: view_url({"filename": n, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
     for key in ("fixed_url", "grain_url"):
         if url := run.pop(key, None):
             try:
@@ -1111,13 +1106,33 @@ async def save_post_files(run: dict, kind: str | None, untouched: Image.Image, i
     (d / "aligned.png").unlink(missing_ok=True)
     if run.get("aligned"):
         run["aligned"].pop("url", None)
-    name = run.get("filename") or f"{run_id}.png"
+    if not changed:
+        if kind == "paste":   # the pasted result again (img) and the raw image back next to it
+            await asyncio.to_thread(untouched.save, out / whole_name)
+            run["raw_url"] = out_url(whole_name)
+            run.pop("whole_url", None)
+            (d / "raw.png").unlink(missing_ok=True)
+        else:
+            img = untouched
+            run.pop("source_url", None)
+            (d / "source.png").unlink(missing_ok=True)
+        await asyncio.to_thread(img.save, out / name)
+        run["result_url"] = out_url(name)
+        return
+    if kind == "paste":
+        if not run["raw_url"].startswith("/data/runs/"):
+            await asyncio.to_thread(untouched.save, d / "raw.png")
+            run["raw_url"] = f"/data/runs/{run_id}/raw.png"
+    elif not run.get("source_url"):
+        await asyncio.to_thread(untouched.save, d / "source.png")
+        run["source_url"] = f"/data/runs/{run_id}/source.png"
+        if kind == "upscale":   # the clean upscale is source.png now
+            run["raw_url"] = None
     await asyncio.to_thread(img.save, out / name)
-    run["result_url"] = view_url({"filename": name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
+    run["result_url"] = out_url(name)
     if whole is not None:
-        whole_name = f"{Path(name).stem}_raw.png"
         await asyncio.to_thread(whole.save, out / whole_name)
-        run["whole_url"] = view_url({"filename": whole_name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
+        run["whole_url"] = out_url(whole_name)
 
 
 @app.post("/api/runs/{run_id}/post")

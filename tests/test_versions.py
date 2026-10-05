@@ -91,3 +91,21 @@ def test_save_post_files_keeps_two_output_files(env):
     # a later save keeps the untouched raw image where it is
     asyncio.run(server.save_post_files(run, "paste", img(9), img(4), img(5), 8))
     assert Image.open(d / "raw.png").getpixel((0, 0)) == (1, 1, 1) and Image.open(out / "r.png").getpixel((0, 0)) == (4, 4, 4)
+
+
+def test_save_with_nothing_on_restores_the_originals(env):
+    import asyncio
+    from PIL import Image
+    _, out, d, _ = env
+    img = lambda v: Image.new("RGB", (4, 4), (v, v, v))
+    run = {"id": "r", "filename": "r.png", "result_url": view("r.png"), "raw_url": view("r_raw.png")}
+    asyncio.run(server.save_post_files(run, "paste", img(1), img(2), img(3), 7))
+    asyncio.run(server.save_post_files(run, "paste", img(1), img(6), None, 8, changed=False))
+    assert run["raw_url"] == view("r_raw.png") + "&t=8" and "whole_url" not in run and not (d / "raw.png").exists()
+    assert Image.open(out / "r_raw.png").getpixel((0, 0)) == (1, 1, 1) and Image.open(out / "r.png").getpixel((0, 0)) == (6, 6, 6)
+    # other modes: the untouched result goes back into <run>.png, source.png is removed
+    up = {"id": "r", "filename": "r.png", "result_url": view("r.png"), "params": {"task": "upscale"}}
+    asyncio.run(server.save_post_files(up, "upscale", img(1), img(2), None, 9))
+    assert up["source_url"] == "/data/runs/r/source.png" and Image.open(out / "r.png").getpixel((0, 0)) == (2, 2, 2)
+    asyncio.run(server.save_post_files(up, "upscale", img(1), img(1), None, 10, changed=False))
+    assert "source_url" not in up and not (d / "source.png").exists() and Image.open(out / "r.png").getpixel((0, 0)) == (1, 1, 1)

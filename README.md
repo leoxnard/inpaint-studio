@@ -198,7 +198,8 @@ The same options are in Create and run automatically when the job is done.
 - Everything that is on is written into the output files themselves, on every Apply. For free edit + paste
   there are two: the corrected pasted result (`<run>.png`) and the corrected whole generated image
   (`<run>_raw.png`). The untouched image is kept in the run's App Support folder: Runs shows it as **Raw**
-  (upscales: **Clean**), and every later Apply starts from it again.
+  (upscales: **Clean**), and every later Apply starts from it again. Apply with everything off puts the
+  original files back, so the output folder always holds exactly what you set.
 - The switch above the viewer shows every image a run has: **Pasted**, **Whole image** (corrected) and **Raw**
   for free edit + paste; **Post-processed** and **Raw** / **Clean** for the other modes.
 - With a mask, grain is only added inside it.

@@ -278,13 +278,14 @@ def unchanged(o: np.ndarray, m: np.ndarray) -> np.ndarray:
 def compose(original: Image.Image, raw: Image.Image, mask: Image.Image | None,
             dx: float, dy: float, scale: float,
             colors: bool = False, warp: bool = False, poisson: bool = False,
-            color_gain: bool = False) -> tuple[Image.Image, dict]:
+            color_gain: bool = False, whole: bool = False) -> tuple[Image.Image, dict]:
     """Paste the masked area of the transformed (and optionally fixed) raw image into the original.
     mask None (whole-image edit): the whole transformed image is used, the fixes are measured on the pixels the
-    edit did not change (`unchanged`), and only edges the shift uncovers keep the original."""
+    edit did not change (`unchanged`), and only edges the shift uncovers keep the original.
+    whole: stats["whole"] is also the corrected raw image itself (not pasted; uncovered edges from the original)."""
     original = original.convert("RGB")
     raw = raw.convert("RGB").resize(original.size, Image.BICUBIC)
-    whole = mask is None
+    want_whole, whole = whole, mask is None
     mask_l = Image.new("L", original.size, 255) if whole else mask.convert("L").resize(original.size, Image.BILINEAR)
     moved = transform(raw, dx, dy, scale)
     valid = transform(Image.new("L", original.size, 255), dx, dy, scale)
@@ -302,7 +303,11 @@ def compose(original: Image.Image, raw: Image.Image, mask: Image.Image | None,
     weight = weight * (np.asarray(valid, dtype=np.float64) / 255.0)
     out = o * (1 - weight[..., None]) + m * weight[..., None]
     diff = float(np.abs(o - m).mean(axis=-1)[keep].mean()) if keep.any() else 0.0
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), {"outside_diff": round(diff, 2)}
+    stats: dict = {"outside_diff": round(diff, 2)}
+    if want_whole:
+        v = np.asarray(valid, dtype=np.float64)[..., None] / 255.0
+        stats["whole"] = Image.fromarray(np.clip(o * (1 - v) + m * v, 0, 255).astype(np.uint8))
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), stats
 
 
 def _seam_weight(o: np.ndarray, m: np.ndarray, hard: np.ndarray) -> np.ndarray:

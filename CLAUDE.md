@@ -36,7 +36,10 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   seamless edges (graph-cut seam in a band around the mask edge, paste only), measured outside the mask
   (whole image: on the pixels the edit did not change, `align.unchanged`; upscales: colours only, `align.match_colors_scaled`). Runs → Post-processing picks the steps
   (fixes + grain, `POST /api/runs/{id}/post`, `server.post_process`); the Create options run automatically after
-  the job (`post_*` params). Everything that is on goes into one `<run>_fixed.png` (`run.fixed_url`), overwritten on every Apply and removed when all is off; `aligned.png` in the run dir holds the fixes alone.
+  the job (`post_*` params). Every save writes the corrected images over the output files (`save_post_files`): `<run>.png` (result_url) and, for a paste,
+  `<run>_raw.png` = the corrected whole image (`whole_url`, `align.compose(whole=True)`). The untouched image moves into the run
+  dir once (paste: `raw_url` → `raw.png`, else `source_url` → `source.png`) and is the input of every later save (`untouched_url`).
+  Older runs may still have `fixed_url` / `grain_url` (`<run>_fixed.png`); the next save migrates them.
 - `imports.py` – own files from the Download Center (Your files): a model, LoRA, upscaler or other model file on the
   Mac is symlinked into `models/<folder>` and registered as preset / component (`imports.apply`, `imports.json` in
   App Support); Remove deletes only the link. `POST /api/imports/pick` opens the macOS file dialog via osascript.
@@ -44,8 +47,9 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   SAM3, upscalers, Viggle node, LoRAs with their `families`, grouped by `LORA_GROUPS`) and the RAM-fit estimate. `installer.py` – setup and the download queue (more items can be queued while one runs) and
   the headless ComfyUI process.
 - `web/` – vanilla HTML/JS/CSS, no build step. Two views in one page: Create (`#createView`) and Runs
-  (`#runsView`), switched by a hash router (`#create`, `#runs/<id>`). Hidden `#mode`, `#aspect`, `#viewRaw`
-  stay the source of truth; the Area cards, aspect tiles and Pasted/Raw switch only write into them.
+  (`#runsView`), switched by a hash router (`#create`, `#runs/<id>`). Hidden `#mode`, `#aspect`
+  stay the source of truth; the Area cards and aspect tiles only write into them. The view switch above the viewer is built from
+  `runViews(run)` (pasted / result, whole image, raw / clean; `state.viewKey`), `#viewRaw` = any view but the result.
   Design tokens (Ollama style) are CSS variables at the top of `styles.css`. `guide.html` (+ `guide.css`, `guide.js`) is the
   standalone beginner guide ("How it works" in the top bar; `/#downloads` opens the Download Center). On a fresh install
   (no config, no runs at server start) `/` serves it once until `POST /api/guide/seen` writes `guide_seen` in App Support.
@@ -71,11 +75,11 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
 - Encoder resolution is matched to the working size by default (`graphs.matching_resolution`):
   a different reference size shifts/scales the free edit.
 - Uploads go to ComfyUI `input/inpaint-studio/`. Results: `output/InpaintStudio/<run>.png`,
-  `<run>_raw.png`, `<run>_x2.png`, `<run>_full.png` (crop & stitch), `<run>_fixed.png` holds all post-processing (fixes and grain; older runs may still have `<run>_grain.png`); `<run>/before.png` and
+  `<run>_raw.png`, `<run>_x2.png`, `<run>_full.png` (crop & stitch), post-processing is written into `<run>.png` / `<run>_raw.png` (older runs: `<run>_fixed.png`, `<run>_grain.png`); `<run>/before.png` and
   `<run>/step_NN_TOTAL.png` (+ `raw_step_…`), `<run>/config.json` (all params, encoder prompt, graph). The server strips ComfyUI's `_00001_` counter.
 - Run history: `~/Library/Application Support/Inpaint Studio/runs/<id>/run.json` + live preview
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by
-  `GET /api/runs`, removed by `DELETE /api/runs/{id}`; `POST …/delete-version {kind}` deletes one image (post / result / raw,
+  `GET /api/runs`, removed by `DELETE /api/runs/{id}`; `POST …/delete-version {kind}` deletes one image (result / whole / raw,
   `run_versions`) and keeps the rest (the last one goes only with the run). × on a result tile or Select → remove → hide hides a run
   (`POST …/hide`, files kept); `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed).
   Results → Select works on picked runs: compare, post-process, use as input, repeat, download, remove; the same tools act on the open run

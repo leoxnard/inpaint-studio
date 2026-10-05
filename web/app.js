@@ -1839,17 +1839,46 @@ function visibleFrames(run) {
 
 // the result as shown and downloaded: <run>_fixed.png (all post-processing), else older runs' grain / fixed files, else the plain result
 const shownResult = (run) => run.fixedUrl || run.grainUrl || run.aligned?.url || run.resultUrl;
-// what the viewer shows right now: a picked step, else the raw image ("Raw" on) or the (pasted) result
+// The images of a finished run, in the order of the switch above the viewer (server.run_versions): the (pasted)
+// result, a paste's corrected whole image (whole_url) and the untouched image (raw_url of a paste, else source_url:
+// the result before post-processing, kept in the run dir)
+function runViews(run) {
+  const up = runTask(run) === "upscale", shown = shownResult(run);
+  const raw = run.rawUrl || run.sourceUrl;
+  const corrected = !!(run.wholeUrl || run.sourceUrl || shown !== run.resultUrl || run.rawUrl?.startsWith("/data/runs/"));
+  const paste = !!(run.maskUrl && run.rawUrl) || !!run.wholeUrl;
+  const out = [{ key: "result", url: shown, suffix: "",
+    label: paste ? "Pasted" : up ? (corrected ? "Post-processed" : "Upscale") : corrected ? "Post-processed" : "Result",
+    title: paste ? `The original with the masked area replaced${corrected ? ", corrected" : ""}` : corrected ? "With the post-processing" : "The result" }];
+  if (run.wholeUrl) out.push({ key: "whole", url: run.wholeUrl, suffix: "_whole", label: "Whole image",
+    title: "The model's whole generated image with the corrections" });
+  if (raw && raw !== shown) out.push({ key: "raw", url: raw, suffix: "_raw", label: up ? "Clean" : "Raw",
+    title: up ? "The upscaler's output as it came out" : "The model's image exactly as it came out, nothing corrected" });
+  return out;
+}
+// what the switch offers: a running job only "pasted / raw" (its raw step frames), a finished run runViews
+function viewChoices(run) {
+  if (!run) return [];
+  if (run.done) return runViews(run);
+  return run.rawUrl || run.frames.some((f) => f.variant === "raw")
+    ? [{ key: "result", url: run.resultUrl, suffix: "", label: "Pasted result", title: "The original with only the masked area replaced" },
+       { key: "raw", url: run.rawUrl, suffix: "_raw", label: "Raw (full generated image)", title: "The model's full generated image" }]
+    : [];
+}
+// the picked view (state.viewKey) or the closest one this run has: whole falls back to raw, anything else to the result
+state.viewKey = "result";
+function currentView(run) {
+  const views = viewChoices(run), find = (k) => views.find((v) => v.key === k);
+  return find(state.viewKey) || (state.viewKey === "whole" && find("raw")) || views[0] || null;
+}
+// what the viewer shows right now: a picked step, else the picked view of the result
 function viewedImage(run) {
   const f = run.shown != null ? visibleFrames(run)[run.shown] : null;
   if (f) return { url: f.url, suffix: `_step${f.step}${f.variant === "raw" ? "_raw" : ""}` };
-  if ($("viewRaw").checked && hasRaw(run) && run.rawUrl) return { url: run.rawUrl, suffix: "_raw" };
-  return { url: shownResult(run), suffix: "" };
+  const v = currentView(run);
+  return v?.url ? { url: v.url, suffix: v.suffix } : { url: shownResult(run), suffix: "" };
 }
-// a finished run has a raw view only while its raw file exists and differs from the shown result
-// (an upscale's clean file is its result: without post-processing there is nothing to switch)
-const hasRaw = (run) => !!run && (run.done ? !!run.rawUrl && run.rawUrl !== shownResult(run)
-  : !!(run.rawUrl || run.frames.some((f) => f.variant === "raw")));
+const hasRaw = (run) => viewChoices(run).some((v) => v.key !== "result");
 
 // one step frame in the viewer
 function showFrame(i) {
@@ -1913,14 +1942,28 @@ $("viewRaw").addEventListener("change", () => {
   syncRawSeg();
   if (run.resultUrl) showFinal(); else showFollowFrame(run);
 });
-// "Pasted result / Raw" is a view of the hidden #viewRaw checkbox
+// the switch above the viewer: one button per view (viewChoices); the hidden #viewRaw is on for every view
+// but the result (the steps strip then shows the raw step frames)
+function renderViewSeg(run) {
+  const views = viewChoices(run), seg = $("rawSeg");
+  seg.hidden = views.length < 2;
+  seg.replaceChildren(...views.map((v) => {
+    const b = document.createElement("button");
+    b.dataset.view = v.key; b.textContent = v.label; b.title = v.title || "";
+    return b;
+  }));
+  syncRawSeg();
+}
 function syncRawSeg() {
-  for (const b of $("rawSeg").children) b.setAttribute("aria-pressed", String((b.dataset.raw === "1") === $("viewRaw").checked));
+  const key = currentView(state.run)?.key || "result";
+  $("viewRaw").checked = key !== "result";
+  for (const b of $("rawSeg").children) b.setAttribute("aria-pressed", String(b.dataset.view === key));
 }
 $("rawSeg").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-raw]");
-  if (!b || (b.dataset.raw === "1") === $("viewRaw").checked) return;
-  $("viewRaw").checked = b.dataset.raw === "1";
+  const b = e.target.closest("[data-view]");
+  if (!b || b.dataset.view === currentView(state.run)?.key) return;
+  state.viewKey = b.dataset.view;
+  $("viewRaw").checked = b.dataset.view !== "result";
   $("viewRaw").dispatchEvent(new Event("change"));
 });
 $("compareToggle").addEventListener("change", () => { if (state.run?.done) showFinal(); });
@@ -1965,14 +2008,7 @@ function renderViewer() {
   $("bigArea").classList.toggle("cancelling", cancelling);
   $("runFile").textContent = run?.filename || "";
   // toolbar above the image
-  $("rawSeg").hidden = !(run && hasRaw(run));
-  const [pasted, raw] = $("rawSeg").children;   // an upscale's "raw" is the clean upscale, before post-processing
-  const up = run && runTask(run) === "upscale";
-  pasted.textContent = up ? "Post-processed" : "Pasted result";
-  raw.textContent = up ? "Clean" : "Raw (full generated image)";
-  pasted.title = up ? "The upscale with its post-processing (grain, colours)" : "The original with only the masked area replaced";
-  raw.title = up ? "The upscaler's output as it came out" : "The model's full generated image, before the masked area was pasted in";
-  syncRawSeg();
+  renderViewSeg(run);
   $("compareRow").hidden = !(done && run.beforeUrl);
   $("viewerTools").hidden = $("rawSeg").hidden && $("compareRow").hidden;
   // image area by status
@@ -2287,8 +2323,7 @@ $("selPost").onclick = async () => {
       colors: !!fix && !!pick.colors, auto: geo && !!pick.align, warp: geo && !!pick.warp, poisson: fix === "paste" && !!pick.poisson };
     try {
       const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, body);
-      run.aligned = res.aligned || null; run.fixedUrl = res.fixed_url || null; run.grainUrl = null; run.grain = !!res.grain;
-      run.grainStrength = res.grain_strength ?? run.grainStrength;
+      if (res.run) refreshRunFiles(run, res.run);
     } catch (e) { failed++; showError(`${run.prompt || run.serverId}: ${e.message}`); }
   }
   showToast(failed ? `Post-processed ${runs.length - failed} of ${runs.length}.` : `Post-processed ${runs.length} result${runs.length > 1 ? "s" : ""}.`);
@@ -2297,31 +2332,26 @@ $("selPost").onclick = async () => {
   if (state.run && runs.includes(state.run)) renderViewer();
 };
 
-// ---- Use as input: every version a run has (post-processed, pasted result / result, raw / clean)
+// ---- Use as input: every image a run has (runViews: pasted / result, whole image, raw / clean)
 function inputVersions(run) {
-  const shown = shownResult(run), fixed = shown !== run.resultUrl;
-  const out = [];
-  if (fixed) out.push({ kind: "post", url: shown, suffix: "_fixed" });
-  out.push({ kind: "result", url: run.resultUrl, suffix: "" });
-  if (run.rawUrl && run.rawUrl !== run.resultUrl) out.push({ kind: "raw", url: run.rawUrl, suffix: "_raw" });
-  return out;
+  return runViews(run).map((v) => ({ kind: v.key, url: v.url, suffix: v.suffix, label: v.label }));
 }
 async function chooseInputVersions(runs) {
   const versions = runs.map(inputVersions);
   if (versions.every((v) => v.length < 2)) return runs.map((run, i) => ({ run, ver: versions[i][0] }));
   const ups = runs.map((r) => runTask(r) === "upscale");
+  const resultNames = new Set(versions.map((vs) => vs[0].label));
   const names = {
-    post: "Post-processed",
-    result: runs.some((r) => r.rawUrl && runTask(r) !== "upscale") ? "Pasted result"
-      : ups.every(Boolean) && runs.some((r) => shownResult(r) !== r.resultUrl) ? "Clean upscale" : "Result",
-    raw: ups.every(Boolean) ? "Clean upscale" : ups.some(Boolean) ? "Raw / clean upscale" : "Raw (full generated image)",
+    result: resultNames.size === 1 ? [...resultNames][0] : "Result",
+    whole: "Whole image",
+    raw: ups.every(Boolean) ? "Clean upscale" : ups.some(Boolean) ? "Raw / clean upscale" : "Raw",
   };
   const hints = {
-    post: "With the fixes and grain you applied",
-    result: runs.some((r) => shownResult(r) !== r.resultUrl) ? "The result before any post-processing" : "The finished result",
-    raw: "What the model made, before it was pasted into the original",
+    result: "The result as shown, with its corrections",
+    whole: "The model's whole generated image, corrected",
+    raw: "Exactly as the model or upscaler made it, nothing corrected",
   };
-  const kinds = ["post", "result", "raw"].filter((k) => versions.some((vs) => vs.some((v) => v.kind === k)));
+  const kinds = ["result", "whole", "raw"].filter((k) => versions.some((vs) => vs.some((v) => v.kind === k)));
   const firstKinds = new Set(versions.map((vs) => vs[0].kind));   // what the viewer shows by default
   const boxes = {};
   const pick = await askDialog({
@@ -2439,18 +2469,13 @@ async function removeSelected(deleteFiles) {
     if (next) showRun(next); else showLatest();
   }
 }
-// ---- Delete one version: a run with several results (post-processed, pasted result, raw / clean) can lose one of them
-function versionName(run, kind) {
-  const up = runTask(run) === "upscale";
-  if (kind === "post") return "Post-processed";
-  if (kind === "raw") return up ? "Clean upscale" : "Raw (full generated image)";
-  return up ? "Clean upscale" : run.rawUrl && run.rawUrl !== run.resultUrl ? "Pasted result" : "Result";
-}
+// ---- Delete one image: a run with several (pasted / result, whole image, raw / clean) can lose one of them
+const versionName = (run, kind) => runViews(run).find((v) => v.key === kind)?.label || kind;
 function renderVersionItems() {
   const box = $("selVersions");
   box.innerHTML = "";
   const runs = targetRuns();
-  const vs = runs.length === 1 && runStatus(runs[0]) === "done" ? inputVersions(runs[0]) : [];
+  const vs = runs.length === 1 && runStatus(runs[0]) === "done" ? runViews(runs[0]) : [];
   box.hidden = vs.length < 2;
   if (box.hidden) return;
   const head = document.createElement("small");
@@ -2461,8 +2486,8 @@ function renderVersionItems() {
     const b = document.createElement("button");
     b.setAttribute("role", "menuitem");
     b.className = "danger";
-    b.textContent = versionName(runs[0], v.kind);
-    b.onclick = () => deleteVersion(runs[0], v.kind);
+    b.textContent = v.label;
+    b.onclick = () => deleteVersion(runs[0], v.key);
     box.appendChild(b);
   }
 }
@@ -2472,10 +2497,7 @@ async function deleteVersion(run, kind) {
   if (!confirm(`Delete the ${name.toLowerCase()} image of this run? This cannot be undone.`)) return;
   try {
     const stored = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/delete-version`, { kind });
-    const fresh = runFromStored(stored);
-    Object.assign(run, { resultUrl: fresh.resultUrl, rawUrl: fresh.rawUrl, aligned: fresh.aligned, fixedUrl: fresh.fixedUrl,
-      grainUrl: fresh.grainUrl, grain: fresh.grain, filename: fresh.filename, match: null });
-    if (!hasRaw(run)) $("viewRaw").checked = false;
+    refreshRunFiles(run, stored);
     showToast(`Deleted the ${name.toLowerCase()} image.`);
     syncCompareUi();
     renderHistory();
@@ -2689,11 +2711,18 @@ $("retryRun").onclick = async () => {
 $("loadSettings").onclick = () => { if (state.run?.params) loadRunSettings(state.run); };
 
 // ------------------------------------------------------------------ persisted run history
+// a run's files after the server changed them (post-processing saved, one image deleted)
+function refreshRunFiles(run, stored) {
+  const f = runFromStored(stored);
+  for (const k of ["resultUrl", "rawUrl", "wholeUrl", "sourceUrl", "aligned", "fixedUrl", "grainUrl", "grain", "grainStrength", "filename"]) run[k] = f[k];
+  run.match = null;
+}
 function runFromStored(r) {
   return {
     id: r.id, serverId: r.id, prompt: r.params?.prompt || "", seed: r.params?.seed, steps: r.params?.steps,
     frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
+    wholeUrl: r.whole_url || null, sourceUrl: r.source_url || null,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
     aligned: r.aligned || null, fixedUrl: r.fixed_url || null, grainUrl: r.grain_url || null,
     grain: r.grain ?? (!!r.grain_url || (r.params?.task === "upscale" && !!r.params?.grain)), grainStrength: r.grain_strength ?? r.params?.grain_strength ?? GRAIN_STRENGTH, task: r.params?.task || "edit", preset: r.params?.preset || null,
@@ -3815,11 +3844,7 @@ async function postRequest(body) {
     // only the shift Auto-align found: everything else stays as the user set it (the response carries the run's saved values)
     if (res.dx != null) setPostValues({ dx: res.dx, dy: res.dy, scale: res.scale });
     if (res.saved) {
-      run.aligned = res.aligned || null;
-      run.fixedUrl = res.fixed_url || null;
-      run.grainUrl = null;   // older runs: the grain had its own file, now it is part of <run>_fixed.png
-      run.grain = !!res.grain;
-      run.grainStrength = res.grain_strength ?? run.grainStrength;
+      if (res.run) refreshRunFiles(run, res.run);
       $("postPanel").hidden = true;
       showToast("Post-processing applied.");
       renderViewer();

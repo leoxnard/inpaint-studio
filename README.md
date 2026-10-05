@@ -177,8 +177,8 @@ The **Upscale** task upscales images on their own (one image or a whole folder).
   memory than the Mac has and shows the largest factor that fits.
 
 **Grain:** upscalers come out clean and lose the camera's grain. **Keep the original's grain** (on by
-default) adds it back. The clean upscale stays as the result (`<run>.png`, "Clean" in Runs), the
-grained one is saved as `<run>_fixed.png`.
+default) adds it back. The grained upscale is the result (`<run>.png`), the clean one stays in the
+run's App Support folder ("Clean" in Runs).
 
 Edits can also upscale their own result (choose an upscaler in the run settings), saved as `<run>_x2.png` / `_x4.png`.
 
@@ -195,8 +195,12 @@ The same options are in Create and run automatically when the job is done.
 | Clean edges at the mask | ✓ | | | |
 | Film grain (with strength 0–200 %) | ✓ | ✓ | ✓ | ✓ |
 
-- Everything that is on goes into one `<run>_fixed.png`, which is overwritten on every Apply.
-  The plain result always stays.
+- Everything that is on is written into the output files themselves, on every Apply. For free edit + paste
+  there are two: the corrected pasted result (`<run>.png`) and the corrected whole generated image
+  (`<run>_raw.png`). The untouched image is kept in the run's App Support folder: Runs shows it as **Raw**
+  (upscales: **Clean**), and every later Apply starts from it again.
+- The switch above the viewer shows every image a run has: **Pasted**, **Whole image** (corrected) and **Raw**
+  for free edit + paste; **Post-processed** and **Raw** / **Clean** for the other modes.
 - With a mask, grain is only added inside it.
 
 <details>
@@ -242,7 +246,7 @@ its own seed (random, or seed, seed + 1, …). They show as a strip under the im
 - repeat: queues the run again with the same settings
 - download: asks for a folder and saves the results there
 - remove: hide from the results (files kept, see filter **Removed**) or delete the files; a single run with several images
-  (post-processed, pasted result, raw / clean upscale) can also delete just one of them, the viewer then shows only what is left
+  (pasted, whole image, raw / clean) can also delete just one of them, the viewer then shows only what is left
 
 **Viewer:** the divider between original and result keeps its place when another run opens. Zoom with the mouse wheel,
 ⌘ + wheel or a trackpad pinch (double-click zooms in and out), move a zoomed image by dragging or two-finger scrolling.
@@ -293,11 +297,10 @@ saved with the run.
 
 | File | What |
 |---|---|
-| `<run>.png` | The result (for crop & stitch: the crop) |
-| `<run>_raw.png` | Raw edit before pasting (masked runs) |
+| `<run>.png` | The result with its post-processing (for crop & stitch: the crop) |
+| `<run>_raw.png` | Free edit + paste: the whole generated image (corrected when post-processing ran) |
 | `<run>_full.png` | Crop & stitch: the crop pasted into the full original |
 | `<run>_x2.png` / `_x4.png` | Upscaled result |
-| `<run>_fixed.png` | Result with all post-processing |
 | `<run>/before.png` | The input |
 | `<run>/step_17_20.png`, `raw_step_…` | Saved steps (every N steps and/or the last N) |
 | `<run>/config.json` | All settings, the exact text the encoder got and the ComfyUI graph |

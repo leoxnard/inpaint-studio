@@ -422,10 +422,7 @@
         <span class="hint" id="runFile"></span>
       </div>
       <div class="row wrap viewer-tools" id="viewerTools">
-        <div class="seg" id="rawSeg" role="group" aria-label="Which image">
-          <button data-raw="0" title="The original with only the masked area replaced">Pasted result</button>
-          <button data-raw="1" title="The model's full generated image, before the masked area was pasted in">Raw (full generated image)</button>
-        </div>
+        <div class="seg" id="rawSeg" role="group" aria-label="Which image"></div>
         <input type="checkbox" id="viewRaw" hidden>
         <label class="check" id="compareRow"><input type="checkbox" id="compareToggle" checked> Compare with original</label>
       </div>
@@ -514,8 +511,8 @@
               <div class="sel-menu" id="selRemoveMenu" role="menu" hidden>
                 <button role="menuitem" id="selHide"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg><span><b>Hide from results</b><small>Files are kept, Removed brings them back</small></span></button>
                 <button role="menuitem" id="selDelete" class="danger"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg><span><b>Delete files…</b><small>Removes the runs and their images for good</small></span></button>
-              </div>
                 <div class="sel-versions" id="selVersions" hidden></div>
+              </div>
             </div>
           </div>
           <span class="spacer"></span>

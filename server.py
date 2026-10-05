@@ -749,27 +749,34 @@ async def hide_run(run_id: str):
     return {"hidden": run_id}
 
 
-@app.post("/api/runs/{run_id}/retry")
-async def retry_run(run_id: str):
 class VersionReq(BaseModel):
-    kind: str   # "post" (fixes + grain), "result" (pasted result / result) or "raw" (raw / clean upscale)
+    kind: str   # "result" (corrected (pasted) result), "whole" (corrected whole image of a paste), "raw" (untouched)
+
+
+def shown_url(run: dict) -> str | None:
+    """The result as Runs shows it (older runs kept post-processing in <run>_fixed.png / _grain.png / aligned.png)."""
+    return run.get("fixed_url") or run.get("grain_url") or (run.get("aligned") or {}).get("url") or run.get("result_url")
+
+
+def raw_view_url(run: dict) -> str | None:
+    """The untouched image Runs shows as Raw / Clean: the raw image of a paste or the result before post-processing."""
+    url = run.get("raw_url") or run.get("source_url")
+    return url if url and url != shown_url(run) else None
 
 
 def run_versions(run: dict) -> list[str]:
-    """The result files a run offers, as in the viewer: post-processed, result, raw (only when it is its own file)."""
-    out = []
-    if run.get("fixed_url") or run.get("grain_url") or (run.get("aligned") or {}).get("url"):
-        out.append("post")
-    if run.get("result_url"):
-        out.append("result")
-    if run.get("raw_url") and run.get("raw_url") != run.get("result_url"):
+    """The images a run offers, in the order of the viewer's switch (web/app.js runViews)."""
+    out = ["result"] if shown_url(run) else []
+    if run.get("whole_url"):
+        out.append("whole")
+    if raw_view_url(run):
         out.append("raw")
     return out
 
 
 @app.post("/api/runs/{run_id}/delete-version")
 async def delete_version(run_id: str, req: VersionReq):
-    """Deletes one result file of a run and keeps the rest; the last version can only go with the whole run."""
+    """Deletes one image of a run and keeps the rest; the last one can only go with the whole run."""
     f = (RUNS / run_id / "run.json").resolve()
     if f.parent.parent != RUNS.resolve() or not f.is_file():
         raise HTTPException(404, "run not found")
@@ -778,9 +785,9 @@ async def delete_version(run_id: str, req: VersionReq):
     run = json.loads(f.read_text())
     versions = run_versions(run)
     if req.kind not in versions:
-        raise HTTPException(400, "this run has no such version")
+        raise HTTPException(400, "this run has no such image")
     if len(versions) < 2:
-        raise HTTPException(400, "this is the run's only result; delete the run instead")
+        raise HTTPException(400, "this is the run's only image; delete the run instead")
 
     def unlink(url: str | None) -> None:
         if not url:
@@ -790,31 +797,45 @@ async def delete_version(run_id: str, req: VersionReq):
         except HTTPException:   # already gone or not a result file
             pass
 
-    if req.kind == "post":
+    def drop_post() -> None:   # older runs: the post-processed file goes, the plain result is shown again
         for url in (run.get("fixed_url"), run.get("grain_url"), (run.get("aligned") or {}).get("url")):
             unlink(url)
         for k in ("fixed_url", "grain_url", "aligned"):
             run.pop(k, None)
         run["grain"] = False
+
+    if req.kind == "whole":
+        unlink(run.pop("whole_url"))
     elif req.kind == "raw":
-        unlink(run["raw_url"])
-        run["raw_url"] = None
-    else:   # the result goes: the raw image takes its place, else the post-processed one does
+        url = raw_view_url(run)
+        unlink(url)
+        for k in ("raw_url", "source_url"):
+            if run.get(k) == url:
+                run[k] = None
+        if run.get("result_url") == url:   # older upscales: the clean upscale was the result file as well
+            run["result_url"] = shown_url(run)
+            for k in ("fixed_url", "grain_url"):
+                run.pop(k, None)
+    elif shown_url(run) != run["result_url"]:
+        drop_post()
+    else:   # the result goes: the corrected whole image takes its place, else the untouched one
         unlink(run["result_url"])
-        if run.get("raw_url") == run["result_url"]:   # upscales: the clean upscale is the result file itself
-            run["raw_url"] = None
-        if "raw" in versions:
-            run["result_url"], run["raw_url"] = run["raw_url"], None
+        if run.get("whole_url"):
+            run["result_url"] = run.pop("whole_url")
         else:
-            run["result_url"] = run.pop("fixed_url", None) or run.pop("grain_url", None) or run["aligned"]["url"]
-            run.pop("aligned", None)
-            run["grain"] = False
-        run["filename"] = httpx.QueryParams(urlsplit(run["result_url"]).query).get("filename") \
-            or Path(urlsplit(run["result_url"]).path).name
+            url = raw_view_url(run)
+            run["result_url"] = url
+            for k in ("raw_url", "source_url"):
+                if run.get(k) == url:
+                    run[k] = None
+    parts = urlsplit(run["result_url"])   # a result now in the run dir keeps the run's name for downloads / saves
+    run["filename"] = httpx.QueryParams(parts.query).get("filename") if parts.path == "/api/view" else f"{run_id}.png"
     save_run(run)
     return run
 
 
+@app.post("/api/runs/{run_id}/retry")
+async def retry_run(run_id: str):
     """Queues a failed (or any) run again with the same settings, as a new run."""
     stored = load_job(run_id) if (RUNS / run_id).resolve().parent == RUNS.resolve() else None
     if not stored:
@@ -923,29 +944,40 @@ def post_kind(run: dict) -> str | None:
     return None if (run.get("params") or {}).get("outpaint") else fix_kind(run)
 
 
+def untouched_url(run: dict, kind: str | None) -> str:
+    """The image post-processing starts from, as the model / upscaler made it: the raw image of a paste
+    (raw_url, in the run dir once post-processing was saved), else source_url (the untouched result, kept in the
+    run dir by the first save) or, before that, the result itself."""
+    if kind == "paste":
+        return run["raw_url"]
+    if run.get("source_url"):
+        return run["source_url"]
+    if kind == "upscale":   # older upscales: the clean upscale was raw_url, the result could hold the grain
+        return run.get("raw_url") or run["result_url"]
+    a = run.get("aligned") or {}
+    if a.get("outpaint") and a.get("url"):   # older extend-canvas runs: the blend was aligned.png
+        return a["url"]
+    return run["result_url"]
+
+
 async def _post_inputs(run: dict, kind: str | None) -> tuple:
-    """(original, image to fix, mask) for a run, kept in memory for the run being adjusted."""
-    key = f"{run['id']}:{kind}"
+    """(original, untouched image, mask) for a run, kept in memory for the run being adjusted."""
+    src = untouched_url(run, kind)
+    key = f"{run['id']}:{kind}:{src}"
     if key not in _align_cache:
         _align_cache.clear()
-        if kind == "paste":
-            _align_cache[key] = tuple([await _fetch_view(run[k]) for k in ("before_url", "raw_url", "mask_url")])
-        elif kind == "whole":
-            _align_cache[key] = (await _fetch_view(run["before_url"]), await _fetch_view(run["result_url"]), None)
-        elif kind == "upscale":   # the clean upscale (raw_url: older runs had the grain in their result)
-            clean = run.get("raw_url") or run["result_url"]
-            _align_cache[key] = (await _fetch_view(run["before_url"]), await _fetch_view(clean), None)
-        else:
-            _align_cache[key] = (await _fetch_view(run["before_url"]), None, None)
+        mask = await _fetch_view(run["mask_url"]) if kind == "paste" else None
+        _align_cache[key] = (await _fetch_view(run["before_url"]), await _fetch_view(src), mask)
     return _align_cache[key]
 
 
 _BASE_DIFF: dict[tuple, float] = {}   # (run, kind, result) -> outside_diff of the unaligned paste
 
 
-async def fix_image(run: dict, req: PostReq, kind: str) -> tuple[Image.Image, dict]:
+async def fix_image(run: dict, req: PostReq, kind: str, whole: bool = False) -> tuple[Image.Image, dict]:
     """Align and fix the edit (shift/scale, local warp, colours, seamless edge) and paste it into the original
-    (whole-image edits: the whole fixed image). Returns the image and the numbers for the UI."""
+    (whole-image edits: the whole fixed image). Returns the image and the numbers for the UI; whole (paste):
+    result["whole"] is the corrected raw image as well."""
     original, raw, mask = await _post_inputs(run, kind)
     if kind == "upscale":   # an upscaler keeps the geometry: colours only
         img, stats = await asyncio.to_thread(align.match_colors_scaled, original, raw)
@@ -971,7 +1003,9 @@ async def fix_image(run: dict, req: PostReq, kind: str) -> tuple[Image.Image, di
         raise HTTPException(400, "alignment values out of range")
     opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson and kind == "paste" and not outpaint}
     composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts,
-                                              color_gain=outpaint)
+                                              color_gain=outpaint, whole=whole)
+    if whole:
+        result["whole"] = stats["whole"]
     key = (run["id"], kind, run.get("result_url"))
     if key not in _BASE_DIFF:   # the same for every slider position: compute once per run
         _, base = await asyncio.to_thread(align.compose, original, raw, mask, 0, 0, 1.0)
@@ -997,10 +1031,11 @@ def _output_dir() -> Path:
 
 async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool = False) -> dict:
     """Post-processing of a finished run: the fixes (fix_image, when kind allows them), then the grain, on top
-    of each other. Without save a JPEG preview. With save everything that is on ends up in ONE file next to the
-    result, <run>_fixed.png (run["fixed_url"], which the viewer and downloads then prefer), overwritten on every
-    save and removed when nothing is on. The fixes alone are kept as aligned.png in the run dir (crop & stitch
-    pastes that one). internal (crop & stitch before stitching): only aligned.png, the stitched result comes later."""
+    of each other, always from the untouched image (untouched_url). Without save a JPEG preview. With save the
+    output folder keeps only the corrected images: <run>.png (the result; a paste: the corrected pasted result) and,
+    for a paste, <run>_raw.png = the corrected whole generated image (whole_url). The untouched image moves into the
+    run dir once (a paste: raw_url = raw.png, else source_url = source.png): the Raw / Clean view and the input of
+    every later save. internal (crop & stitch before stitching): only aligned.png, the stitched result comes later."""
     run_id = run["id"]
     if not run.get("result_url"):
         raise HTTPException(400, "the run has no result")
@@ -1009,48 +1044,37 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
     else:
         fixes = kind is not None and (req.auto or req.dx or req.dy or req.scale != 1 or req.colors or req.warp or req.poisson)
     result: dict[str, Any] = {"kind": kind}
-    changed = fixes or req.grain
-    if fixes:
-        img, info = await fix_image(run, req, kind)
+    original, untouched, _ = await _post_inputs(run, kind)
+    whole = None
+    if fixes or kind == "paste":   # a paste is composed again even without fixes (its untouched part is the raw image)
+        img, info = await fix_image(run, req, kind, whole=req.save and kind == "paste" and not internal)
+        whole = info.pop("whole", None)
         result.update(info)
-    elif kind is None and run.get("aligned") and (RUNS / run_id / "aligned.png").exists():
-        img = Image.open(RUNS / run_id / "aligned.png")   # extend canvas: the blend made at the end of the run
-        changed = True
-    elif kind == "upscale":
-        img = (await _post_inputs(run, kind))[1]
     else:
-        img = await _fetch_view(run["result_url"])
-    if req.save and kind == "upscale" and run.get("raw_url"):
-        run["result_url"] = run["raw_url"]   # older runs: the result was the grained file, now <run>_fixed.png is
+        img = untouched
     stamp = int(time.time() * 1000)
-    if req.save and kind is not None:
-        if fixes:
+    if req.save and fixes:
+        run["aligned"] = {k: result[k] for k in ("dx", "dy", "scale", "colors", "warp", "poisson", "outside_diff")}
+        if internal:   # crop & stitch pastes this one into the original
             await asyncio.to_thread(img.save, RUNS / run_id / "aligned.png")
-            url = f"/data/runs/{run_id}/aligned.png?t={stamp}"
-            run["aligned"] = {k: result[k] for k in ("dx", "dy", "scale", "colors", "warp", "poisson", "outside_diff")} | {"url": url}
-        else:
-            run.pop("aligned", None)
+            run["aligned"]["url"] = f"/data/runs/{run_id}/aligned.png?t={stamp}"
+    elif req.save and not (run.get("aligned") or {}).get("outpaint"):
+        run.pop("aligned", None)
     if req.grain:
         if not run.get("before_url"):
             raise HTTPException(400, "grain needs an original image (not for generated images)")
-        original = (await _post_inputs(run, kind))[0]
         mask_url = _grain_mask_url(run)
         mask = await _fetch_view(mask_url) if mask_url else None
         seed = int((run.get("params") or {}).get("seed") or 0)
         img = await asyncio.to_thread(prepare.add_grain, original, img, seed, mask, req.grain_strength)
+        if whole is not None:   # the whole generated image gets the grain everywhere
+            whole = await asyncio.to_thread(prepare.add_grain, original, whole, seed, None, req.grain_strength)
     if req.save:
-        run.pop("grain_url", None)   # older runs kept the grain in its own <run>_grain.png
         run["grain"], run["grain_strength"] = req.grain, req.grain_strength
         if not internal:
-            path = _output_dir() / f"{run_id}_fixed.png"
-            if changed:
-                await asyncio.to_thread(img.save, path)
-                run["fixed_url"] = view_url({"filename": path.name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
-            else:   # nothing on: back to the plain result
-                path.unlink(missing_ok=True)
-                run.pop("fixed_url", None)
+            await save_post_files(run, kind, untouched, img, whole, stamp)
         save_run(run)
-        result["url"] = run.get("fixed_url") or (run.get("aligned") or {}).get("url") or run["result_url"]
+        result["url"] = run["result_url"]
     else:
         # one file per request: overlapping slider moves must not show each other's half-written preview
         for old in (RUNS / run_id).glob("post_preview*.jpg"):
@@ -1058,9 +1082,42 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
         name = f"post_preview_{stamp}.jpg"
         await asyncio.to_thread(lambda: img.convert("RGB").save(RUNS / run_id / name, quality=92))
         result["url"] = f"/data/runs/{run_id}/{name}"
-    result.update(saved=req.save, aligned=run.get("aligned"), fixed_url=run.get("fixed_url"), grain=run.get("grain"),
-                  grain_strength=run.get("grain_strength"))
+    result.update(saved=req.save, aligned=run.get("aligned"), grain=run.get("grain"),
+                  grain_strength=run.get("grain_strength"), run=run if req.save else None)
     return result
+
+
+async def save_post_files(run: dict, kind: str | None, untouched: Image.Image, img: Image.Image,
+                          whole: Image.Image | None, stamp: int) -> None:
+    """Writes a saved post-processing: the untouched image into the run dir (first save only), the corrected
+    images over the output files, and removes the files older versions used (<run>_fixed.png, <run>_grain.png,
+    aligned.png)."""
+    run_id, d, out = run["id"], RUNS / run["id"], _output_dir()
+    if kind == "paste":
+        if not run["raw_url"].startswith("/data/runs/"):
+            await asyncio.to_thread(untouched.save, d / "raw.png")
+            run["raw_url"] = f"/data/runs/{run_id}/raw.png"
+    elif not run.get("source_url"):
+        await asyncio.to_thread(untouched.save, d / "source.png")
+        run["source_url"] = f"/data/runs/{run_id}/source.png"
+        if kind == "upscale":   # the clean upscale is source.png now
+            run["raw_url"] = None
+    for key in ("fixed_url", "grain_url"):
+        if url := run.pop(key, None):
+            try:
+                local_file(url).unlink(missing_ok=True)
+            except HTTPException:
+                pass
+    (d / "aligned.png").unlink(missing_ok=True)
+    if run.get("aligned"):
+        run["aligned"].pop("url", None)
+    name = run.get("filename") or f"{run_id}.png"
+    await asyncio.to_thread(img.save, out / name)
+    run["result_url"] = view_url({"filename": name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
+    if whole is not None:
+        whole_name = f"{Path(name).stem}_raw.png"
+        await asyncio.to_thread(whole.save, out / whole_name)
+        run["whole_url"] = view_url({"filename": whole_name, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"
 
 
 @app.post("/api/runs/{run_id}/post")
@@ -1349,12 +1406,12 @@ async def _complete_run(job: dict, pid: str) -> None:
                mask_url=input_mask_url(params["mask"]) if use_mask else None, result_url=view_url(res) if res else None)
     post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")} | {"auto": bool(params.get("post_align"))}
     if params.get("outpaint") and params.get("mode") != "paste" and before and raw:
-        try:  # the plain paste stays available as <run>.png
+        try:  # the blend replaces the plain paste in <run>.png
             await outpaint_fix(run, params, view_url(before), view_url(raw))
         except Exception as e:
             print(f"outpaint blend failed for {run_id}: {e!r}")
-    # automatic post-processing (free edit + paste, whole image): the plain result stays available as <run>.png;
-    # crop & stitch adds its grain when stitching, upscales below
+    # automatic post-processing (free edit + paste, whole image): the corrected images replace the output files, the
+    # untouched one moves into the run dir (post_process); crop & stitch adds its grain when stitching, upscales below
     kind = fix_kind(run) if (params.get("mode") == "paste" and use_mask) or not use_mask else None
     fixes = kind is not None and any(post.values())
     grain = bool(params.get("post_grain")) and (params.get("task") or "edit") == "edit" and not params.get("crop_box")
@@ -1366,14 +1423,13 @@ async def _complete_run(job: dict, pid: str) -> None:
         except Exception as e:  # never fail the run because of the post-processing
             print(f"post-processing failed for {run_id}: {e!r}")
     if params.get("task") == "upscale" and params.get("grain") and res:
-        # the clean upscale is <run>.png (also raw_url: "Clean" in Runs), the grain goes into <run>_fixed.png
-        run.update(result_url=view_url(res), raw_url=view_url(res))
+        # the grained upscale replaces <run>.png, the clean one moves to source.png ("Clean" in Runs)
+        run.update(result_url=view_url(res), raw_url=None)
         try:
             await post_process(run, PostReq(save=True, grain=True, grain_strength=grain_strength(params)), "upscale")
         except Exception as e:  # never fail the run because of the post-processing
             print(f"grain failed for {run_id}: {e!r}")
-        await finish_job(job, "done", result_url=view_url(res), raw_url=view_url(res), upscaled_url=None,
-                         filename=res["filename"])
+        await finish_job(job, "done", upscaled_url=None, filename=res["filename"])
         return
     if params.get("crop_box") and res:   # crop & stitch: the run's result is the full-size original with the edit
         full = await stitch_result(run, params, view_url(res))
@@ -1381,12 +1437,8 @@ async def _complete_run(job: dict, pid: str) -> None:
                          raw_url=None, aligned=None, upscaled_url=None, mask_url=input_mask_url(params["orig_mask"]),
                          filename=full["filename"], crop_box=params["crop_box"])
         return
-    await finish_job(job, "done",
-                     result_url=view_url(res) if res else None, before_url=view_url(before) if before else run.get("before_url"),
-                     raw_url=view_url(raw) if raw else None,
-                     upscaled_url=view_url(upscaled) if upscaled else None,
-                     mask_url=input_mask_url(params["mask"]) if use_mask else None,
-                     filename=res["filename"] if res else None)
+    # result_url / raw_url as the post-processing left them (the corrected files, the raw image in the run dir)
+    await finish_job(job, "done", upscaled_url=view_url(upscaled) if upscaled else None, filename=res["filename"])
 
 
 def start_job(run: dict, params: dict, graph: dict) -> dict:
@@ -1537,7 +1589,7 @@ async def outpaint_input(params: dict, run_id: str) -> None:
 
 async def outpaint_fix(run: dict, params: dict, before_url: str, raw_url: str) -> None:
     """Extend canvas: blend the generated border past the model's halo, optionally colour-matched (align.outpaint_blend);
-    saved like an alignment (aligned.png in the run dir, <run>_fixed.png next to the result)."""
+    the blend replaces the plain paste (<run>.png), the raw image stays."""
     run_id, o = run["id"], params["outpaint"]
     before, raw = await _fetch_view(before_url), await _fetch_view(raw_url)
     s = raw.size[0] / int(o["canvas_w"])   # canvas px -> working px
@@ -1548,12 +1600,8 @@ async def outpaint_fix(run: dict, params: dict, before_url: str, raw_url: str) -
         holes = np.asarray((await _fetch_view(input_mask_url(params["outpaint_holes"]))).convert("L").resize(raw.size, Image.BILINEAR))
     fixed = await asyncio.to_thread(align.outpaint_blend, before, raw, box, round(prepare.OUTPAINT_OVERLAP * s),
                                     bool(params.get("outpaint_colors", True)), holes)
-    await asyncio.to_thread(fixed.save, RUNS / run_id / "aligned.png")
-    run["aligned"] = {"outpaint": True, "colors": bool(params.get("outpaint_colors", True)),
-                      "url": f"/data/runs/{run_id}/aligned.png?t={int(time.time() * 1000)}"}
-    await asyncio.to_thread(fixed.save, _output_dir() / f"{run_id}_fixed.png")
-    run["fixed_url"] = view_url({"filename": f"{run_id}_fixed.png", "subfolder": "InpaintStudio", "type": "output"}) \
-        + f"&t={int(time.time() * 1000)}"
+    await asyncio.to_thread(fixed.save, local_file(run["result_url"]))
+    run["aligned"] = {"outpaint": True, "colors": bool(params.get("outpaint_colors", True))}
 
 
 async def stitch_result(run: dict, params: dict, crop_url: str) -> dict:

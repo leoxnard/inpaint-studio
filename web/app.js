@@ -2130,7 +2130,10 @@ const settingsRows = (run) => runFacts(run).filter((f) => f.row).map((f) => [f.n
 // "Compare" next to the result filters: pick two or more results (dashed tiles), then they are shown side by
 // side in the viewer (web/compare.js). Runs from different source images can be mixed; the bar says so.
 state.cmp = { picking: false, keys: [], active: false };
-const cmpRuns = () => state.cmp.keys.map((k) => state.runs.find((r) => r.serverId === k)).filter(Boolean);
+// every run the results can show: the history and the hidden ones (Removed)
+const knownRun = (key) => state.runs.find((r) => r.serverId === key) || state.removed.find((r) => r.serverId === key);
+const isHidden = (run) => state.removed.some((r) => r.serverId === run?.serverId);
+const cmpRuns = () => state.cmp.keys.map(knownRun).filter(Boolean);
 const cmpPickable = (run) => !!run.resultUrl && run.status !== "error" && !!run.serverId;
 // the input image a run started from ("" for text-to-image)
 const cmpSource = (r) => (runTask(r) === "generate" ? "" : r.params?.image || r.beforeUrl || "");
@@ -2175,9 +2178,13 @@ function syncCompareUi() {
   $("selPost").disabled = !some((r) => r.status === "done" && postOptions(r));
   $("selInput").disabled = $("selDownload").disabled = !some((r) => r.resultUrl);
   $("selRepeat").disabled = $("selRemove").disabled = !runs.length;
+  // Removed: the runs stay hidden until Restore brings them back (only there, on the picked or the open hidden run)
+  $("selRestore").hidden = state.resultFilter !== "removed";
+  $("selRestore").disabled = !runs.some(isHidden);
+  $("selHide").hidden = state.resultFilter === "removed";
   if (!runs.length) closeRemoveMenu();
 }
-const selectedRuns = () => state.cmp.keys.map((k) => state.runs.find((r) => r.serverId === k)).filter(Boolean);
+const selectedRuns = () => state.cmp.keys.map(knownRun).filter(Boolean);
 function stopSelecting() {
   state.cmp.picking = false;
   state.cmp.base = null;
@@ -2190,7 +2197,6 @@ function startPicking(anchor = null) {
   c.picking = true;   // an open comparison keeps its runs picked
   c.anchor = anchor; c.cursor = anchor; c.base = null;
   if (!c.active) c.keys = [];
-  if (state.resultFilter === "removed") setResultFilter("all");
   syncCompareUi();
   renderHistory();
 }
@@ -2456,6 +2462,7 @@ async function removeSelected(deleteFiles) {
       if (deleteFiles) await api(`/api/runs/${encodeURIComponent(run.serverId)}`, { method: "DELETE" });
       else { await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/hide`, {}); state.removed.unshift(run); }
       state.runs = state.runs.filter((r) => r !== run);
+      if (deleteFiles) state.removed = state.removed.filter((r) => r.serverId !== run.serverId);
     } catch (e) { showError(`${run.prompt || run.serverId}: ${e.message}`); }
   }
   if (state.cmp.active) exitCompare();
@@ -2523,7 +2530,7 @@ function openRun(run) {
 }
 function moveRuns(dx, dy, extend) {
   const list = shownRuns();
-  if (!list.length || state.resultFilter === "removed") return;
+  if (!list.length) return;
   const c = state.cmp;
   const cur = c.picking && list.includes(c.cursor) ? c.cursor : state.run;
   const i = list.indexOf(cur);
@@ -2961,6 +2968,7 @@ function tileAspect(out) {
 // the runs the results grid shows for the current filter, in its order
 function shownRuns() {
   const f = state.resultFilter;
+  if (f === "removed") return state.removed;
   return state.runs.filter((r) => f === "all" || (f === "failed" ? r.status === "error" : runTask(r) === f));
 }
 
@@ -2969,12 +2977,11 @@ function renderHistory() {
   syncCompareUi();   // All / None depends on the filter
   const box = $("history");
   box.innerHTML = "";
-  const f = state.resultFilter;
-  if (f === "removed") { renderRemoved(box); return; }
+  const hidden = state.resultFilter === "removed";
   const list = shownRuns();
-  $("resultCount").textContent = `${list.length} result${list.length === 1 ? "" : "s"}`;
+  $("resultCount").textContent = hidden ? `${list.length} hidden` : `${list.length} result${list.length === 1 ? "" : "s"}`;
   if (!list.length) {
-    box.innerHTML = `<div class="hint">${state.runs.length ? "No results for this filter." : "No results yet."}</div>`;
+    box.innerHTML = `<div class="hint">${hidden ? "No hidden runs." : state.runs.length ? "No results for this filter." : "No results yet."}</div>`;
     return;
   }
   for (const run of list) {
@@ -3012,7 +3019,8 @@ function renderHistory() {
     x.setAttribute("aria-label", "Remove this run from the results");
     x.onclick = () => hideRun(run);
     const wrap = document.createElement("div"); wrap.className = "rwrap";
-    wrap.append(b, x);
+    wrap.append(b);
+    if (!hidden) wrap.append(x);   // hidden runs come back with Restore in the tools above
     box.appendChild(wrap);
   }
 }
@@ -3025,46 +3033,31 @@ async function hideRun(run) {
   } catch (e) { showError(e.message); }
 }
 
-// Removed runs (hidden with ×, files kept): a tile restores the run into the history and opens it
+// Removed runs (hidden with ×, files kept): shown like the results; opening or picking one keeps it hidden, the
+// Restore tool (only in Removed) brings the picked runs, or the open one, back into the history
 state.removed = [];
-function renderRemoved(box) {
-  const list = state.removed;
-  $("resultCount").textContent = `${list.length} removed`;
-  if (!list.length) { box.innerHTML = `<div class="hint">No removed runs.</div>`; return; }
-  for (const run of list) {
-    const b = document.createElement("button");
-    b.className = "rtile removed";
-    b.setAttribute("aria-label", `Restore the run from ${relTime(run.finished || run.created)}`);
-    const pic = document.createElement("span"); pic.className = "rpic";
-    const out = runOutSize(run);
-    if (out) pic.style.aspectRatio = String(tileAspect(out));
-    const img = tileImage(run, pic);
-    const meta = document.createElement("span"); meta.className = "rmeta";
-    const l = document.createElement("span"); l.textContent = "Restore";
-    const st = document.createElement("span"); st.className = "hint"; sizeLabel(st, run, img);
-    meta.append(l, st);
-    b.append(pic, meta);
-    b.title = `${run.prompt}\n\nClick to bring it back into the results`;
-    b.onclick = () => restoreRun(run);
-    const wrap = document.createElement("div"); wrap.className = "rwrap";
-    wrap.append(b);
-    box.appendChild(wrap);
-  }
-}
 async function loadRemovedRuns() {
   try { state.removed = (await api("/api/runs?hidden=1")).map(runFromStored); } catch (e) { showError(e.message); }
   renderHistory();   // also shows or hides the Removed filter
 }
-async function restoreRun(run) {
-  try {
-    await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/restore`, {});
-    state.removed = state.removed.filter((r) => r !== run);
-    state.runs.push(run);
-    state.runs.sort((a, b) => (b.created || 0) - (a.created || 0));
-    setResultFilter("all");
-    selectRun(run);
-  } catch (e) { showError(e.message); }
+async function restoreRuns() {
+  const runs = targetRuns().filter(isHidden);
+  if (!runs.length) return;
+  let done = 0;
+  for (const run of runs) {
+    try {
+      await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/restore`, {});
+      state.removed = state.removed.filter((r) => r.serverId !== run.serverId);
+      state.runs.push(run);
+      done++;
+    } catch (e) { showError(`${run.prompt || run.serverId}: ${e.message}`); }
+  }
+  state.runs.sort((a, b) => (b.created || 0) - (a.created || 0));
+  stopSelecting();
+  showToast(`Restored ${done} run${done === 1 ? "" : "s"} into the results.`);
+  renderHistory();
 }
+$("selRestore").onclick = restoreRuns;
 function setResultFilter(f) {
   state.resultFilter = f;
   for (const x of $("resultFilter").children) x.setAttribute("aria-pressed", String(x.dataset.filter === f));
@@ -3205,7 +3198,7 @@ const findRun = (id) => state.jobs.get(id) || state.runs.find((r) => r.serverId 
 function selectRun(run, shift = false) {
   // Shift+click while a run is open starts the select tool: everything from the open run to this one is picked
   if (shift && !state.cmp.picking && !state.cmp.active && state.run && state.run !== run && cmpPickable(run)
-      && state.resultFilter !== "removed" && shownRuns().includes(state.run)) {
+      && shownRuns().includes(state.run)) {
     startPicking(state.run);
   }
   if (state.cmp.picking) {   // selecting: a tile toggles; Shift+click selects everything from the last click to here

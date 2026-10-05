@@ -248,7 +248,8 @@ its own seed (random, or seed, seed + 1, …). They show as a strip under the im
 - use as input (a new batch in Create); asks which versions (post-processed, pasted result, raw) when a run has several
 - repeat: queues the run again with the same settings
 - download: asks for a folder and saves the results there
-- remove: hide from the results (files kept, see filter **Removed**) or delete the files; a single run with several images
+- remove: hide from the results (files kept, see filter **Removed**) or delete the files. In **Removed** the runs open
+  and can be selected like the others and stay hidden; the **Restore** tool (only there) brings them back; a single run with several images
   (pasted, whole image, raw / clean) can also delete just one of them, the viewer then shows only what is left
 
 **Viewer:** the divider between original and result keeps its place when another run opens. Zoom with the mouse wheel,

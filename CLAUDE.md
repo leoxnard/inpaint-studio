@@ -82,7 +82,8 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   JPEGs (override with `INPAINT_STUDIO_DATA`), served at `/data/runs`, listed by
   `GET /api/runs`, removed by `DELETE /api/runs/{id}`; `POST …/delete-version {kind}` deletes one image (result / whole / raw,
   `run_versions`) and keeps the rest (the last one goes only with the run). × on a result tile or Select → remove → hide hides a run
-  (`POST …/hide`, files kept); `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed).
+  (`POST …/hide`, files kept); `GET /api/runs?hidden=1` + `POST …/restore` bring it back (Results → Removed: the same tiles,
+  open / pick without restoring; the Restore tool `#selRestore` shows only there).
   Results → Select works on picked runs: compare, post-process, use as input, repeat, download, remove; the same tools act on the open run
   when nothing is picked (`targetRuns()`). Post-process and use-as-input ask first (`askDialog`), download asks for a folder
   (`POST /api/pick-folder` = osascript dialog, `POST /api/export` copies the files), `POST /api/reveal` = Open in Finder.

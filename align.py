@@ -299,11 +299,14 @@ def compose(original: Image.Image, raw: Image.Image, mask: Image.Image | None,
             dx: float, dy: float, scale: float,
             colors: bool = False, warp: bool = False, poisson: bool = False,
             color_gain: bool = False, whole: bool = False,
-            sx: float = 1.0, sy: float = 1.0, corners: list | None = None) -> tuple[Image.Image, dict]:
+            sx: float = 1.0, sy: float = 1.0, corners: list | None = None,
+            force: np.ndarray | None = None) -> tuple[Image.Image, dict]:
     """Paste the masked area of the transformed (and optionally fixed) raw image into the original.
     mask None (whole-image edit): the whole transformed image is used, the fixes are measured on the pixels the
     edit did not change (`unchanged`), and only edges the shift uncovers keep the original.
-    whole: stats["whole"] is also the corrected raw image itself (not pasted; uncovered edges from the original)."""
+    whole: stats["whole"] is also the corrected raw image itself (not pasted; uncovered edges from the original).
+    force (original size, +1 / -1): areas the user added to / erased from the mask afterwards; they win over the
+    seam, which may otherwise move the edge back within its band."""
     original = original.convert("RGB")
     raw = raw.convert("RGB").resize(original.size, Image.BICUBIC)
     want_whole, whole = whole, mask is None
@@ -321,6 +324,9 @@ def compose(original: Image.Image, raw: Image.Image, mask: Image.Image | None,
     weight = mk / 255.0
     if poisson and not whole:
         weight = _seam_weight(o, m, mk > 127)
+    if force is not None and force.any():
+        soft = lambda a: cv2.GaussianBlur(a.astype(np.float32), (0, 0), 1.5).astype(np.float64)
+        weight = np.maximum(weight, soft(force > 0)) * (1 - soft(force < 0))
     weight = weight * (np.asarray(valid, dtype=np.float64) / 255.0)
     out = o * (1 - weight[..., None]) + m * weight[..., None]
     diff = float(np.abs(o - m).mean(axis=-1)[keep].mean()) if keep.any() else 0.0

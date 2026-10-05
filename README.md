@@ -109,7 +109,9 @@ Chosen under **Area to change** in Create.
 
 **Mask tools**
 - **Find mask:** type what to mask (SAM3), then tune threshold, refine, expand, feather or invert.
-- **Touch up:** Paint, Erase, Wand (similar colours), Bucket (fill an outline), plus Undo, Clear and Fill.
+- **Touch up:** Paint, Erase, Wand, Bucket (fill an outline; it melts into the painted area), plus Undo, Clear and Fill.
+  Wand: press on a colour and drag away. The farther you drag, the more similar colours are included; red shows
+  what will be added, releasing adds it (Escape cancels).
 - Zoom with ⌘/Ctrl + scroll or pinch (1–8×). Scroll or Space + drag pans, `0` resets.
 
 **Size limit:** on Apple Silicon the edit turns into gray noise above about 4096 latent tokens. The app

@@ -998,7 +998,14 @@ async def fix_image(run: dict, req: PostReq, kind: str, whole: bool = False) -> 
     if outpaint:   # extend canvas: old image moved to where the model put it, wide fade, colour gain, no seam cut
         mask = align.outpaint_paste_mask(mask.resize(raw.size), 0.09 * max(raw.size))
         original, mask, moved = await asyncio.to_thread(align.outpaint_align, original, raw, mask)
-    elif mask is not None and feather > 0 and "type=input" in run["mask_url"]:  # newer runs keep only the uploaded hard mask
+    force = None
+    if mask is not None and not outpaint and run.get("orig_mask_url") and run["orig_mask_url"] != run["mask_url"]:
+        # an adjusted mask: what was added / erased compared with the run's own mask always counts (align.compose)
+        ref = (await _fetch_view(run["orig_mask_url"])).convert("L").resize(original.size, Image.BILINEAR)
+        new = np.asarray(mask.convert("L").resize(original.size, Image.BILINEAR)) > 127
+        old = np.asarray(ref) > 127
+        force = new.astype(np.int8) - old.astype(np.int8)
+    if not outpaint and mask is not None and feather > 0 and "type=input" in run["mask_url"]:  # newer runs keep only the uploaded hard mask
         mask = mask.convert("L").filter(ImageFilter.GaussianBlur(max(1.0, feather / 3)))
     result: dict[str, Any] = {}
     if outpaint and moved.get("moved"):
@@ -1017,7 +1024,7 @@ async def fix_image(run: dict, req: PostReq, kind: str, whole: bool = False) -> 
         raise HTTPException(400, "alignment values out of range")
     opts = {"colors": req.colors, "warp": req.warp, "poisson": req.poisson and kind == "paste" and not outpaint}
     composed, stats = await asyncio.to_thread(align.compose, original, raw, mask, dx, dy, scale, **opts,
-                                              color_gain=outpaint, whole=whole, sx=sx, sy=sy, corners=corners)
+                                              color_gain=outpaint, whole=whole, sx=sx, sy=sy, corners=corners, force=force)
     if whole:
         result["whole"] = stats["whole"]
     key = (run["id"], kind, run.get("result_url"), run.get("mask_url"))
@@ -1073,7 +1080,7 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
                                       or any(v for c in req.corners or [] for v in c) or req.colors or req.warp or req.poisson)
     result: dict[str, Any] = {"kind": kind}
     mask_url = post_mask_url(run, req) if kind == "paste" else run.get("mask_url")
-    view = {**run, "mask_url": mask_url, "post_mask_url": None}   # the run as composed now (an adjusted mask)
+    view = {**run, "mask_url": mask_url, "post_mask_url": None, "orig_mask_url": run.get("mask_url")}   # as composed now
     original, untouched, _ = await _post_inputs(view, kind)
     whole = None
     if fixes or kind == "paste":   # a paste is composed again even without fixes (its untouched part is the raw image)

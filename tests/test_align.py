@@ -152,3 +152,16 @@ def test_transform_stretch_and_corners():
     assert out[2, 2] == 0 and out[2, 97] == 255 and out[77, 2] == 255
     # no stretch, no corners: the plain affine path
     assert np.array_equal(np.asarray(align.transform(img, 3, 0, 1.0, corners=[[0, 0]] * 4)), np.asarray(align.transform(img, 3, 0, 1.0)))
+
+
+def test_compose_force_wins_over_the_seam():
+    o = np.full((64, 64, 3), 100, np.uint8)
+    raw = np.full((64, 64, 3), 200, np.uint8)
+    mask = np.zeros((64, 64), np.uint8)
+    mask[16:48, 16:48] = 255
+    force = np.zeros((64, 64), np.int8)
+    force[16:48, 40:48] = -1   # erased afterwards
+    force[4:10, 4:10] = 1      # added afterwards
+    out, _ = align.compose(Image.fromarray(o), Image.fromarray(raw), Image.fromarray(mask), 0, 0, 1.0, poisson=True, force=force)
+    a = np.asarray(out)
+    assert a[32, 45, 0] < 110 and a[7, 7, 0] > 190 and a[32, 24, 0] > 190

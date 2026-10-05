@@ -778,8 +778,8 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 .variants img { width: 100%; height: 100%; object-fit: cover; }
 .runbox .row #variants { flex: none; width: auto; min-height: 44px; }
 /* Compare: pickable tiles get a dashed outline, picked ones a stronger one and their number */
-.rtile.picking { outline: 2px dashed var(--mute); outline-offset: 2px; }
-.rtile.picked { outline-color: var(--ink); }
+/* selecting: picked tiles get the same border as the open run */
+.rtile.picked, .rtile.picked:hover:not(:disabled) { border-color: var(--ink); }
 .rtile .pick-no { position: absolute; top: 4px; left: 4px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
   background: var(--ink); color: var(--on-ink); font-size: 12px; font-weight: 700; display: grid; place-items: center; }
 .rtile .same-src { font-size: 11px; color: var(--muted); }

@@ -461,6 +461,7 @@ function draw() {
     dctx.globalAlpha = 1;
     dctx.drawImage(maskOutline(), 0, 0, w, h);
   }
+  if (wandDrag?.filled && maskOn()) dctx.drawImage(wandPreview, 0, 0, w, h);   // what the wand would add
   const c = cropOn() && state.crop;
   if (c && state.srcW) {   // the part that goes to the model
     const s = w / state.srcW, lw = Math.max(1.5, w / display.getBoundingClientRect().width * 1.5);
@@ -893,37 +894,110 @@ function imagePixels(w, h) {   // the image at mask size, cached per image
   return state.wandCache.px;
 }
 
-function fillAt(p) {
-  const m = state.mask, w = m.width, h = m.height;
+// the mask pixel under a canvas point, or null outside the image
+function maskPixel(p) {
+  const w = state.mask.width, h = state.mask.height;
   const x = Math.floor(p.x * w / display.width), y = Math.floor(p.y * h / display.height);
-  if (x < 0 || y < 0 || x >= w || y >= h) return;
+  return x < 0 || y < 0 || x >= w || y >= h ? null : { x, y, w, h };
+}
+// wand: similar colour in the image, connected to the seed pixel
+function wandRegion(at, tol) {
+  const { x, y, w, h } = at, px = imagePixels(w, h), s = (y * w + x) * 4;
+  const r = px[s], g = px[s + 1], b = px[s + 2];
+  return floodFill(w, h, x, y, (i) => Math.max(Math.abs(px[i * 4] - r), Math.abs(px[i * 4 + 1] - g),
+    Math.abs(px[i * 4 + 2] - b)) <= tol);
+}
+// adds a filled region to the mask, grown by 2 px so it melts into the painted area next to it (the soft rim of a
+// brush stroke is only partly opaque and would stay as a thin line between the two)
+function addRegion(filled) {
+  const m = state.mask, w = m.width, h = m.height;
   const ctx = m.getContext("2d", { willReadFrequently: true });
   const data = ctx.getImageData(0, 0, w, h), mp = data.data;
-  let filled;
-  if (state.mode === "bucket") {   // unpainted area, walled in by painted pixels and the border
-    filled = floodFill(w, h, x, y, (i) => mp[i * 4 + 3] < 128);
-  } else {                         // wand: similar colour in the image, connected to the click
-    const px = imagePixels(w, h), s = (y * w + x) * 4, tol = parseFloat($("tolerance").value);
-    const r = px[s], g = px[s + 1], b = px[s + 2];
-    filled = floodFill(w, h, x, y, (i) => Math.max(Math.abs(px[i * 4] - r), Math.abs(px[i * 4 + 1] - g),
-      Math.abs(px[i * 4 + 2] - b)) <= tol);
+  let grown = filled;
+  for (let pass = 0; pass < 2; pass++) {
+    const next = grown.slice();
+    for (let i = 0; i < grown.length; i++) {
+      if (!grown[i]) continue;
+      const x = i % w;
+      if (x > 0) next[i - 1] = 1;
+      if (x < w - 1) next[i + 1] = 1;
+      if (i >= w) next[i - w] = 1;
+      if (i < w * (h - 1)) next[i + w] = 1;
+    }
+    grown = next;
   }
-  for (let i = 0; i < filled.length; i++) {
-    if (filled[i]) { mp[i * 4] = mp[i * 4 + 1] = mp[i * 4 + 2] = mp[i * 4 + 3] = 255; }
+  for (let i = 0; i < grown.length; i++) {
+    if (grown[i]) { mp[i * 4] = mp[i * 4 + 1] = mp[i * 4 + 2] = mp[i * 4 + 3] = 255; }
   }
   ctx.putImageData(data, 0, 0);
   state.hasMask = true;
   render();
 }
+function fillAt(p) {   // bucket: the unpainted area, walled in by painted pixels and the border
+  const at = maskPixel(p);
+  if (!at) return;
+  const mp = state.mask.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, at.w, at.h).data;
+  addRegion(floodFill(at.w, at.h, at.x, at.y, (i) => mp[i * 4 + 3] < 128));
+}
+
+// wand: press on a colour and drag away; the farther the pointer, the higher the tolerance. Red shows what would be
+// added, releasing adds it (Escape cancels)
+let wandDrag = null;
+const wandPreview = document.createElement("canvas");
+function wandTolerance(e) {
+  return Math.round(Math.min(255, 2 + Math.hypot(e.clientX - wandDrag.cx, e.clientY - wandDrag.cy) * 0.6));
+}
+function updateWandPreview(tol) {
+  if (!wandDrag) return;
+  wandDrag.tol = tol;
+  $("tolerance").value = Math.min(+$("tolerance").max, tol);
+  $("toleranceOut").textContent = tol;
+  if (wandDrag.raf) return;
+  wandDrag.raf = requestAnimationFrame(() => {
+    if (!wandDrag) return;
+    wandDrag.raf = 0;
+    const { w, h } = wandDrag.at;
+    wandDrag.filled = wandRegion(wandDrag.at, wandDrag.tol);
+    if (wandPreview.width !== w || wandPreview.height !== h) { wandPreview.width = w; wandPreview.height = h; }
+    const pctx = wandPreview.getContext("2d");
+    const img = pctx.createImageData(w, h), d = img.data;
+    for (let i = 0; i < wandDrag.filled.length; i++) {
+      if (wandDrag.filled[i]) { d[i * 4] = 255; d[i * 4 + 1] = 40; d[i * 4 + 2] = 40; d[i * 4 + 3] = 140; }
+    }
+    pctx.putImageData(img, 0, 0);
+    render();
+  });
+}
+function endWand(commit) {
+  if (!wandDrag) return;
+  const { at, tol, raf } = wandDrag;
+  cancelAnimationFrame(raf);
+  wandDrag = null;
+  if (commit) {
+    addRegion(wandRegion(at, tol));   // the region at the last tolerance (the preview may lag a frame behind)
+    updateStale();
+    scheduleMaskSave();
+  } else state.history.pop();   // nothing changed: drop the snapshot taken on press
+  render();
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && wandDrag) { e.preventDefault(); endWand(false); } });
 
 display.addEventListener("pointerdown", (e) => {
   if (!maskOn() || state.mode === "off" || !state.imgEl || e.button !== 0) return;
   if (!ensureMask()) return;
   pushHistory();
-  if (state.mode === "wand" || state.mode === "bucket") {
+  if (state.mode === "bucket") {
     fillAt(canvasPoint(e));
     updateStale();
     scheduleMaskSave();
+    return;
+  }
+  if (state.mode === "wand") {
+    const at = maskPixel(canvasPoint(e));
+    if (!at) { state.history.pop(); return; }
+    wandDrag = { at, cx: e.clientX, cy: e.clientY, tol: 2, filled: null, raf: 0 };
+    display.setPointerCapture(e.pointerId);
+    updateWandPreview(2);
     return;
   }
   stroking = true; last = null;
@@ -932,10 +1006,15 @@ display.addEventListener("pointerdown", (e) => {
   updateStale();
 });
 display.addEventListener("pointermove", (e) => {
+  if (wandDrag) { updateWandPreview(wandTolerance(e)); return; }
   moveCursor(e);
   if (stroking) strokeTo(canvasPoint(e));
 });
-const endStroke = () => { if (stroking) scheduleMaskSave(); stroking = false; last = null; };
+const endStroke = (e) => {
+  if (wandDrag) { endWand(e?.type === "pointerup"); return; }
+  if (stroking) scheduleMaskSave();
+  stroking = false; last = null;
+};
 display.addEventListener("pointerup", endStroke);
 display.addEventListener("pointercancel", endStroke);
 display.addEventListener("pointerleave", () => { $("brushCursor").hidden = true; });
@@ -3003,7 +3082,6 @@ function renderHistory() {
     const img = tileImage(run, pic);
     const meta = document.createElement("span"); meta.className = "rmeta";
     const model = document.createElement("span"); model.className = "rmodel"; model.textContent = runModelName(run);
-    model.title = model.textContent;
     const l = document.createElement("span"); sizeLabel(l, run);
     meta.append(model, l);
     if (run.status === "error") { const st = document.createElement("span"); st.className = "strong"; st.textContent = "Failed"; meta.append(st); }
@@ -3015,7 +3093,6 @@ function renderHistory() {
       if (picked) { const no = document.createElement("span"); no.className = "pick-no"; no.textContent = state.cmp.keys.indexOf(run.serverId) + 1; pic.append(no); }
     }
     b.append(pic, meta);
-    b.title = run.status === "error" && run.error ? `${run.prompt}\n\nFailed: ${run.error}` : run.prompt;
     b.onclick = (e) => selectRun(run, e.shiftKey);
     // × removes the run from the history only; its files stay (a sibling: buttons cannot nest)
     const x = document.createElement("button");

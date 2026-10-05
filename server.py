@@ -330,6 +330,84 @@ async def pick_import_file():
     return await import_guess(path)
 
 
+def local_file(url: str) -> Path:
+    """The file on disk behind a result URL the page knows (/api/view of an output image, or /data/runs/...)."""
+    parts = urlsplit(url)
+    if parts.path == "/api/view":
+        q = httpx.QueryParams(parts.query)
+        if q.get("type", "output") != "output":
+            raise HTTPException(400, "only result files can be saved")
+        root = (COMFY_OUTPUT or Path(installer.load_config()["output_dir"])).resolve()
+        path = (root / q.get("subfolder", "") / q.get("filename", "")).resolve()
+    elif parts.path.startswith("/data/runs/"):
+        root = RUNS.resolve()
+        path = (root / parts.path.removeprefix("/data/runs/")).resolve()
+    else:
+        raise HTTPException(400, "unknown file")
+    if root not in path.parents or not path.is_file():
+        raise HTTPException(404, "file not found")
+    return path
+
+
+class RevealReq(BaseModel):
+    url: str
+
+
+@app.post("/api/reveal")
+async def reveal_file(req: RevealReq):
+    """Shows a result file in the Finder (the server runs on this Mac)."""
+    path = local_file(req.url)
+    subprocess.Popen(["open", "-R", str(path)])
+    return {"path": str(path)}
+
+
+class PickFolderReq(BaseModel):
+    start: str = ""   # folder the dialog opens in (the last one used)
+
+
+@app.post("/api/pick-folder")
+async def pick_folder(req: PickFolderReq | None = None):
+    """Opens the macOS folder dialog on this Mac and returns the chosen folder (cancelled: path null)."""
+    start = Path(req.start).expanduser() if req and req.start else None
+    where = f' default location (POSIX file "{start}")' if start and start.is_dir() and '"' not in str(start) else ""
+    script = f'POSIX path of (choose folder with prompt "Save the results into this folder"{where})'
+    proc = await asyncio.create_subprocess_exec("osascript", "-e", script, stdout=asyncio.subprocess.PIPE,
+                                                stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    path = out.decode().strip()
+    return {"path": path if proc.returncode == 0 and path else None}
+
+
+class ExportItem(BaseModel):
+    url: str
+    name: str
+
+
+class ExportReq(BaseModel):
+    folder: str
+    items: list[ExportItem] = Field(min_length=1, max_length=500)
+
+
+@app.post("/api/export")
+async def export_files(req: ExportReq):
+    """Copies result files into a folder the user picked (an existing name gets a number: name (2).png)."""
+    folder = Path(req.folder).expanduser()
+    if not folder.is_dir():
+        raise HTTPException(400, "the folder does not exist")
+    saved = []
+    for it in req.items:
+        src = local_file(it.url)
+        name = Path(it.name).name or src.name
+        dst = folder / name
+        n = 2
+        while dst.exists():
+            dst = folder / f"{Path(name).stem} ({n}){Path(name).suffix}"
+            n += 1
+        await asyncio.to_thread(shutil.copyfile, src, dst)
+        saved.append(dst.name)
+    return {"folder": str(folder), "saved": saved}
+
+
 @app.get("/api/imports/guess")
 async def import_guess(path: str):
     p = Path(path).expanduser()

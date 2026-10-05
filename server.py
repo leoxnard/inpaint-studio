@@ -60,7 +60,7 @@ imports.apply()   # own files from the Download Center become components / prese
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family",
-                  "upscale", "upscale_width", "upscale_long_side", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "group", "variant",
+                  "upscale", "upscale_width", "upscale_long_side", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "upscale_colors", "group", "variant",
                   "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control")
 
 @asynccontextmanager
@@ -1215,6 +1215,7 @@ class UpscaleReq(BaseModel):
     color_correction: str = "lab"  # SeedVR2 only
     grain: bool = True            # give the result the original's grain back (prepare.add_grain)
     grain_strength: float = Field(prepare.GRAIN_STRENGTH, ge=0, le=3)
+    colors: bool | None = None    # match the colours to the original (align.match_colors_scaled); None: on unless SeedVR2
 
 
 _bpp_cache: dict[str, float] = {}
@@ -1274,6 +1275,7 @@ async def upscale(req: UpscaleReq):
     params = {"task": "upscale", "prompt": f"Upscale {what} with {comp['title']}", "upscale_of": req.upscale_of, "upscale": round(factor, 3),
               "upscale_long_side": req.long_side, "upscale_mb": None if req.long_side else req.megabytes, "grain": req.grain, "grain_strength": req.grain_strength, "image": req.image,
               "upscaler": req.upscaler, "color_correction": req.color_correction if comp.get("engine") == "seedvr2" else None,
+              "upscale_colors": comp.get("engine") != "seedvr2" if req.colors is None else req.colors,
               "seed": seed, "steps": 1, "save_every": 0, "save_last": 0, "refs": [], "use_mask": False, "mask": None}
     size = {"work_w": size[0], "work_h": size[1]} if size else {"work_w": round(w * factor), "work_h": round(h * factor)}
     run = {"id": run_id, "created": time.time(), "status": "queued", "before_url": input_mask_url(req.image),
@@ -1496,13 +1498,14 @@ async def _complete_run(job: dict, pid: str) -> None:
                                internal=bool(params.get("crop_box")))
         except Exception as e:  # never fail the run because of the post-processing
             print(f"post-processing failed for {run_id}: {e!r}")
-    if params.get("task") == "upscale" and params.get("grain") and res:
-        # the grained upscale replaces <run>.png, the clean one moves to source.png ("Clean" in Runs)
+    if params.get("task") == "upscale" and (params.get("grain") or params.get("upscale_colors")) and res:
+        # the post-processed upscale (grain, colours) replaces <run>.png, the clean one moves to source.png ("Clean" in Runs)
         run.update(result_url=view_url(res), raw_url=None)
         try:
-            await post_process(run, PostReq(save=True, grain=True, grain_strength=grain_strength(params)), "upscale")
+            await post_process(run, PostReq(save=True, grain=bool(params.get("grain")), colors=bool(params.get("upscale_colors")),
+                                            grain_strength=grain_strength(params)), "upscale")
         except Exception as e:  # never fail the run because of the post-processing
-            print(f"grain failed for {run_id}: {e!r}")
+            print(f"upscale post-processing failed for {run_id}: {e!r}")
         await finish_job(job, "done", upscaled_url=None, filename=res["filename"])
         return
     if params.get("crop_box") and res:   # crop & stitch: the run's result is the full-size original with the edit

@@ -182,6 +182,9 @@ The **Upscale** task upscales images on their own (one image or a whole folder).
 default) adds it back. The grained upscale is the result (`<run>.png`), the clean one stays in the
 run's App Support folder ("Clean" in Runs).
 
+**Match the original's colours** (on by default, off for SeedVR2, which has its own colour correction) corrects colour
+and exposure drift of the upscale against the original; like the grain it goes into `<run>.png`, "Clean" keeps the plain upscale.
+
 Edits can also upscale their own result (choose an upscaler in the run settings), saved as `<run>_x2.png` / `_x4.png`.
 
 ## Post-processing

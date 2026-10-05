@@ -1472,7 +1472,8 @@ function upscaleParams(image) {
   const by = $("upscaleBy").value;
   const size = by === "long" ? { long_side: parseInt($("upscaleLong").value, 10) || 0 }
     : by === "mb" ? { megabytes: parseFloat($("upscaleMB").value) || 0 } : { factor: parseFloat($("upscaleFactor").value) || 2 };
-  return { image, upscaler: $("upscaleModel").value, color_correction: $("colorCorrection").value, grain: $("upscaleGrain").checked, ...size };
+  return { image, upscaler: $("upscaleModel").value, color_correction: $("colorCorrection").value, grain: $("upscaleGrain").checked,
+           colors: $("upscaleColors").checked, ...size };
 }
 async function runUpscale() {
   setSubmitting(true);
@@ -2156,6 +2157,7 @@ function runFacts(run) {
     const long = p.upscale_long_side, mb = p.upscale_mb;
     add("scale", "Scale", long ? `long side ${long} px` : mb ? `about ${mb} MB` : p.upscale > 0 ? `${p.upscale}×` : "");
     add("colour", "Colour correction", p.color_correction || "", p.color_correction ? `colour ${p.color_correction}` : null);
+    if (p.upscale_colors != null) add("match", "Colour match", p.upscale_colors ? "on" : "off", p.upscale_colors ? "colour match" : "no colour match");
   } else {
     add("steps", "Steps", p.steps ?? run.steps ?? "");
   }
@@ -3192,6 +3194,7 @@ function loadRunSettings(run) {
     else if (p.upscale_mb) $("upscaleMB").value = p.upscale_mb;
     else if (p.upscale != null) $("upscaleFactor").value = p.upscale;
     if (p.grain != null) $("upscaleGrain").checked = !!p.grain;
+    if (p.upscale_colors != null) { $("upscaleColors").checked = !!p.upscale_colors; state.upColorsFor = p.upscaler; }
     syncRangeOutputs();
     syncUpscaleBy();
     if (p.color_correction) $("colorCorrection").value = p.color_correction;
@@ -4935,6 +4938,8 @@ function syncTaskUi() {
   const up = upscaling() ? installedUpscalers().find((u) => u.key === $("upscaleModel").value) : null;
   document.body.classList.toggle("mode-upscale", state.task === "upscale");
   document.body.classList.toggle("up-seedvr2", up?.engine === "seedvr2");
+  // own colour matching: on by default, off for upscalers with their own (SeedVR2); a click sticks until the model changes
+  if (up && state.upColorsFor !== up.key) { $("upscaleColors").checked = up.engine !== "seedvr2"; state.upColorsFor = up.key; }
   $("upscaleHint").textContent = up ? (up.engine === "seedvr2"
     ? "SeedVR2 redraws fine detail in one step. Slow and memory-hungry at large sizes."
     : `${up.title}: upscales ${up.scale}× natively, other factors are resized from that.`) : "";

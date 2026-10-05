@@ -188,6 +188,9 @@ $("freeMem").onclick = async () => {
   finally { b.textContent = "Free"; delete b.dataset.busy; setTimeout(pollStatus, 1500); }
 };
 
+// the Benchmarks link only shows when this Mac has benchmark results (App Support/benchmarks/data.json)
+fetch("/api/benchmarks", { cache: "no-store" }).then((r) => { $("benchLink").hidden = !r.ok; }).catch(() => {});
+
 // recent prompts (edit / generate) and mask texts, kept by the server (shared by the app and the dev server)
 async function loadPromptHistory() {
   try {
@@ -482,14 +485,14 @@ function outpaintOn() { return state.task !== "generate" && $("mode").value === 
 state.outpaint = { fx: 0.5, fy: 0.5, scale: 1, image: null };
 const OUTPAINT_MIN_SCALE = 0.25;
 
-function outpaintCanvas() {
+function outpaintCanvas(sw = state.srcW, sh = state.srcH) {
   const o = state.outpaint;
   if (o.image !== state.imageName) {   // new image: centred, full size, nothing erased
     Object.assign(o, { fx: 0.5, fy: 0.5, scale: 1, image: state.imageName });
     state.opErase = null; state.opErased = false; state.opHistory = [];
   }
   const [aw, ah] = $("aspect").value.split(":").map(Number);
-  const sw = state.srcW, sh = state.srcH, a = aw / ah;
+  const a = aw / ah;
   const tw = a > sw / sh ? sh * a : sw, th = a > sw / sh ? sh : sw / a;   // tightest canvas around the image
   const w = Math.round(tw / o.scale), h = Math.round(th / o.scale);
   return { w, h, x: Math.round(o.fx * (w - sw)), y: Math.round(o.fy * (h - sh)) };
@@ -1050,7 +1053,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.isComposing && !appBusy()) {
     const tag = t.tagName;
     const typing = (/INPUT/.test(tag) && !["checkbox", "radio", "range", "button"].includes(t.type)) || /TEXTAREA|SELECT/.test(tag) || t.isContentEditable;
-    const pressing = (tag === "BUTTON" && !t.classList.contains("batch-item")) || tag === "A" || tag === "SUMMARY";
+    // a button only takes Enter when it was reached with the keyboard; a clicked button just keeps the focus
+    const pressing = (tag === "BUTTON" || tag === "A" || tag === "SUMMARY") && !t.classList.contains("batch-item") && t.matches(":focus-visible");
     if (!typing && !pressing) { e.preventDefault(); if (!$("runEdit").disabled) $("runEdit").click(); return; }
   }
   if (!state.imgEl || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1355,7 +1359,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_whole: wholeImage() && $("keepWhole").checked && !removeBgOn(),
     remove_bg: removeBgOn() || undefined,
     loras: state.loras.filter((l) => l.name && l.strength),
-    outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas()) : undefined,
+    outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas(srcW, srcH)) : undefined,
     outpaint_colors: outpaintOn() ? $("postColors").checked : undefined,
     crop_grain: cropOn() ? $("postGrain").checked : undefined,
     crop_stitch: cropOn() || undefined, crop_context: cropOn() ? num("cropContext") / 100 : undefined, match_ref: $("matchRef").checked,
@@ -1470,13 +1474,13 @@ function jobFromSummary(sum) {
 }
 
 // Variations: the same run n times, each with its own seed (random, or seed, seed+1, …), tied by a group id
-async function submitVariants(params) {
+async function submitVariants(params, { quiet = false } = {}) {
   const n = parseInt($("variants").value, 10) || 1;
-  if (n === 1) return submitJob(params);
+  if (n === 1) return submitJob(params, "/api/jobs", { quiet });
   const group = Math.random().toString(36).slice(2, 10);
   for (let i = 0; i < n; i++) {
     const seed = $("randomSeed").checked ? (i ? Math.floor(Math.random() * 2 ** 32) : params.seed) : params.seed + i;
-    await submitJob({ ...params, seed, group, variant: i }, "/api/jobs", { quiet: i < n - 1 });
+    await submitJob({ ...params, seed, group, variant: i }, "/api/jobs", { quiet: quiet || i < n - 1 });
   }
 }
 
@@ -4033,7 +4037,8 @@ function openNextBatchItem({ quiet = false } = {}) {
 
 // size settings for one image: current form values, auto-fixed below the gray-noise limit
 async function sizeFor(it) {
-  const body = { width: it.srcW, height: it.srcH, megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10) };
+  const dims = outpaintOn() ? outpaintCanvas(it.srcW, it.srcH) : { w: it.srcW, h: it.srcH };   // extend canvas: the new canvas counts
+  const body = { width: dims.w, height: dims.h, megapixels: num("megapixels"), resolution: parseInt($("resolution").value, 10) };
   const rep = await postJson("/api/size", body);
   const out = !rep.safe && $("autofix").checked && rep.suggested
     ? { ...rep.suggested } : { ...rep, megapixels: body.megapixels, resolution: body.resolution };
@@ -4059,16 +4064,28 @@ function batchTodo(withMask) {
   if (state.task === "upscale") return state.batch.filter((it) => ["open", "masked", "nomask"].includes(it.status));
   return state.batch.filter((it) => it.status === "open" || it.status === "masked" || (!withMask && it.status === "nomask"));
 }
+// one toast after a submit-all: how many went into the queue and what was left out
+function batchSummary(n, queued, nomatch = 0) {
+  const failed = n - queued - nomatch;
+  const parts = [`${queued} of ${n} queued`];
+  if (nomatch) parts.push(`${nomatch} without a match for "${$("maskText").value.trim()}" (∅, not queued)`);
+  if (failed) parts.push(`${failed} failed`);
+  if (queued === n) showToast(`${n} image${n > 1 ? "s" : ""} added to the queue`, { runsLink: true });
+  else (queued ? showToast : showError)(parts.join(" · "));
+}
 async function batchSubmitAll(withMask) {
   if (state.task === "upscale") { await upscaleAll(); return; }
   if (!maskOn()) withMask = false;
   if (state.batchBusy) return;
+  if (!presetById($("preset").value)) { showError("No model installed. Open the Download Center to get one."); return; }
   stashCurrentMask();
   const todo = batchTodo(withMask);
-  if (!todo.length) { showError("No open images in the batch."); return; }
-  if (withMask && !$("maskText").value.trim()) { showError("Enter what to mask first."); return; }
+  if (!todo.length) { showError("No open images in the batch. Reactivate batch makes the queued ones open again."); return; }
+  // the mask text is only needed for images that do not have a mask yet
+  if (withMask && todo.some((it) => !it.mask) && !$("maskText").value.trim()) { showError("Enter what to mask first."); return; }
+  saveForm();
   setBatchBusy(true);
-  let done = 0;
+  let done = 0, queued = 0, nomatch = 0;
   try {
     for (const it of todo) {
       $("batchInfo").textContent = `${withMask ? "Masking and queueing" : "Queueing"} ${++done} / ${todo.length}: ${it.label}`;
@@ -4081,20 +4098,22 @@ async function batchSubmitAll(withMask) {
           if (it.mask && it.maskMeta && it.maskMeta.w === size.work_w && it.maskMeta.h === size.work_h) {
             ({ blob } = await exportMaskBlob(it.mask)); // keep a mask you already made/painted
           } else {
+            if (!$("maskText").value.trim()) throw new Error("its mask was made for another size and there is no mask text to compute a new one");
             const res = await postJson("/api/mask", {
               image: it.name, megapixels: size.megapixels, text: $("maskText").value.trim(),
               threshold: num("threshold"), refine: parseInt($("refine").value, 10) || 0,
               expand: parseInt($("expand").value, 10) || 0, invert: $("invert").checked,
             });
             const im = await loadImage(res.mask_url);
-            if (!maskHasWhite(im)) { it.status = "nomask"; renderBatch(); continue; }
+            if (!maskHasWhite(im)) { it.status = "nomask"; nomatch++; renderBatch(); continue; }
             blob = await (await fetch(res.mask_url)).blob();
           }
           maskName = await uploadMaskBlob(blob);
         }
-        await submitJob(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: withMask,
-          megapixels: size.megapixels, resolution: size.resolution }));
+        await submitVariants(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: withMask,
+          megapixels: size.megapixels, resolution: size.resolution }), { quiet: true });
         it.status = "queued";
+        queued++;
       } catch (e) {
         it.status = "error";
         showError(`${it.label}: ${e.message}`);
@@ -4105,6 +4124,7 @@ async function batchSubmitAll(withMask) {
     setBatchBusy(false);
     renderBatch();
   }
+  batchSummary(todo.length, queued, nomatch);
 }
 
 // Upscale task: every open image of the folder becomes its own upscale run
@@ -4115,14 +4135,15 @@ async function upscaleAll() {
   if (!todo.length) { showError("No open images left."); return; }
   saveForm();
   setBatchBusy(true);
-  let done = 0;
+  let done = 0, queued = 0;
   try {
     for (const it of todo) {
       $("batchInfo").textContent = `Queueing ${++done} / ${todo.length}: ${it.label}`;
       try {
         await ensureUploaded(it);
-        await submitJob(upscaleParams(it.name), "/api/upscale");
+        await submitJob(upscaleParams(it.name), "/api/upscale", { quiet: true });
         it.status = "queued";
+        queued++;
       } catch (e) {
         it.status = "error";
         showError(`${it.label}: ${e.message}`);
@@ -4133,6 +4154,7 @@ async function upscaleAll() {
     setBatchBusy(false);
     renderBatch();
   }
+  batchSummary(todo.length, queued);
 }
 
 // black/white mask image -> white-on-transparent canvas (same format as the painted mask)
@@ -4202,8 +4224,10 @@ async function batchSubmitMasked() {
   stashCurrentMask();
   const todo = state.batch.filter((it) => it.status === "masked" && it.mask);
   if (!todo.length) { showError("No masked images to submit."); return; }
+  if (!presetById($("preset").value)) { showError("No model installed. Open the Download Center to get one."); return; }
+  saveForm();
   setBatchBusy(true);
-  let n = 0;
+  let n = 0, queued = 0;
   try {
     for (const it of todo) {
       $("batchInfo").textContent = `Queueing ${++n} / ${todo.length}: ${it.label}`;
@@ -4215,9 +4239,10 @@ async function batchSubmitMasked() {
         const { blob, white } = await exportMaskBlob(it.mask);
         if (!white) throw new Error("mask is empty");
         const maskName = await uploadMaskBlob(blob);
-        await submitJob(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: true,
-          megapixels: size.megapixels, resolution: size.resolution }));
+        await submitVariants(editParams({ image: it.name, srcW: it.srcW, srcH: it.srcH, maskName, useMask: true,
+          megapixels: size.megapixels, resolution: size.resolution }), { quiet: true });
         it.status = "queued";
+        queued++;
       } catch (e) {
         it.status = "error";
         showError(`${it.label}: ${e.message}`);
@@ -4228,6 +4253,7 @@ async function batchSubmitMasked() {
     setBatchBusy(false);
     renderBatch();
   }
+  batchSummary(todo.length, queued);
 }
 
 $("batchMaskAll").onclick = batchMaskAll;

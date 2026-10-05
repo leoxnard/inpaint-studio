@@ -822,9 +822,11 @@ async def delete_version(run_id: str, req: VersionReq):
         unlink(run["result_url"])
         if run.get("whole_url"):
             run["result_url"] = run.pop("whole_url")
+            run["result_kind"] = "whole"   # Runs names the view after what is left
         else:
             url = raw_view_url(run)
             run["result_url"] = url
+            run["result_kind"] = "raw"
             for k in ("raw_url", "source_url"):
                 if run.get(k) == url:
                     run[k] = None
@@ -1129,6 +1131,7 @@ async def save_post_files(run: dict, kind: str | None, untouched: Image.Image, i
     view and the input of later saves). Nothing on: the output files are the untouched images again and the run dir
     copy goes. Either way the files older versions used (<run>_fixed.png, <run>_grain.png, aligned.png) are removed."""
     run_id, d, out = run["id"], RUNS / run["id"], _output_dir()
+    run.pop("result_kind", None)   # a save writes the (pasted) result again
     name = run.get("filename") or f"{run_id}.png"
     whole_name = f"{Path(name).stem}_raw.png"
     out_url = lambda n: view_url({"filename": n, "subfolder": "InpaintStudio", "type": "output"}) + f"&t={stamp}"

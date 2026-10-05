@@ -1847,9 +1847,14 @@ function runViews(run) {
   const raw = run.rawUrl || run.sourceUrl;
   const corrected = !!(run.wholeUrl || run.sourceUrl || shown !== run.resultUrl || run.rawUrl?.startsWith("/data/runs/"));
   const paste = !!(run.maskUrl && run.rawUrl) || !!run.wholeUrl;
-  const out = [{ key: "result", url: shown, suffix: "",
-    label: paste ? "Pasted" : up ? (corrected ? "Post-processed" : "Upscale") : corrected ? "Post-processed" : "Result",
-    title: paste ? `The original with the masked area replaced${corrected ? ", corrected" : ""}` : corrected ? "With the post-processing" : "The result" }];
+  // after a deleted result the image left in its place keeps its own name (server: result_kind)
+  const out = [run.resultKind === "whole" ? { key: "result", url: shown, suffix: "", label: "Whole image",
+      title: "The model's whole generated image with the corrections" }
+    : run.resultKind === "raw" ? { key: "result", url: shown, suffix: "", label: up ? "Clean" : "Raw",
+      title: "The model's image exactly as it came out, nothing corrected" }
+    : { key: "result", url: shown, suffix: "",
+      label: paste ? "Pasted" : up ? (corrected ? "Post-processed" : "Upscale") : corrected ? "Post-processed" : "Result",
+      title: paste ? `The original with the masked area replaced${corrected ? ", corrected" : ""}` : corrected ? "With the post-processing" : "The result" }];
   if (run.wholeUrl) out.push({ key: "whole", url: run.wholeUrl, suffix: "_whole", label: "Whole image",
     title: "The model's whole generated image with the corrections" });
   if (raw && raw !== shown) out.push({ key: "raw", url: raw, suffix: "_raw", label: up ? "Clean" : "Raw",
@@ -2721,7 +2726,7 @@ $("loadSettings").onclick = () => { if (state.run?.params) loadRunSettings(state
 // a run's files after the server changed them (post-processing saved, one image deleted)
 function refreshRunFiles(run, stored) {
   const f = runFromStored(stored);
-  for (const k of ["resultUrl", "rawUrl", "wholeUrl", "sourceUrl", "postMaskUrl", "aligned", "fixedUrl", "grainUrl", "grain", "grainStrength", "filename"]) run[k] = f[k];
+  for (const k of ["resultUrl", "rawUrl", "wholeUrl", "sourceUrl", "resultKind", "postMaskUrl", "aligned", "fixedUrl", "grainUrl", "grain", "grainStrength", "filename"]) run[k] = f[k];
   run.match = null;
 }
 function runFromStored(r) {
@@ -2729,7 +2734,7 @@ function runFromStored(r) {
     id: r.id, serverId: r.id, prompt: r.params?.prompt || "", seed: r.params?.seed, steps: r.params?.steps,
     frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
-    wholeUrl: r.whole_url || null, sourceUrl: r.source_url || null, postMaskUrl: r.post_mask_url || null,
+    wholeUrl: r.whole_url || null, sourceUrl: r.source_url || null, resultKind: r.result_kind || null, postMaskUrl: r.post_mask_url || null,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
     aligned: r.aligned || null, fixedUrl: r.fixed_url || null, grainUrl: r.grain_url || null,
     grain: r.grain ?? (!!r.grain_url || (r.params?.task === "upscale" && !!r.params?.grain)), grainStrength: r.grain_strength ?? r.params?.grain_strength ?? GRAIN_STRENGTH, task: r.params?.task || "edit", preset: r.params?.preset || null,

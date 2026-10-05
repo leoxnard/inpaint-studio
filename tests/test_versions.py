@@ -48,6 +48,7 @@ def test_delete_result_promotes_whole(env):
     make(result_url=view("r.png"), whole_url=view("r_raw.png"), raw_url="/data/runs/r/raw.png")
     run = delete(c, "result").json()
     assert run["result_url"] == view("r_raw.png") and "whole_url" not in run and run["filename"] == "r_raw.png"
+    assert run["result_kind"] == "whole"
     assert not (out / "r.png").exists()
     run = delete(c, "raw").json()
     assert run["raw_url"] is None and not (d / "raw.png").exists()

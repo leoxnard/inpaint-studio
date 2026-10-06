@@ -1,5 +1,3 @@
-Brain note: ~/brain/Projects/inpaint-studio.md
-
 # Inpaint Studio
 
 Local UI on top of ComfyUI (127.0.0.1:8188). Three tasks: Edit (optional SAM3 mask, tune + brush/wand/bucket;
@@ -7,7 +5,7 @@ whole image / inpaint / free edit + paste / extend canvas), Generate (text to im
 models only; edits can still upscale their result). Single images or whole folders, model presets
 (Qwen-Image 2.1 UC/official/Viggle Turbo, Edit 2511, 2512, Z-Image), live per-step previews, post-processing.
 README.md is the user guide (tables + short bullets); keep it in sync when UI features change.
-Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy.
+Runs locally on macOS; the .app is self-contained so it can be shared. No deploy.
 
 ## Commands
 - Run: `./run.sh` (http://127.0.0.1:7380), or the Mac app built by `macos/build-app.sh`
@@ -57,9 +55,6 @@ Runs on Leonard's Mac; the .app is self-contained so it can be shared. No deploy
   Its loop frames in `web/guide/` come from a real Qwen-Image 2.1 UC run (guess_NN = step previews, noisy_NN = guess
   mixed with pixel noise at the step's sigma). `compare.js` renders the
   multi-run Compare view (detail grid with synced zoom/pan, split strips); `app.js` handles picking and labels.
-- Testing vs. using: Claude tests changes in the Browser pane against the dev server (launch config
-  `inpaint-studio-dev`, port 7381, code from the repo); Leonard uses the installed app (7380, bundled code).
-  Never test in or quit the app; only rebuild it at the end (`GET :7380/api/jobs` empty first).
 
 ## Rules
 - Gray-noise limit: on MPS the edit breaks at >= 4096 latent tokens for target or reference

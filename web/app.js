@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postAlign", "postColors", "postWarp", "postPoisson", "postGrain", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
-  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg",
+  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg", "enhance",
   "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleLong", "upscaleMB", "upscaleGrain", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -116,10 +116,10 @@ $("toastClose").onclick = hideToast;
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) {
-    let detail = "";
-    try { const j = await r.json(); detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); }
+    let detail = "", data = null;
+    try { data = (await r.json()).detail; detail = typeof data === "string" ? data : data?.message || JSON.stringify(data); }
     catch { detail = await r.text().catch(() => ""); }
-    throw new Error(`${path}: ${r.status} ${detail}`.slice(0, 600));
+    throw Object.assign(new Error(`${path}: ${r.status} ${detail}`.slice(0, 600)), { status: r.status, detail: data });
   }
   return r.json();
 }
@@ -1437,6 +1437,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     control: guideParams() || undefined,
     keep_whole: wholeImage() && $("keepWhole").checked && !removeBgOn(),
     remove_bg: removeBgOn() || undefined,
+    ...enhanceParams(),
     loras: state.loras.filter((l) => l.name && l.strength),
     outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas(srcW, srcH)) : undefined,
     outpaint_colors: outpaintOn() ? $("postColors").checked : undefined,
@@ -1545,12 +1546,41 @@ function jobFromSummary(sum) {
   job.status = sum.status || job.status;
   job.value = sum.value || job.value;
   if (sum.phase) job.phase = sum.phase;
+  if (sum.enhance) job.enhance = true;
   if (sum.reattached) job.reattached = true;
   if (sum.decode_steps) job.decodeSteps = sum.decode_steps;
   if (sum.size) job.size = sum.size;
   if (sum.frames) job.frames = sum.frames.map((f) => ({ ...f }));
   if (sum.started) job.started = sum.started;
   return job;
+}
+
+// The run needs files that are not installed (409 from /api/jobs): offer to download them, wait for the
+// Download Center queue and ComfyUI, then the caller queues the run again. False when the user says no.
+async function downloadThenRun(missing) {
+  const gbs = (b) => `${(b / 1e9).toFixed(1)} GB`;
+  const total = missing.reduce((a, m) => a + (m.size || 0), 0);
+  const ok = await askDialog({
+    title: "Download and run?",
+    intro: "This run needs files that are not installed yet. They are added to the Download Center and the run starts when they are done.",
+    build: (body) => {
+      const ul = document.createElement("ul");
+      for (const m of missing) { const li = document.createElement("li"); li.textContent = `${m.title} · ${gbs(m.size)}`; ul.append(li); }
+      body.append(ul);
+    },
+    action: `Download ${gbs(total)} and run`, collect: () => true,
+  });
+  if (!ok) return false;
+  await postJson("/api/setup/install", { items: missing.map((m) => m.item) });
+  showToast(`Downloading ${missing.map((m) => m.title).join(", ")}. The run starts when the download is done.`, { ms: 8000 });
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const st = await api("/api/setup").catch(() => null);
+    const steps = st?.install?.steps || {};
+    const bad = missing.find((m) => ["error", "cancelled"].includes(steps[m.item]?.state));
+    if (bad) throw new Error(`Download ${steps[bad.item].state === "error" ? "failed" : "cancelled"}: ${bad.title}. ${steps[bad.item].message || ""}`.trim());
+    if (st?.comfy?.up && missing.every((m) => steps[m.item]?.state === "done")) return true;
+  }
 }
 
 // Variations: the same run n times, each with its own seed (random, or seed, seed+1, …), tied by a group id
@@ -1565,7 +1595,14 @@ async function submitVariants(params, { quiet = false } = {}) {
 }
 
 async function submitJob(params, url = "/api/jobs", { quiet = false } = {}) {
-  const sum = await postJson(url, params);
+  let sum;
+  try {
+    sum = await postJson(url, params);
+  } catch (e) {
+    if (e.status !== 409 || !e.detail?.missing) throw e;
+    if (await downloadThenRun(e.detail.missing)) return submitJob(params, url, { quiet });
+    return;
+  }
   const job = jobFromSummary(sum);
   if (url === "/api/jobs") job.params = params;   // known only to the page that queued it ("Load settings in Create")
   renderQueue();
@@ -1777,6 +1814,7 @@ const PHASES = ["load", "encode", "sample", "decode", "save"];
 const PHASE_NAMES = { load: "Load", encode: "Text encoder", sample: "Sampling", decode: "VAE decode", save: "Save" };
 // Upscale runs have no text encoder: SeedVR2 encodes the image with the VAE, a classic upscaler only loads and upscales
 function phaseInfo(run) {
+  if (run.params?.enhance || run.enhance) return { list: ["prompt", ...PHASES], names: { ...PHASE_NAMES, prompt: "Improve prompt" } };
   if (runTask(run) !== "upscale") return { list: PHASES, names: PHASE_NAMES };
   const comp = (state.setup?.components || []).find((c) => c.key === run.params?.upscaler);
   if (comp?.engine === "seedvr2") return { list: PHASES, names: { ...PHASE_NAMES, encode: "VAE encode" } };
@@ -2151,6 +2189,10 @@ function runFacts(run) {
     !task || gen || up || (p.mode == null && p.use_mask == null) ? null : area);
   const model = up ? comp?.title || p.upscaler : preset ? `${preset.title}${p.quant ? ` · ${p.quant}` : ""}` : p.unet || "";
   add("model", "Model", model, null);
+  // Improve prompt: the prompt above is the enhancer's rewrite, this is what was typed
+  add("enhance", "Improve prompt", run.enhance_error ? `failed, used your prompt (${run.enhance_error})` : p.enhance ? "on" : "",
+    p.enhance ? "improved prompt" : null);
+  add("typed", "Your prompt", p.prompt_original || "", null);
   add("size", "Size", size.work_w ? `${size.work_w} × ${size.work_h}` : "", size.work_w ? `${size.work_w}×${size.work_h}` : null);
   if (up) {
     const long = p.upscale_long_side, mb = p.upscale_mb;
@@ -3188,7 +3230,7 @@ function loadRunSettings(run) {
     $("modelSel").value = pick;
     $("modelSel").dispatchEvent(new Event("change"));   // applies the preset defaults first
   }
-  const fields = { prompt: p.prompt, negative: p.negative, steps: p.steps, denoise: p.denoise, cfg: p.cfg, feather: p.feather,
+  const fields = { prompt: p.prompt_original ?? p.prompt, negative: p.negative, steps: p.steps, denoise: p.denoise, cfg: p.cfg, feather: p.feather,
     megapixels: p.megapixels, resolution: p.resolution, saveEvery: p.save_every, saveLast: p.save_last, seed: p.seed,
     upscale: p.upscale != null ? String(p.upscale) : null };
   for (const [id, v] of Object.entries(fields)) if (v != null) $(id).value = v;
@@ -3200,7 +3242,7 @@ function loadRunSettings(run) {
   $("keepNote").value = p.keep_note ?? (p.keep_identical === false ? "" : KEEP_NOTE);
   const checks = { postAlign: p.post_align, postColors: p.outpaint ? p.outpaint_colors : p.post_colors, postWarp: p.post_warp,
     postPoisson: p.post_poisson, postGrain: p.post_grain ?? p.crop_grain,
-    cleanOverlays: p.clean_overlays, keepWhole: p.keep_whole, removeBg: !!p.remove_bg };
+    cleanOverlays: p.clean_overlays, keepWhole: p.keep_whole, removeBg: !!p.remove_bg, enhance: !!p.enhance };
   for (const [id, v] of Object.entries(checks)) if (v != null) $(id).checked = !!v;
   syncRangeOutputs();
   $("randomSeed").checked = false;   // reproduce the run
@@ -3440,6 +3482,7 @@ function initApp() {
   renderHistory();
   loadModels();
   loadPromptHistory();
+  if ($("enhance").checked) loadEnhancer();   // the model list only matters while Improve prompt is on
 }
 
 function syncModeUi() {
@@ -3463,6 +3506,40 @@ $("cropContext").addEventListener("input", refreshCropDebounced);
 const REMOVE_BG_FAMILIES = ["qwen21", "qwen21_turbo"];
 function removeBgAvailable() { return state.task === "edit" && wholeImage() && REMOVE_BG_FAMILIES.includes(currentFamily()); }
 function removeBgOn() { return removeBgAvailable() && $("removeBg").checked; }
+// Improve prompt: a language model in LM Studio rewrites the prompt before the picture (enhance.py)
+state.enhancer = { up: false, models: [] };
+function enhanceOn() {
+  return REMOVE_BG_FAMILIES.includes(currentFamily()) && $("enhance").checked && state.enhancer.up && !!$("enhanceModel").value;
+}
+function enhanceParams() {
+  if (!enhanceOn()) return {};
+  const m = state.enhancer.models.find((x) => x.id === $("enhanceModel").value);
+  return { enhance: true, enhance_model: m.id, enhance_vision: m.vision || undefined };
+}
+async function loadEnhancer() {
+  state.enhancer = await api("/api/enhancer").catch(() => ({ up: false, models: [] }));
+  const sel = $("enhanceModel"), keep = sel.value || localStorage.getItem("enhanceModel");
+  sel.replaceChildren(...state.enhancer.models.map((m) =>
+    new Option(`${m.id}${m.vision ? " · sees images" : ""}${m.loaded ? " · loaded" : ""}`, m.id)));
+  if (state.enhancer.models.some((m) => m.id === keep)) sel.value = keep;
+  syncEnhance();
+}
+function syncEnhance() {
+  const avail = REMOVE_BG_FAMILIES.includes(currentFamily()), on = avail && $("enhance").checked;
+  $("enhance").disabled = !avail;
+  $("enhanceRow").classList.toggle("dim", !avail);
+  $("enhanceRow").title = avail ? $("enhanceRow").dataset.title : "Only for Qwen-Image 2.1 (or Turbo).";
+  $("enhanceModel").hidden = !on || !state.enhancer.models.length;
+  const m = state.enhancer.models.find((x) => x.id === $("enhanceModel").value);
+  const hint = !on ? "" : !state.enhancer.up ? "Start the server in LM Studio (Developer → Start server) to use this."
+    : !state.enhancer.models.length ? "No language model in LM Studio. Download one there, e.g. Qwen3.5 9B."
+    : state.task === "edit" && m && !m.vision ? "This model does not see images: it rewrites the text only." : "";
+  $("enhanceHint").textContent = hint;
+  $("enhanceHint").hidden = !hint;
+}
+$("enhanceRow").dataset.title = $("enhanceRow").title;
+$("enhance").addEventListener("change", () => { syncEnhance(); if ($("enhance").checked) loadEnhancer(); });
+$("enhanceModel").addEventListener("change", () => { try { localStorage.setItem("enhanceModel", $("enhanceModel").value); } catch {} syncEnhance(); });
 function syncRemoveBg() {
   const avail = removeBgAvailable(), on = removeBgOn();
   $("removeBg").disabled = !avail;
@@ -4936,6 +5013,7 @@ function syncTaskUi() {
   if (zedit && $("mode").value === "paste") { $("mode").value = "inpaint"; syncModeUi(); }
   syncAreaCards();
   syncRemoveBg();
+  syncEnhance();
   // turbo models: fixed 5-7 steps, no CFG; the server clamps and forces, the form just follows
   const turbo = fam === "qwen21_turbo";
   document.body.classList.toggle("fam-turbo", turbo);

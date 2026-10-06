@@ -89,6 +89,13 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   the viewer (`placeCorners`). Adjust mask (`web/maskedit.js`) uploads a mask, `PostReq.mask` → `run.post_mask_url` (`post_mask_url`).
 - Jobs: `finish_job` runs once per job; a silent (30 s) or closed ComfyUI socket falls back to polling (`follow_job`,
   5 failed polls end the run); deleting a queued/running run is a 409; `POST /api/jobs` input is checked (`JobCheck`).
+  Missing files (`installer.job_missing`: the preset's model / encoder / VAE / nodes, upscaler, control patch) → 409
+  `{message, missing: [{item, title, size}]}`; the page offers **Download and run?** (`downloadThenRun`) and queues the run again.
+- Improve prompt (`enhance.py`, params `enhance` / `enhance_model` / `enhance_vision`): before the picture a chat model in
+  LM Studio (`enhance.URL`, OpenAI API, `INPAINT_STUDIO_LLM_URL`) rewrites the prompt with the official Qwen-Image 2.1
+  enhancer system prompt (read from ComfyUI's `/templates/`); a vision model also gets the edit's images. `GET /api/enhancer`
+  lists LM Studio's chat models. Run keeps `prompt_original`; a failed rewrite → `run.enhance_error`, the run goes on.
+  Not ComfyUI's `TextGenerate`: on a Mac it keeps text models on the CPU (25–39 s/token) and `--gpu-only` fails (no int8 matmul on MPS).
 - Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
 - Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by

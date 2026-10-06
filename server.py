@@ -7,6 +7,7 @@ Step 2 runs the edit; ComfyUI's per-step latent previews are relayed to the brow
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
 import hashlib
 from contextlib import asynccontextmanager
@@ -35,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 import align
+import enhance
 import graphs
 import prepare
 import imports
@@ -59,7 +61,7 @@ RUNS.mkdir(parents=True, exist_ok=True)
 imports.apply()   # own files from the Download Center become components / presets
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
-                  "keep_identical", "preset", "quant", "task", "family",
+                  "keep_identical", "preset", "quant", "task", "family", "enhance", "prompt_original",
                   "upscale", "upscale_width", "upscale_long_side", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "upscale_colors", "group", "variant",
                   "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control")
 
@@ -1317,7 +1319,7 @@ def job_summary(job: dict) -> dict:
             "task": run["params"].get("task"), "upscaler": run["params"].get("upscaler"),
             "created": run["created"], "started": run.get("started"), "size": run.get("size"), "frames": run["frames"],
             "error": run.get("error"),
-            "phase": job.get("phase"), "decode_steps": decode_steps(job["params"]), "reattached": job.get("reattached", False)}
+            "phase": job.get("phase"), "enhance": bool(job["params"].get("enhance")), "decode_steps": decode_steps(job["params"]), "reattached": job.get("reattached", False)}
 
 
 async def finish_job(job: dict, status: str, **extra) -> None:
@@ -1340,6 +1342,8 @@ async def run_job(job: dict) -> None:
     chunk_starts = [a for a, _ in chunks]
     client_id = f"inpaint-studio-{uuid.uuid4().hex}"
     live_n, step = 0, 0
+    if params.get("enhance") and "prompt_original" not in params:
+        await enhance_prompt(job)
     try:
         async with websockets.connect(f"{COMFY_WS}?clientId={client_id}", max_size=64 * 1024 * 1024) as cws:
             pid = await submit(job["graph"], client_id, {"preview_method": "auto"})
@@ -1379,7 +1383,8 @@ async def run_job(job: dict) -> None:
                         job["phase"] = ph
                         await broadcast({"type": "node", "job_id": run_id, **ph})
                 elif kind == "execution_start":
-                    run.update(status="running", started=time.time())   # the UI's elapsed time survives reloads
+                    # the UI's elapsed time survives reloads; an improved prompt started the run already
+                    run.update(status="running", started=run.get("started") if params.get("enhance") else time.time())
                     save_run(run)
                     await broadcast({"type": "running", "job_id": run_id, "started": run["started"]})
                 elif kind == "progress" and (node == "sampler" or node.startswith("chunk_")):
@@ -1423,6 +1428,72 @@ async def run_job(job: dict) -> None:
     except Exception as e:  # keep the queue alive, report to the UI
         await drop_prompt(run.get("prompt_id"))
         await finish_job(job, "error", error=repr(e))
+
+
+async def enhance_prompt(job: dict) -> None:
+    """Improve prompt: the chosen LM Studio model rewrites the prompt (with the official Qwen-Image 2.1 system prompt,
+    for an edit it also gets the images) and its text goes into the run's graph. A failed rewrite keeps the user's
+    prompt (run["enhance_error"]) instead of failing the run."""
+    run, params = job["run"], job["params"]
+    k = enhance.kind(params.get("task", "edit"))
+    run.update(status="running", started=time.time())
+    save_run(run)
+    job["phase"] = {"phase": "prompt", "detail": params.get("enhance_model", "")}
+    await broadcast({"type": "running", "job_id": run["id"], "started": run["started"]})
+    await broadcast({"type": "node", "job_id": run["id"], **job["phase"]})
+    prompt = params.get("prompt", "")
+    try:
+        system = enhance.system_prompt(await comfy_json("GET", f"/templates/{enhance.TEMPLATE[k]}.json"))
+        images = None
+        if k == "i2i" and params.get("enhance_vision") and params.get("image"):
+            images = [await enhancer_image(n) for n in [params["image"], *(params.get("refs") or [])]]
+        body = enhance.request(params["enhance_model"], system, prompt, images, int(params.get("seed") or 0))
+        async with httpx.AsyncClient(timeout=enhance.TIMEOUT) as llm:
+            for attempt in range(2):   # a second try only when the answer came in the wrong language
+                r = await llm.post(f"{enhance.URL}/v1/chat/completions", json={**body, "seed": body["seed"] + attempt})
+                r.raise_for_status()
+                text = enhance.answer(r.json())
+                if not enhance.wrong_language(prompt, text):
+                    break
+        if not text:
+            raise ValueError("the model returned no text")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        run["enhance_error"] = str(getattr(e, "detail", None) or e)[:300] or type(e).__name__
+        save_run(run)
+        return
+    params["prompt_original"], params["prompt"] = prompt, text
+    run["params"].update(prompt=text, prompt_original=prompt)
+    job["graph"] = graphs.build_edit_graph(params)
+    save_run_config(run["id"], run, params, job["graph"])
+    save_run(run)
+    (RUNS / run["id"] / "job.json").write_text(json.dumps({"params": params, "graph": job["graph"]}, default=str))
+
+
+async def enhancer_image(name: str) -> str:
+    """An input image as a JPEG data URL of about 1 MP, enough for the model to see what is in it."""
+    img = await load_input(name)
+
+    def encode() -> str:
+        im = img.copy()
+        im.thumbnail((1024, 1024))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=90)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    return await asyncio.to_thread(encode)
+
+
+@app.get("/api/enhancer")
+async def enhancer_status():
+    """Improve prompt: is LM Studio's server running, and which chat models does it have."""
+    try:
+        async with httpx.AsyncClient(timeout=3) as llm:
+            r = await llm.get(f"{enhance.URL}/api/v0/models")
+            r.raise_for_status()
+        return {"up": True, "url": enhance.URL, "models": enhance.chat_models(r.json())}
+    except (httpx.HTTPError, ValueError):
+        return {"up": False, "url": enhance.URL, "models": []}
 
 
 async def drop_prompt(pid: str | None) -> None:
@@ -1738,13 +1809,11 @@ async def create_job(params: dict):
     params["ref_takes"] = [str(t or "").strip() for t in takes[:len(params["refs"])]]
     crops = params.get("ref_crops") or []   # optional {x, y, w, h} per reference
     params["ref_crops"] = [graphs.crop_box(c) for c in crops[:len(params["refs"])]]
+    need: list[str] = []   # extra components the job needs; checked with the model files below
     up = presets.COMPONENTS.get(params.get("upscaler") or "")
     if int(params.get("upscale") or 0) > 1 and up and up.get("kind") == "upscaler":
         # the upscale becomes its own run once the edit is done (two results: the edit and its upscale)
-        have = installer.installed(installer.load_config())
-        missing = [k for k in [params["upscaler"], *up.get("needs", [])] if not have[f"component:{k}"]]
-        if missing:
-            raise HTTPException(400, f"not installed: {', '.join(presets.COMPONENTS[k]['title'] for k in missing)} (see Download Center)")
+        need += [params["upscaler"], *up.get("needs", [])]
         params["then_upscale"] = {"upscaler": params["upscaler"], "factor": int(params["upscale"]),
                                   "color_correction": params.get("color_correction") or "lab"}
     params["upscale"] = 0
@@ -1768,16 +1837,21 @@ async def create_job(params: dict):
         source = c.get("source") or ("map" if c.get("is_map") else "photo")
         if source not in ("photo", "drawing", "map") or (source == "drawing" and c["type"] != "canny"):
             raise HTTPException(400, "control source must be photo, drawing (edges only) or map")
-        need = [key] + (["da3_small"] if c["type"] == "depth" and source == "photo" else [])
-        have = installer.installed(installer.load_config())
-        missing = [presets.COMPONENTS[k]["title"] for k in need if not have[f"component:{k}"]]
-        if missing:
-            raise HTTPException(400, f"not installed: {', '.join(missing)} (see Download Center → Control)")
+        need += [key] + (["da3_small"] if c["type"] == "depth" and source == "photo" else [])
         params["control"] = {"type": c["type"], "image": c["image"], "source": source,
                              "strength": float(c.get("strength", presets.COMPONENTS[key].get("strength", 1.0))),
                              "end": float(c.get("end", 1.0))}
         params["control_patch"] = presets.file_name(presets.COMPONENTS[key])
         params["control_depth_model"] = presets.file_name(presets.COMPONENTS["da3_small"])
+    if params.get("enhance"):   # Improve prompt: Qwen-Image 2.1 only, an LM Studio model rewrites the prompt first
+        if params.get("family") not in enhance.FAMILIES:
+            raise HTTPException(400, "Improve prompt needs Qwen-Image 2.1")
+        if not params.get("enhance_model"):
+            raise HTTPException(400, "Improve prompt needs a model (LM Studio)")
+    missing = installer.job_missing(installer.installed(installer.load_config()), params, need)
+    if missing:   # the page offers to download them and queue the run again (409 + the items)
+        info = [installer.item_info(i) for i in missing]
+        raise HTTPException(409, {"message": f"Not installed: {', '.join(i['title'] for i in info)}", "missing": info})
     if params.get("family") == "qwen21_turbo":  # fixed few-step schedule, no CFG
         params.update(steps=graphs.turbo_steps(params["steps"]), cfg=1.0)
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"

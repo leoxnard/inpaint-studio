@@ -294,6 +294,11 @@
         <label>
           <textarea id="prompt" rows="4">Replace the person with a walking dog. Keep everything else unchanged.</textarea>
         </label>
+        <div class="row" id="enhanceRow" title="Qwen-Image 2.1: before the picture, a language model in LM Studio rewrites your prompt into the detailed description the model was trained on (the official Qwen prompt enhancer instructions). A vision model also looks at the images of an edit. Takes 5-20 s. The run shows the rewritten prompt and keeps yours; if the rewrite fails, your prompt is used.">
+          <label class="check"><input type="checkbox" id="enhance"> Improve prompt</label>
+          <select id="enhanceModel" class="compact" aria-label="Language model for Improve prompt" hidden></select>
+        </div>
+        <p class="hint" id="enhanceHint" hidden></p>
         <label class="check edit-only" title="Adds an instruction to remove watermarks, logos, captions and overlaid text. With a mask only the masked area can change.">
           <input type="checkbox" id="cleanOverlays"> Remove watermarks and text
         </label>

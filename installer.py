@@ -187,6 +187,34 @@ def needed_components(pid: str) -> list[str]:
     return [pr["text_encoder"], pr["vae"], *pr.get("nodes", [])]
 
 
+def job_missing(have: dict[str, bool], params: dict, extra: list[str] = ()) -> list[str]:
+    """Install items a job needs that are not there: the preset's model file, text encoder, VAE and nodes (only
+    where the job uses the preset's own file, not an Advanced override) plus extra components (upscaler, control, …)."""
+    items = []
+    pid = params.get("preset")
+    if pid in presets.PRESETS:
+        pr = presets.PRESETS[pid]
+        q = params.get("quant") if params.get("quant") in pr["quants"] else pr["default_quant"]
+        res = presets.resolve(pid, q)
+        if params.get("unet") == res["unet"]:
+            items.append(f"model:{pid}:{q}")
+        items += [f"component:{c}" for k, c in (("clip", pr["text_encoder"]), ("vae", pr["vae"])) if params.get(k) == res[k]]
+        items += [f"component:{c}" for c in pr.get("nodes", [])]
+    items += [f"component:{c}" for c in extra]
+    return [i for i in dict.fromkeys(items) if not have.get(i)]
+
+
+def item_info(item: str) -> dict[str, Any]:
+    """Title and size of an install item, for the "Download and run" dialog."""
+    kind, _, rest = item.partition(":")
+    if kind == "component":
+        c = presets.COMPONENTS[rest]
+        return {"item": item, "title": c["title"], "size": c["size"]}
+    pid, _, q = rest.partition(":")
+    pr = presets.PRESETS[pid]
+    return {"item": item, "title": f"{pr['title']} ({q})", "size": pr["quants"][q]["size"]}
+
+
 def ready(have: dict[str, bool]) -> bool:
     return have["comfyui"] and have["gguf_node"] and any(preset_status(have, pid)["complete"] for pid in presets.PRESETS)
 

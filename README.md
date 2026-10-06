@@ -272,6 +272,13 @@ The × on a single result tile hides just that one.
 ## Models and Download Center
 
 The model picker is in the top bar. The **Download Center** (top bar; while it is open the button reads **Back to app**) installs and deletes models, upscalers and LoRAs.
+If a run needs a file that is not installed (model, text encoder, VAE, upscaler, control patch), a **Download and run?**
+dialog lists it with its size; confirm and the run starts by itself once the download is done.
+
+**Improve prompt** (under the prompt, Qwen-Image 2.1): a language model in **LM Studio** rewrites your prompt into the
+detailed description Qwen-Image was trained on (the official Qwen prompt enhancer instructions) before the picture is made.
+Start LM Studio's server (Developer → Start server) and pick a model, e.g. Qwen3.5 9B; a model that "sees images" also
+looks at the picture of an edit. It takes 5–20 s. The run shows the new prompt and keeps yours (**Your prompt** in the details).
 For each model you pick a quantisation in an LM Studio style list (format, RAM fit, recommended for
 this Mac, downloaded, size). Q4 (Q4_K_M where there is one) is preselected; models without a Q4 file get the largest
 quantisation that fits. A bar at the top jumps between the sections (Components, Models, Upscalers, Control,

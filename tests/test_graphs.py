@@ -342,3 +342,11 @@ def test_control_guidance_chain():
     assert "ctrl_map" not in g
     g = graphs.build_edit_graph({**base, "family": "zimage", "control": {"type": "canny", "image": "in/a.png", "source": "drawing"}})
     assert g["ctrl_map"]["class_type"] == "ImageInvert" and g["model"]["inputs"]["image"] == ["ctrl_map", 0]
+
+
+def test_reseed_seedvr2_sets_the_sampler_seed():
+    comp = {"engine": "seedvr2"}
+    g = graphs.build_upscale_graph("in.png", comp, {"model": "m", "vae": "v"}, 2, "p", seed=1)
+    assert graphs.reseed_seedvr2(g, 7)
+    assert g["sampler"]["inputs"]["seed"] == 7
+    assert not graphs.reseed_seedvr2(graphs.build_upscale_graph("in.png", {"scale": 4}, {"model": "m"}, 2, "p"), 7)

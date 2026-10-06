@@ -104,5 +104,7 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   DiffSynth patches (`QwenImageDiffsynthControlnet`) via `ModelPatchLoader` (models/model_patches); depth map from
   Depth Anything 3 small (models/geometry_estimation), edges from core `Canny`. The map is saved as `<run>/control.png`.
 - Restarting the dev server stops a ComfyUI it started itself (and every run on it); check `:8188` after a restart.
+- SeedVR2 int8 on MPS: some seeds give NaN = an all-black image, the same seed always again (colour correction is not the cause).
+  A black upscale result runs again with a new seed (`server.rerun_seedvr2`, `graphs.reseed_seedvr2`, at most `SEEDVR2_ATTEMPTS`); Retry also re-seeds.
 - An edit with Upscale on runs as two results: the edit, then an upscale run of its (post-processed) result
   (`params.then_upscale` → `follow_up_upscale`, the upscale run has `upscale_of`).

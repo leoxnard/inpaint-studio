@@ -850,8 +850,12 @@ async def retry_run(run_id: str):
     swap = re.compile(rf"(?<!{re.escape(SUBFOLDER)}/){re.escape(run_id)}")
     params = json.loads(swap.sub(new_id, json.dumps(stored["params"])))
     graph = json.loads(swap.sub(new_id, json.dumps(stored["graph"])))
+    if params.get("task") == "upscale":   # a SeedVR2 seed that gave a black image would give it again
+        seed = int.from_bytes(os.urandom(4), "big")
+        if graphs.reseed_seedvr2(graph, seed):
+            params["seed"] = seed
     old = json.loads((RUNS / run_id / "run.json").read_text())
-    run = {"id": new_id, "created": time.time(), "status": "queued", "params": old.get("params", {}),
+    run = {"id": new_id, "created": time.time(), "status": "queued", "params": {**old.get("params", {}), "seed": params.get("seed")},
            "size": old.get("size"), "frames": []}
     if old.get("before_url") and params.get("task") == "upscale":
         run["before_url"] = old["before_url"]
@@ -1218,6 +1222,7 @@ class UpscaleReq(BaseModel):
     grain: bool = True            # give the result the original's grain back (prepare.add_grain)
     grain_strength: float = Field(prepare.GRAIN_STRENGTH, ge=0, le=3)
     colors: bool | None = None    # match the colours to the original (align.match_colors_scaled); None: on unless SeedVR2
+    seed: int | None = None       # SeedVR2's sampler seed (random when not given)
 
 
 _bpp_cache: dict[str, float] = {}
@@ -1269,7 +1274,7 @@ async def upscale(req: UpscaleReq):
     files = {"model": presets.file_name(comp)}
     if comp.get("engine") == "seedvr2":
         files["vae"] = presets.file_name(presets.COMPONENTS[comp["needs"][0]])
-    seed = int.from_bytes(os.urandom(4), "big")
+    seed = int.from_bytes(os.urandom(4), "big") if req.seed is None else req.seed
     graph = graphs.build_upscale_graph(req.image, comp, files, factor, f"InpaintStudio/{run_id}",
                                        req.color_correction, seed, size)
     what = (f"to {req.long_side} px on the long side" if req.long_side else f"to about {req.megabytes:g} MB ({size[0]} px wide)"
@@ -1525,6 +1530,37 @@ async def follow_up_upscale(run: dict, params: dict) -> None:
         print(f"follow-up upscale of {run['id']} failed: {e!r}")
 
 
+SEEDVR2_ATTEMPTS = 3   # an upscale whose SeedVR2 result is black runs again with a new seed, at most this often in all
+
+
+async def is_black(img: dict) -> bool:
+    """True when every pixel of the output image is black (what NaN becomes when ComfyUI saves it)."""
+    try:
+        im = await _fetch_view(view_url(img))
+    except Exception:
+        return False
+    return all(hi == 0 for _, hi in im.convert("RGB").getextrema())
+
+
+async def rerun_seedvr2(job: dict, black: dict) -> bool:
+    """Runs a SeedVR2 upscale again with a new seed (graphs.reseed_seedvr2); False when the attempts are used up."""
+    run, params = job["run"], job["params"]
+    job["attempt"] = job.get("attempt", 1) + 1
+    seed = int.from_bytes(os.urandom(4), "big")
+    if job["attempt"] > SEEDVR2_ATTEMPTS or not graphs.reseed_seedvr2(job["graph"], seed):
+        return False
+    print(f"{run['id']}: SeedVR2 gave a black image with seed {params.get('seed')}, running again with seed {seed}")
+    params["seed"] = run["params"]["seed"] = seed
+    (RUNS / run["id"] / "job.json").write_text(json.dumps({"params": params, "graph": job["graph"]}, default=str))
+    try:  # the next result takes the same file name
+        ((COMFY_OUTPUT or Path(installer.load_config()["output_dir"])) / black.get("subfolder", "") / black["filename"]).unlink()
+    except OSError:
+        pass
+    run["frames"] = []
+    await run_job(job)
+    return True
+
+
 async def complete_run(job: dict, pid: str) -> None:
     MODELS["loaded"] = True
     await _complete_run(job, pid)
@@ -1547,6 +1583,11 @@ async def _complete_run(job: dict, pid: str) -> None:
         run["control_url"] = view_url(control)
     if not res:
         await finish_job(job, "error", error="ComfyUI finished without a result image")
+        return
+    if params.get("task") == "upscale" and params.get("color_correction") and await is_black(res):
+        if await rerun_seedvr2(job, res):
+            return
+        await finish_job(job, "error", error=f"SeedVR2 gave a black image {SEEDVR2_ATTEMPTS} times (NaN in the model); try again")
         return
     use_mask = params.get("use_mask") and params.get("mask")
     run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,

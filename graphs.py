@@ -606,6 +606,16 @@ def _seedvr2(g: dict[str, Any], image: list, files: dict[str, str], factor: floa
     return [k("post"), 0]
 
 
+def reseed_seedvr2(graph: dict[str, Any], seed: int) -> bool:
+    """Gives the SeedVR2 sampler(s) in `graph` a new seed; False when the graph has none. Some seeds make the int8
+    SeedVR2 models put out NaN on MPS (a black image), the same seed always again, so a retry needs a new one."""
+    conds = {k for k, n in graph.items() if n["class_type"] == "SeedVR2Conditioning"}
+    samplers = [n for n in graph.values() if n["class_type"] == "KSampler" and n["inputs"]["positive"][0] in conds]
+    for n in samplers:
+        n["inputs"]["seed"] = seed
+    return bool(samplers)
+
+
 def _scale(image: list, factor: float, size: tuple[int, int] | None) -> dict:
     """Lanczos resize by `factor`, or to exactly `size` (w, h) when given."""
     if size:

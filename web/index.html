@@ -294,7 +294,7 @@
         <label>
           <textarea id="prompt" rows="4">Replace the person with a walking dog. Keep everything else unchanged.</textarea>
         </label>
-        <label class="check" title="Adds an instruction to remove watermarks, logos, captions and overlaid text (when generating: to create none). With a mask only the masked area can change.">
+        <label class="check edit-only" title="Adds an instruction to remove watermarks, logos, captions and overlaid text. With a mask only the masked area can change.">
           <input type="checkbox" id="cleanOverlays"> Remove watermarks and text
         </label>
         <label class="check edit-only" id="removeBgRow" title="Qwen-Image 2.1, whole image: adds the instruction of ComfyUI's background removal template. The result is a PNG with a transparent background. Your prompt can say what to keep (or stay empty). No upscale or post-processing, they would drop the transparency.">
@@ -445,7 +445,6 @@
         <div class="mcmp" id="multiCmp" hidden></div>
         <button type="button" class="zoom-badge" id="viewZoomBadge" hidden title="Reset zoom (0)">100 %</button>
       </div>
-      <div class="variants" id="variantStrip" hidden></div>
       <div class="progress-wrap" id="progressWrap" hidden>
         <div class="progress"><div class="bar" id="progressBar"></div></div>
         <div class="hint" id="progressText"></div>

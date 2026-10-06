@@ -123,7 +123,7 @@ Checkboxes under the prompt:
 
 | Option | Effect |
 |---|---|
-| **Remove watermarks and text** | Adds an instruction to remove watermarks, logos, captions and text (when generating: to create none). With a mask, only the masked area changes. |
+| **Remove watermarks and text** | Edits only: adds an instruction to remove watermarks, logos, captions and text. With a mask, only the masked area changes. |
 | **Keep everything else identical** | Whole image only. Adds the keep-identical instruction after your prompt. |
 | **Remove background** | Qwen-Image 2.1 / Turbo, whole image only. Uses ComfyUI's background removal template, the result is a transparent PNG. Upscale and post-processing are off for these runs. |
 
@@ -244,7 +244,7 @@ The same options are in Create and run automatically when the job is done.
   workflow inside: drop it onto ComfyUI to open the exact graph.
 
 **Variations:** the ×1 … ×8 menu next to the queue button runs the same edit several times, each with
-its own seed (random, or seed, seed + 1, …). They show as a strip under the image in Runs.
+its own seed (random, or seed, seed + 1, …). Each one is a separate run in the results.
 
 **Select:** next to the result filters. Click tiles to pick them, Shift+click picks a range (also from the open run),
 **All** / **None** work on the current filter. The icons work on all picked results, or on the open run when nothing is picked:

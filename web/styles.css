@@ -770,12 +770,6 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 #resultFilter button { flex: none; }
 @media (max-width: 480px) { #resultFilter button { padding: 0 10px; } }
 
-/* variations of one queued batch, under the viewer */
-.variants { display: flex; gap: 8px; overflow-x: auto; padding: 8px 0; scrollbar-width: thin; }
-.variants button { flex: none; width: 64px; height: 64px; padding: 0; border-radius: 10px; overflow: hidden;
-  border: 2px solid transparent; background: var(--surface, transparent); display: grid; place-items: center; font-size: 12px; }
-.variants button.active { border-color: var(--ink); }
-.variants img { width: 100%; height: 100%; object-fit: cover; }
 .runbox .row #variants { flex: none; width: auto; min-height: 44px; }
 /* Compare: pickable tiles get a dashed outline, picked ones a stronger one and their number */
 /* selecting: picked tiles get the same border as the open run */
@@ -785,7 +779,7 @@ body.mode-upscale #settingsCol > .sec:not(.upscale-only) { display: none !import
 .rtile .same-src { font-size: 11px; color: var(--muted); }
 
 /* Compare view (web/compare.js): replaces the single-run viewer */
-body.cmp-active #runsView .runhead, body.cmp-active #viewerTools, body.cmp-active #pipeline, body.cmp-active #variantStrip,
+body.cmp-active #runsView .runhead, body.cmp-active #viewerTools, body.cmp-active #pipeline,
 body.cmp-active #progressWrap, body.cmp-active #postPanel, body.cmp-active #stepsBar,
 body.cmp-active #bigArea > :not(#multiCmp) { display: none !important; }
 body.cmp-active .runs-center .bigarea { height: max(360px, calc(100vh - 330px)); background: none; }

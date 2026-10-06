@@ -1433,7 +1433,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     // only an edited instruction is sent; otherwise the server adds its default (graphs.KEEP_IDENTICAL)
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
-    clean_overlays: $("cleanOverlays").checked,
+    clean_overlays: state.task !== "generate" && $("cleanOverlays").checked,
     control: guideParams() || undefined,
     keep_whole: wholeImage() && $("keepWhole").checked && !removeBgOn(),
     remove_bg: removeBgOn() || undefined,
@@ -2123,7 +2123,6 @@ function renderViewer() {
   }
   updateProgressText();
   renderDetails(run, status);
-  renderVariants(run);
   renderQueue();
   renderHistory();
   syncRunHash();
@@ -2698,26 +2697,6 @@ function exitCompare() {
   syncCompareUi();
   renderHistory();
   renderViewer();
-}
-
-// the other variations of the same queued batch, as thumbnails under the viewer
-function renderVariants(run) {
-  const strip = $("variantStrip");
-  const group = run?.params?.group;
-  const sibs = group ? [...state.runs, ...state.jobs.values()].filter((r) => r.params?.group === group) : [];
-  strip.hidden = sibs.length < 2;
-  if (strip.hidden) return;
-  strip.innerHTML = "";
-  sibs.sort((x, y) => (x.params.variant ?? 0) - (y.params.variant ?? 0));
-  for (const r of sibs) {
-    const b = document.createElement("button");
-    b.className = r === run ? "active" : "";
-    b.title = `Variation ${(r.params.variant ?? 0) + 1} · seed ${r.params.seed}`;
-    if (r.resultUrl) { const img = document.createElement("img"); img.src = r.resultUrl; img.alt = ""; b.append(img); }
-    else b.textContent = runStatus(r) === "running" ? "…" : runStatus(r) === "error" ? "Failed" : "Waiting";
-    b.onclick = () => selectRun(r);
-    strip.append(b);
-  }
 }
 
 function renderDetails(run, status) {

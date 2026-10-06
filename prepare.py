@@ -149,16 +149,24 @@ def grain_need(o: np.ndarray, src: np.ndarray, r: np.ndarray, new: np.ndarray, s
     return strength * np.sqrt(np.maximum(po ** 2 - pr ** 2, 0))
 
 
-def need_map(need: np.ndarray, r: np.ndarray) -> np.ndarray:
-    """Per-pixel strength for one frequency band: the brightness band values interpolated at each pixel."""
-    lum = _luma(r)
+def need_map(need: np.ndarray, r: np.ndarray, lum: np.ndarray | None = None) -> np.ndarray:
+    """Per-pixel strength for one frequency band: the brightness band values interpolated at each pixel
+    (`lum`: r's _luma, when already known)."""
+    lum = _luma(r) if lum is None else lum
     return np.stack([np.interp(lum, LUMA_CENTERS, need[:, c]).astype(np.float32) for c in range(need.shape[1])], -1)
 
 
-def grain_layer(o: np.ndarray, src: np.ndarray, need: np.ndarray, r: np.ndarray, seed: int = 0) -> np.ndarray:
+GRAIN_FIT_STEPS = 2   # re-measure and re-mix rounds in grain_layer
+
+
+def grain_layer(o: np.ndarray, src: np.ndarray, need: np.ndarray, r: np.ndarray, seed: int = 0,
+                new: np.ndarray | None = None) -> np.ndarray:
     """Noise to add to r: white noise with the original's channel mix (film / sensor grain is mostly the same in
     all channels), split into the frequency bands, each scaled to what is missing there at each pixel's brightness.
-    Built at the original's size (same grain at the same print size) and resized to r."""
+    Built at the original's size (same grain at the same print size) and resized to r.
+    The DoG bands overlap, so noise put into one band also shows in its neighbours (coarse grain came out up to
+    1.5x too strong in the finest band and 0.6x in the coarsest): the result is measured again the way grain_need
+    measures it (at o's size, on `new`, default everywhere) and the band strengths re-mixed, GRAIN_FIT_STEPS times."""
     flat = flat_pixels(o, src)
     d = _band(o, *FREQ_BANDS[1])[flat]
     if len(d) > 200_000:
@@ -168,9 +176,10 @@ def grain_layer(o: np.ndarray, src: np.ndarray, need: np.ndarray, r: np.ndarray,
     rng = np.random.default_rng(seed)
     white = (np.sqrt(corr) * rng.standard_normal(o.shape[:2] + (1,), np.float32)
              + np.sqrt(1 - corr) * rng.standard_normal(o.shape, np.float32))
-    out = np.zeros(r.shape, np.float32)
+    bands = []
     for f, (lo, hi) in enumerate(FREQ_BANDS):
         if need[f].max() <= 0.05:
+            bands.append(None)
             continue
         nb = _band(white, lo, hi)
         nb /= _robust_std(nb.reshape(-1, nb.shape[-1])).clip(1e-6)
@@ -178,8 +187,29 @@ def grain_layer(o: np.ndarray, src: np.ndarray, need: np.ndarray, r: np.ndarray,
             nb = cv2.resize(nb, (r.shape[1], r.shape[0]), interpolation=cv2.INTER_CUBIC)
             seen = cv2.resize(nb, (o.shape[1], o.shape[0]), interpolation=cv2.INTER_AREA)
             nb /= _robust_std(seen.reshape(-1, nb.shape[-1])).clip(1e-6)
-        out += nb * need_map(need[f], r)
-    return out
+        bands.append(nb)
+
+    lum = _luma(r)
+
+    def mix(strength: np.ndarray) -> np.ndarray:
+        out = np.zeros(r.shape, np.float32)
+        for f, nb in enumerate(bands):
+            if nb is not None:
+                out += nb * need_map(strength[f], r, lum)
+        return out
+
+    new = np.ones(o.shape[:2], bool) if new is None else new
+    small = lambda img: img if img.shape == o.shape else cv2.resize(img, (o.shape[1], o.shape[0]), interpolation=cv2.INTER_AREA)
+    clean = grain_profile(small(r), new)
+    strength = need.copy()
+    noise = mix(strength)
+    for _ in range(GRAIN_FIT_STEPS):
+        got = grain_profile(small(np.clip(r + noise, 0, 255)), new)
+        added = np.sqrt(np.maximum(got ** 2 - clean ** 2, 1e-4))
+        live = need > 0.05
+        strength = np.where(live, strength * np.clip(need / added, 0.5, 2), 0)
+        noise = mix(strength)
+    return noise
 
 
 def add_grain(original: Image.Image, result: Image.Image, seed: int = 0, mask: Image.Image | None = None,
@@ -203,7 +233,7 @@ def add_grain(original: Image.Image, result: Image.Image, seed: int = 0, mask: I
     need = grain_need(o, src, small, new, strength)
     if need.max() <= 0.5:   # below that it is 8-bit banding, not grain
         return result.convert("RGB")
-    noise = grain_layer(o, src, need, r, seed)
+    noise = grain_layer(o, src, need, r, seed, new)
     if mask is not None:
         noise *= (np.asarray(mask.convert("L").resize((r.shape[1], r.shape[0]), Image.BILINEAR), np.float32) / 255)[..., None]
     r += noise
@@ -245,7 +275,7 @@ def stitch(original: Image.Image, result: Image.Image, mask: Image.Image, box: d
         hard = np.asarray(crop(mask, box)) > 127
         need = grain_need(o, ~hard, r, hard, grain_strength)
         if need.max() > 0.5:
-            noise = grain_layer(o, ~hard, need, r, seed)
+            noise = grain_layer(o, ~hard, need, r, seed, hard)
             region = Image.fromarray(np.clip(r + noise, 0, 255).astype(np.uint8))
     out = original.copy()
     out.paste(region, (box["x"], box["y"]), m)

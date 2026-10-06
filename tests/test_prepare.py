@@ -205,3 +205,17 @@ def test_coarse_detail_beyond_a_grain_spectrum_is_not_added():
     profile = prepare.grain_profile(np.asarray(original, np.float32), np.ones((200, 200), bool))
     assert (need[2] < profile[2] * 0.9).all()          # the blotchy coarse part is cut back
     assert np.allclose(need[0], profile[0], rtol=0.05)  # the fine grain is added in full
+
+
+def test_add_grain_keeps_the_grain_size_of_coarse_grain():
+    # blurred grain: the overlapping DoG bands used to put too much into the finest band and too little into the coarsest
+    rng = np.random.default_rng(2)
+    base = np.tile(np.linspace(40, 200, 256, dtype=np.float32)[None, :, None], (192, 1, 3))
+    noise = cv2.GaussianBlur(rng.standard_normal(base.shape).astype(np.float32), (0, 0), 0.6)
+    grainy = np.clip(base + noise / noise.std() * 6, 0, 255).astype(np.uint8)
+    clean = Image.fromarray(base.astype(np.uint8)).resize((512, 384), Image.BICUBIC)
+    out = np.asarray(prepare.add_grain(Image.fromarray(grainy), clean, seed=3).resize((256, 192), Image.BOX), np.float32)
+    everywhere = np.ones((192, 256), bool)
+    want = prepare.grain_profile(grainy.astype(np.float32), everywhere).mean((1, 2))
+    got = prepare.grain_profile(out, everywhere).mean((1, 2))
+    assert np.all(np.abs(got / want - 1) < 0.15), got / want

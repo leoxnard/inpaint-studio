@@ -194,28 +194,21 @@ def test_grain_strength_scales_the_added_grain():
     assert prepare.add_grain(original, clean, strength=0).tobytes() == clean.tobytes()
 
 
-def test_coarse_detail_beyond_a_grain_spectrum_is_not_added():
-    rng = np.random.default_rng(7)
-    base = np.full((200, 200, 3), 128, np.float32)
-    fine = rng.normal(0, 4, base.shape).astype(np.float32)
-    blobs = cv2.GaussianBlur(rng.normal(0, 1, (200, 200)).astype(np.float32), (0, 0), 2.5)[..., None]
-    original = Image.fromarray(np.clip(base + fine + blobs / blobs.std() * 6, 0, 255).astype(np.uint8))
-    need = prepare.grain_need(np.asarray(original, np.float32), np.ones((200, 200), bool),
-                              base, np.ones((200, 200), bool), 1.0)
-    profile = prepare.grain_profile(np.asarray(original, np.float32), np.ones((200, 200), bool))
-    assert (need[2] < profile[2] * 0.9).all()          # the blotchy coarse part is cut back
-    assert np.allclose(need[0], profile[0], rtol=0.05)  # the fine grain is added in full
-
-
-def test_add_grain_keeps_the_grain_size_of_coarse_grain():
-    # blurred grain: the overlapping DoG bands used to put too much into the finest band and too little into the coarsest
+@pytest.mark.parametrize("blur", [0.6, 2.0])
+def test_add_grain_keeps_the_grain_size(blur):
+    # the old band model capped coarse grain and made it fine pixel noise; the spectrum must survive an upscale
     rng = np.random.default_rng(2)
-    base = np.tile(np.linspace(40, 200, 256, dtype=np.float32)[None, :, None], (192, 1, 3))
-    noise = cv2.GaussianBlur(rng.standard_normal(base.shape).astype(np.float32), (0, 0), 0.6)
+    base = np.tile(np.linspace(60, 190, 256, dtype=np.float32)[None, :, None], (192, 1, 3))
+    noise = cv2.GaussianBlur(rng.standard_normal(base.shape).astype(np.float32), (0, 0), blur)
     grainy = np.clip(base + noise / noise.std() * 6, 0, 255).astype(np.uint8)
     clean = Image.fromarray(base.astype(np.uint8)).resize((512, 384), Image.BICUBIC)
     out = np.asarray(prepare.add_grain(Image.fromarray(grainy), clean, seed=3).resize((256, 192), Image.BOX), np.float32)
     everywhere = np.ones((192, 256), bool)
-    want = prepare.grain_profile(grainy.astype(np.float32), everywhere).mean((1, 2))
-    got = prepare.grain_profile(out, everywhere).mean((1, 2))
-    assert np.all(np.abs(got / want - 1) < 0.15), got / want
+    spectrum = lambda img: prepare._spectrum(prepare.grain_tiles(img, everywhere)[0]).mean(0)
+    f = np.fft.fftfreq(prepare.GRAIN_TILE)
+    rad = np.hypot(*np.meshgrid(f, f, indexing="ij"))
+    want, got = spectrum(grainy.astype(np.float32)), spectrum(out)
+    centroid = lambda p: (p * rad).sum() / p.sum()      # the grain size, as a mean frequency
+    assert abs(centroid(got) / centroid(want) - 1) < 0.15, (centroid(got), centroid(want))
+    grain = ~prepare._tile_basis()[2]                   # and its strength (slower waves are shading, left out)
+    assert abs(got[grain].sum() / want[grain].sum() - 1) < 0.2

@@ -220,10 +220,10 @@ The same options are in Create and run automatically when the job is done.
   is measured at the original's size and applied at full size.
 - **Local warp:** DIS optical flow (OpenCV).
 - **Clean edges:** a graph-cut seam in a band around the mask edge (OpenCV).
-- **Film grain:** measured only on flat areas of the original, for three frequency bands and six
-  brightness bands. Only what the result lacks per band is added, so the VAE's fine pattern does not
-  count as grain and the grain stays strongest where it was. Bands with few flat pixels are pulled
-  towards the overall value and coarse bands are capped, so picture detail is not added as blotchy noise.
+- **Film grain:** its power spectrum is measured on the flattest 32 px tiles of the original (median per
+  frequency, so a tile with picture texture does not count) and per brightness band. Only what the result
+  lacks per frequency is added, as noise with exactly that spectrum: coarse grain stays coarse, fine grain
+  stays fine, the VAE's fine pattern does not count as grain, and the grain stays strongest where it was.
 
 </details>
 

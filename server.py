@@ -1575,6 +1575,7 @@ class IdeasReq(BaseModel):
     count: int = Field(0, ge=0, le=enhance.IDEAS_MAX)
     same_style: bool = False
     add_title: bool = False
+    title_position: str = "auto"   # not auto: every title goes there, the model does not choose
 
 
 @app.get("/api/title")
@@ -1595,14 +1596,15 @@ async def prompt_ideas(req: IdeasReq):
         except HTTPException:
             pass   # ComfyUI down: nothing to free
     fonts = await asyncio.to_thread(title.fonts) if req.add_title else None
-    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)), fonts)
+    pos = req.title_position if req.title_position in title.POSITIONS else "auto"
+    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)), fonts, pos)
     try:
         await ensure_llm_server()
         async with httpx.AsyncClient(timeout=enhance.TIMEOUT) as llm:
             r = await llm.post(f"{enhance.URL}/v1/chat/completions", json=body)
             if r.status_code >= 400:
                 raise HTTPException(502, f"LM Studio: {r.text[:300]}")
-            out = enhance.ideas(r.json(), req.same_style, req.add_title)
+            out = enhance.ideas(r.json(), req.same_style, req.add_title, pos)
     except httpx.HTTPError as e:
         raise HTTPException(502, f"LM Studio is not reachable at {enhance.URL} ({type(e).__name__})")
     except ValueError as e:

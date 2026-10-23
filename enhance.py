@@ -122,7 +122,7 @@ prompt per picture. Write every field in English, in plain descriptive language,
 - camera: framing, angle, lens and depth of field, e.g. "close-up from a low angle, 35 mm, shallow depth of field".
 Do not put any text, letters or logos into the picture unless the user asks for it."""
 IDEAS_TITLE = """The app writes each title into its picture afterwards. For every prompt also choose:
-- title_position: where the title goes (top, center or bottom), where the picture will have a calm, plain area for it.
+- title_position: {position_rule}
 - title_size: small, medium or large, fitting the title's length and the picture.
 - title_font: the font that fits the mood, one of: {fonts}.
 Describe the picture so the area at title_position stays calm and empty; never describe the title or any lettering."""
@@ -130,9 +130,10 @@ TITLE_FIELDS = ("title_position", "title_size", "title_font")
 
 
 def ideas_request(model: str, text: str, count: int = 0, same_style: bool = False, seed: int = 0,
-                  fonts: list[str] | None = None) -> dict[str, Any]:
+                  fonts: list[str] | None = None, position: str = "auto") -> dict[str, Any]:
     """Chat completion body for Prompt ideas: the answer is JSON that follows the schema (LM Studio enforces it).
-    fonts (Add title): every idea also gets the title's position, size and font (title.py writes it later)."""
+    fonts (Add title): every idea also gets the title's position, size and font (title.py writes it later).
+    position other than auto is fixed: the model only plans the picture around it."""
     n = max(0, min(int(count or 0), IDEAS_MAX))
     rules = [f"Write exactly {n} prompts." if n else
              "Write as many prompts as the request asks for (one per item it names); if it names none, write 4."]
@@ -145,10 +146,13 @@ def ideas_request(model: str, text: str, count: int = 0, same_style: bool = Fals
     system = IDEAS_SYSTEM
     if fonts:
         item["required"] += list(TITLE_FIELDS)
-        item["properties"].update(title_position={"type": "string", "enum": ["top", "center", "bottom"]},
+        places = ["top", "center", "bottom"] if position not in ("top", "center", "bottom") else [position]
+        item["properties"].update(title_position={"type": "string", "enum": places},
                                   title_size={"type": "string", "enum": ["small", "medium", "large"]},
                                   title_font={"type": "string", "enum": list(fonts)})
-        system += "\n\n" + IDEAS_TITLE.format(fonts=", ".join(fonts))
+        rule = ("where the title goes (top, center or bottom), where the picture will have a calm, plain area for it."
+                if len(places) > 1 else f"always {position}; keep that area of the picture calm and plain for it.")
+        system += "\n\n" + IDEAS_TITLE.format(fonts=", ".join(fonts), position_rule=rule)
     ideas = {"type": "array", "items": item, "minItems": n or 1, "maxItems": n or IDEAS_MAX}
     schema = {"type": "object", "additionalProperties": False, "required": ["ideas"], "properties": {"ideas": ideas}}
     return {"model": model,
@@ -167,7 +171,7 @@ def compose(idea: dict) -> str:
     return f"{out}." if out else ""
 
 
-def ideas(response: dict, same_style: bool = False, with_title: bool = False) -> list[dict[str, str]]:
+def ideas(response: dict, same_style: bool = False, with_title: bool = False, position: str = "auto") -> list[dict[str, str]]:
     """The ideas of a chat completion: [{title, subject, setting, style, camera, prompt}] (+ title_position / _size /
     _font with_title). same_style copies the first idea's style and camera to all (the model sometimes drifts)."""
     try:
@@ -184,6 +188,9 @@ def ideas(response: dict, same_style: bool = False, with_title: bool = False) ->
     keys = ("title", *IDEA_FIELDS, *(TITLE_FIELDS if with_title else ()))
     out = [{k: str(i.get(k) or "").strip() for k in keys}
            for i in (raw or []) if isinstance(i, dict)][:IDEAS_MAX]
+    if with_title and position in ("top", "center", "bottom"):   # fixed by the user, never the model's choice
+        for i in out:
+            i["title_position"] = position
     if same_style and out:
         for i in out[1:]:
             i.update(style=out[0]["style"], camera=out[0]["camera"])

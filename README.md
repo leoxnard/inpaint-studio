@@ -301,7 +301,7 @@ in LM Studio writes English prompts for it, each split into subject, setting, st
 |---|---|
 | How many | *Auto* = one per item the request names (else 4), or a fixed number |
 | One style for all | the same style and camera for every prompt, so the pictures look like one series |
-| Add title | each picture gets its title (see **Add title**); the model picks position, size and font per prompt |
+| Add title | each picture gets its title (see **Add title**); the model picks size and font per prompt, and the position too when it is set to *Automatic* |
 
 - ComfyUI's models are freed first (when nothing runs), the language model is loaded, writes the prompts and is
   unloaded again.

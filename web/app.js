@@ -3562,7 +3562,7 @@ $("enhanceModel").addEventListener("change", () => { try { localStorage.setItem(
 // request; the server loads it, gets JSON and unloads it again (POST /api/ideas). Each tile runs one Generate job.
 state.ideas = [];
 const IDEA_FIELDS = ["subject", "setting", "style", "camera"];
-const IDEAS_OPTS = { ideasModel: "value", ideasCount: "value", ideasSameStyle: "checked", ideasText: "checked" };
+const IDEAS_OPTS = { ideasModel: "value", ideasCount: "value", ideasSameStyle: "checked", ideasText: "checked", ideasTitlePosition: "value" };
 function mk(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -3643,7 +3643,7 @@ async function writeIdeas() {
     const withTitle = $("ideasText").checked;
     if (withTitle) state.titleFonts = (await loadTitleOpts()).fonts;
     const r = await postJson("/api/ideas", { request, model: $("ideasModel").value, count: parseInt($("ideasCount").value, 10) || 0,
-      same_style: $("ideasSameStyle").checked, add_title: withTitle });
+      same_style: $("ideasSameStyle").checked, add_title: withTitle, title_position: $("ideasTitlePosition").value });
     state.ideas = r.ideas.map((i) => ({ ...i, withTitle }));
     renderIdeas();
     $("ideasHint").textContent = "Done, the model is unloaded again. Edit a prompt if you like, then run one or all.";
@@ -3682,6 +3682,9 @@ for (const [id, prop] of Object.entries(IDEAS_OPTS)) {
 }
 $("ideasSec").addEventListener("fold", () => { if (!$("ideasSec").classList.contains("folded")) loadIdeaModels(); });
 $("ideasGo").addEventListener("click", writeIdeas);
+const syncIdeasTitle = () => { $("ideasTitlePosition").hidden = !$("ideasText").checked; };
+$("ideasText").addEventListener("change", syncIdeasTitle);
+syncIdeasTitle();
 $("ideasRunAll").addEventListener("click", () => runIdeas(state.ideas));
 function syncRemoveBg() {
   const avail = removeBgAvailable(), on = removeBgOn();

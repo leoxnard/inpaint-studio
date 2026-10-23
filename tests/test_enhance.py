@@ -135,3 +135,15 @@ def test_lms_listing_feeds_chat_models():
              {"type": "llm", "modelKey": "img", "architecture": "qwen_image"},
              {"type": "embedding", "modelKey": "nomic"}]
     assert enhance.chat_models(enhance.lms_listing(items)) == [{"id": "qwen3.8", "vision": False, "loaded": False}]
+
+
+def test_fixed_title_position_is_not_the_models_choice():
+    b = enhance.ideas_request("m", "x", fonts=["Futura Bold"], position="bottom")
+    item = b["response_format"]["json_schema"]["schema"]["properties"]["ideas"]["items"]
+    assert item["properties"]["title_position"]["enum"] == ["bottom"] and "always bottom" in b["messages"][0]["content"]
+    content = json.dumps({"ideas": [{"title": "A", "subject": "s", "setting": "", "style": "", "camera": "",
+                                     "title_position": "top", "title_size": "small", "title_font": "Futura Bold"}]})
+    out = enhance.ideas({"choices": [{"message": {"content": content}}]}, with_title=True, position="bottom")
+    assert out[0]["title_position"] == "bottom"
+    auto = enhance.ideas_request("m", "x", fonts=["Futura Bold"])["response_format"]["json_schema"]["schema"]
+    assert auto["properties"]["ideas"]["items"]["properties"]["title_position"]["enum"] == ["top", "center", "bottom"]

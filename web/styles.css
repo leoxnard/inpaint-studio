@@ -502,6 +502,7 @@ body.fam-zimage .paste-only { display: none !important; }
 .post-title input[type="text"] { flex: 1; min-width: 140px; }
 .post-title input[type="color"] { width: 36px; height: 30px; padding: 0 2px; }
 .idea-title-opts { gap: 6px; align-items: center; }
+#settingsCol .row select:is(#titlePosition, #ideasTitlePosition) { flex: 0 0 auto; width: auto; max-width: none; }   /* only as wide as "Automatic" */
 
 /* central model picker in the topbar */
 .topbar { gap: 16px; flex-wrap: wrap; }

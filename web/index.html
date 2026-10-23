@@ -292,7 +292,10 @@
           <label>How many <select id="ideasCount"><option value="0">Auto</option><option>1</option><option>2</option><option>3</option><option>4</option><option>6</option><option>8</option><option>12</option></select></label>
         </div>
         <label class="check" title="Same style and camera for every prompt, so the pictures look like one series."><input type="checkbox" id="ideasSameStyle"> One style for all</label>
-        <label class="check" title="Each picture gets its title, written by the app after the run. The language model picks position, size and font per prompt; all of it can be changed later in Runs → Post-processing."><input type="checkbox" id="ideasText"> Add title</label>
+        <div class="row" id="ideasTitleRow"><label class="check" title="Each picture gets its title, written by the app after the run. The language model picks position, size and font per prompt; all of it can be changed later in Runs → Post-processing."><input type="checkbox" id="ideasText"> Add title</label>
+        <select id="ideasTitlePosition" class="compact" aria-label="Where the titles go" title="Automatic: the language model picks the position per prompt. Otherwise every title goes there.">
+          <option value="auto">Automatic</option><option value="top">Top</option><option value="center">Center</option><option value="bottom">Bottom</option>
+        </select></div>
         <div class="row between">
           <span class="hint" id="ideasHint">The model is loaded in LM Studio, writes the prompts and is unloaded again before a picture is made.</span>
           <button class="small" id="ideasGo">Write prompts</button>

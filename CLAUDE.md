@@ -104,7 +104,8 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   `[{title, subject, setting, style, camera, prompt}]` (`enhance.ideas`, `compose` = the fields as one paragraph, mirrored
   in `web/app.js` `composeIdea`) and unloads the model. Tiles run normal Generate jobs with the form's settings.
   Imports of kind `llm` (.gguf) are linked into LM Studio's models folder (`imports.lmstudio_models`), not into ComfyUI.
-  With Add title the schema also asks for `title_position` / `title_size` / `title_font` (enum of `title.fonts()`).
+  With Add title the schema also asks for `title_position` / `title_size` / `title_font` (enum of `title.fonts()`);
+  a `title_position` other than auto (`#ideasTitlePosition`) is fixed: one-value enum, and `enhance.ideas` sets it on every idea.
 - Add title (`title.py`, param `title` {text, position, font, size}): `graphs.edit_prompt` adds `title.prompt_note`
   (no lettering, room at the position); after the run the title is a post-processing step: `PostReq.title` (None keeps
   `run.title`, {"text": ""} removes it) → `title.layout` (calmest band, palette colour with contrast) + `title.render`

@@ -2164,13 +2164,6 @@ async def guide_seen():
     return {"ok": True}
 
 
-app.mount("/data/runs", StaticFiles(directory=RUNS), name="runs")
-app.mount("/", StaticFiles(directory=WEB), name="web")
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT") or 7380))
 @app.get("/api/benchmarks")
 async def get_benchmarks():
     """The benchmarks page's content (data.json); 404 until a benchmark was added."""
@@ -2204,3 +2197,10 @@ async def benchmark_file(path: str):
     return FileResponse(f)
 
 
+app.mount("/data/runs", StaticFiles(directory=RUNS), name="runs")
+app.mount("/", StaticFiles(directory=WEB), name="web")
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT") or 7380))

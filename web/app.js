@@ -4853,7 +4853,7 @@ $("reactivateBatch").onclick = () => {
 $("batchClear").onclick = () => {
   for (const it of state.batch) if (it.file) URL.revokeObjectURL(it.thumbUrl);
   state.batch = []; state.batchIdx = -1;
-  renderBatch();
+  clearImage();   // the open image goes too: back to the empty dropzone
 };
 
 // ------------------------------------------------------------------ setup page & no-mask mode

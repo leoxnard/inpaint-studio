@@ -530,6 +530,10 @@ body.fam-zimage .paste-only { display: none !important; }
 .tt-xy label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .tt-xy input[type="number"] { width: 72px; }
 .tt-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.icon-btn { width: 30px; min-height: 28px; padding: 0; display: inline-grid; place-items: center; }
+.icon-btn svg { width: 16px; height: 16px; }
+.icon-btn[aria-pressed="true"] { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
+.bigarea.picking, .bigarea.picking * { cursor: crosshair !important; }
 /* the panel's generic label / range-row / number rules stack things; the title rows stay on one line */
 #postPanel .tt-xy label { flex-direction: row; align-items: center; }
 #postPanel .tt-inline.range-row { display: flex; min-width: 0; }

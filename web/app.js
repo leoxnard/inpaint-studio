@@ -4209,7 +4209,7 @@ $("postBtn").onclick = () => {
   $("postPanel").hidden = false;
   schedulePreview();
 };
-$("postClose").onclick = () => { $("postPanel").hidden = true; showFinal(); };
+$("postClose").onclick = () => { if (bigArea.classList.contains("picking")) setPicking(false); $("postPanel").hidden = true; showFinal(); };
 $("alignAuto").onclick = () => postRequest({ ...postValues(), auto: true, save: false });
 $("postReset").onclick = () => {
   setPostValues({ dx: 0, dy: 0, scale: 1, sx: 1, sy: 1, corners: null, colors: false, warp: false, poisson: false, grain: false, grain_strength: GRAIN_STRENGTH });
@@ -4379,6 +4379,54 @@ $("titleEdit").addEventListener("input", () => titleChanged(true));
 $("titleSize").addEventListener("input", () => titleChanged(true));
 $("titleColor").addEventListener("input", () => { post.titleAutoColor = false; titleChanged(true); });
 $("titleAutoColor").onclick = () => { post.titleAutoColor = true; titleChanged(); };
+// eyedropper: the next click on the picture takes its colour (5 × 5 px average); the swatch follows the pointer
+const pickCanvas = document.createElement("canvas");
+let pickSrc = "", pickBefore = null;
+function shownImage() { return !$("liveImg").hidden ? $("liveImg") : $("cmpAfter"); }
+function colorAt(e) {
+  const img = shownImage();
+  if (!img?.naturalWidth) return null;
+  const r = img.getBoundingClientRect(), nw = img.naturalWidth, nh = img.naturalHeight;
+  const sc = Math.min(r.width / nw, r.height / nh);
+  const px = Math.floor((e.clientX - r.left - (r.width - nw * sc) / 2) / sc), py = Math.floor((e.clientY - r.top - (r.height - nh * sc) / 2) / sc);
+  if (px < 0 || py < 0 || px >= nw || py >= nh) return null;
+  const ctx = pickCanvas.getContext("2d", { willReadFrequently: true });
+  if (pickSrc !== img.src) {
+    pickCanvas.width = nw; pickCanvas.height = nh;
+    ctx.drawImage(img, 0, 0);
+    pickSrc = img.src;
+  }
+  const x0 = Math.max(0, px - 2), y0 = Math.max(0, py - 2);
+  const d = ctx.getImageData(x0, y0, Math.min(5, nw - x0), Math.min(5, nh - y0)).data;
+  const sum = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 4) { sum[0] += d[i]; sum[1] += d[i + 1]; sum[2] += d[i + 2]; }
+  const n = d.length / 4;
+  return "#" + sum.map((v) => Math.round(v / n).toString(16).padStart(2, "0")).join("");
+}
+function setPicking(on) {
+  $("titlePickColor").setAttribute("aria-pressed", String(on));
+  bigArea.classList.toggle("picking", on);
+  if (on) pickBefore = $("titleColor").value;
+  else if (pickBefore != null) { $("titleColor").value = pickBefore; pickBefore = null; }   // cancelled: back to the old colour
+}
+$("titlePickColor").onclick = () => setPicking(!bigArea.classList.contains("picking"));
+bigArea.addEventListener("pointermove", (e) => {
+  if (!bigArea.classList.contains("picking")) return;
+  const c = colorAt(e);
+  if (c) $("titleColor").value = c;
+});
+bigArea.addEventListener("click", (e) => {
+  if (!bigArea.classList.contains("picking")) return;
+  e.preventDefault(); e.stopPropagation();
+  const c = colorAt(e);
+  if (!c) return;
+  pickBefore = null;
+  setPicking(false);
+  $("titleColor").value = c;
+  post.titleAutoColor = false;
+  titleChanged(true);
+}, true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && bigArea.classList.contains("picking")) setPicking(false); });
 $("titleAutoPos").onclick = () => { post.titleX = post.titleY = null; titleChanged(); };
 for (const [id, k] of [["titleX", "titleX"], ["titleY", "titleY"]]) {
   $(id).addEventListener("input", () => {

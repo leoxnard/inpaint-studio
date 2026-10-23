@@ -197,7 +197,8 @@ instead of the model's lettering, so it is clean and the same size across a seri
 - **Colour:** taken from the picture's own palette, with enough contrast to what is behind the title (a shadow is
   added when nothing stands out enough).
 - **Runs → Post-processing → Title:** change the text, font (about 30 macOS fonts, each shown in its own face;
-  hovering one tries it on the picture), size, colour and shadow; every change shows at once.
+  hovering one tries it on the picture), size, colour (the pipette takes one from the picture) and shadow; every
+  change shows at once.
 - **Position:** the 3 × 3 grid snaps the title to an edge or the middle, **X / Y** (centre of the text in %) set it
   exactly, **Copy** / **Paste** carry a position to another run, **Auto** measures the calmest band again. Or drag
   the cross on the picture (Shift keeps it on one axis).

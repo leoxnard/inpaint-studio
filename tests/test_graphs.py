@@ -342,6 +342,12 @@ def test_control_guidance_chain():
     assert "ctrl_map" not in g
     g = graphs.build_edit_graph({**base, "family": "zimage", "control": {"type": "canny", "image": "in/a.png", "source": "drawing"}})
     assert g["ctrl_map"]["class_type"] == "ImageInvert" and g["model"]["inputs"]["image"] == ["ctrl_map", 0]
+    # Qwen-Image 2.1: the Fun ControlNet Union through the same node, on top of the prefix cache
+    g = graphs.build_edit_graph({**base, "family": "qwen21", "control": {"type": "canny", "image": "in/a.png", "end": 0.6}})
+    assert g["model"]["class_type"] == "QwenImageDiffsynthControlnet" and g["model_base"]["class_type"] == "QwenImage21Cache"
+    assert g["model"]["inputs"]["end_percent"] == 0.6 and g["ctrl_map"]["class_type"] == "Canny"
+    import presets
+    assert presets.control_patch("qwen21_turbo", "depth") == presets.control_patch("qwen21", "canny") == "ctrl_q21_union"
 
 
 def test_reseed_seedvr2_sets_the_sampler_seed():

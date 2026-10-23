@@ -119,8 +119,10 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
 - Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by
   `create_job` / `/api/mask`, read by `GET /api/prompt-history`. Top bar: CPU / GPU / RAM meters (`sysload.py`: the app part = this server + ComfyUI, RAM as phys footprint; GPU only as a whole), **Free** (`POST /api/comfy/free`) is enabled only while `MODELS["loaded"]` (set by a finished run or mask, cleared by Free or a new ComfyUI pid).
-- Guidance (Generate, `graphs.apply_control`): Z-Image Fun ControlNet Union (`ZImageFunControlnet`) or Qwen-Image 2512
-  DiffSynth patches (`QwenImageDiffsynthControlnet`) via `ModelPatchLoader` (models/model_patches); depth map from
+- Guidance (Generate, `graphs.apply_control`, `CONTROL_FAMILIES` mirrored in `web/app.js` `guideFamily`): Z-Image Fun
+  ControlNet Union (`ZImageFunControlnet`), Qwen-Image 2512 DiffSynth patches or the Qwen-Image 2.1 Fun ControlNet Union
+  (both `QwenImageDiffsynthControlnet`, which detects the 2.1 branch; it wraps `QwenImage21Cache`) via `ModelPatchLoader`
+  (models/model_patches); the 2512 patches do not load on 2.1 (other transformer: wider blocks, gate_up MLP); depth map from
   Depth Anything 3 small (models/geometry_estimation), edges from core `Canny`. The map is saved as `<run>/control.png`.
 - Restarting the dev server stops a ComfyUI it started itself (and every run on it); check `:8188` after a restart.
 - SeedVR2 int8 on MPS: some seeds give NaN = an all-black image, the same seed always again (colour correction is not the cause).

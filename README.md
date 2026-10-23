@@ -335,11 +335,20 @@ LoRAs, Your files).
 
 ## Guidance (Generate)
 
-With Z-Image or Qwen-Image 2512, **Guidance** in Create keeps the layout of another image while generating:
+With Z-Image, Qwen-Image 2.1 (all variants) or Qwen-Image 2512, **Guidance** in Create keeps the layout of another
+image while generating:
 **Edges** (Canny) or **Depth** (Depth Anything 3). The image can be a photo, a **drawing** (dark lines on light, its
 lines are used directly) or your own edge or depth map. For a drawing that should become a photo, about strength
 0.55 with guidance in the first 60 % of the steps worked best with Z-Image; higher values keep the drawing style. The map is
 saved with the run.
+
+| Model | Patch (Download Center → Control) |
+|---|---|
+| Z-Image Turbo | Z-Image Fun ControlNet Union 2.1 (6.7 GB) |
+| Qwen-Image 2.1 | Qwen-Image 2.1 Fun ControlNet Union (7.6 GB, one file for edges and depth) |
+| Qwen-Image 2512 | Qwen-Image Canny / Depth patch (DiffSynth, 2.3 GB each) |
+
+The 2512 patches do not fit Qwen-Image 2.1 (another transformer); 2.1 has its own.
 
 ## Files and folders
 

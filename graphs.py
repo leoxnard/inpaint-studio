@@ -261,7 +261,7 @@ def apply_loras(g: dict[str, Any], loras: Any) -> None:
         prev = [key, 0]
 
 
-CONTROL_FAMILIES = ("zimage", "qwen")   # families with a control patch node in ComfyUI
+CONTROL_FAMILIES = ("zimage", "qwen", "qwen21", "qwen21_turbo")   # families with a control patch node in ComfyUI
 
 
 def apply_control(g: dict[str, Any], p: dict[str, Any], family: str) -> None:
@@ -298,6 +298,10 @@ def apply_control(g: dict[str, Any], p: dict[str, Any], family: str) -> None:
     elif family == "qwen":
         g["model"] = {"class_type": "QwenImageDiffsynthControlnet", "inputs": {
             "model": ["model_base", 0], "model_patch": ["ctrl_patch", 0], "vae": ["vae", 0], "image": hint, "strength": strength}}
+    elif family in ("qwen21", "qwen21_turbo"):   # the same node loads the 2.1 Fun ControlNet Union (QwenImage21FunControl)
+        g["model"] = {"class_type": "QwenImageDiffsynthControlnet", "inputs": {
+            "model": ["model_base", 0], "model_patch": ["ctrl_patch", 0], "vae": ["vae", 0], "image": hint, "strength": strength,
+            "start_percent": 0.0, "end_percent": float(c.get("end", 1.0))}}
     else:
         raise ValueError(f"no control guidance for model family {family}")
 

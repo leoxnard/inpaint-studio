@@ -3910,7 +3910,7 @@ function renderRefs() {
 
 // Guidance (Generate with Z-Image / Qwen-Image 2512): edges or depth of another image steer the layout
 state.guide = { type: "", image: null, label: "" };
-const guideFamily = () => ["zimage", "qwen"].includes(currentFamily());
+const guideFamily = () => ["zimage", "qwen", "qwen21", "qwen21_turbo"].includes(currentFamily());   // graphs.CONTROL_FAMILIES
 const guidePatch = (type) => (state.setup?.components || []).find((c) => c.kind === "control" && (c.families || []).includes(currentFamily()) && (c.types || []).includes(type));
 function guideMissing() {
   const t = state.guide.type;

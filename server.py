@@ -2007,7 +2007,7 @@ async def create_job(params: dict):
             raise HTTPException(400, "control type must be canny or depth")
         key = presets.control_patch(params.get("family", ""), c["type"])
         if not key:
-            raise HTTPException(400, f"no {c['type']} guidance for this model (Z-Image and Qwen-Image 2512 have it)")
+            raise HTTPException(400, f"no {c['type']} guidance for this model (Z-Image, Qwen-Image 2.1 and 2512 have it)")
         source = c.get("source") or ("map" if c.get("is_map") else "photo")
         if source not in ("photo", "drawing", "map") or (source == "drawing" and c["type"] != "canny"):
             raise HTTPException(400, "control source must be photo, drawing (edges only) or map")

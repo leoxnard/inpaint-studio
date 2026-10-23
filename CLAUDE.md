@@ -53,8 +53,7 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   standalone beginner guide ("How it works" in the top bar; `/#downloads` opens the Download Center). On a fresh install
   (no config, no runs at server start) `/` serves it once until `POST /api/guide/seen` writes `guide_seen` in App Support.
   `template.js` (+ `template.css`) is the Template editor modal (`openTemplateEditor({width, height, doc})` → `{blob, doc}`; SVG
-  shapes + pen paths, exported to a PNG via Path2D; drags snap to canvas edges / centre / thirds and to the other shapes,
-  `snapTargets` + `snapAxis`, `SNAP_PX` screen px, Alt = off, toolbar toggle `s.snap`); `state.template` lives in localStorage (`app.js`, "Template" block).
+  shapes + pen paths, exported to a PNG via Path2D); `state.template` lives in localStorage (`app.js`, "Template" block).
   `benchmarks.html` (+ `benchmarks.css`, `benchmarks.js`, `benchmarks-viewer.js`) renders benchmark results from
   App Support `benchmarks/` (`data.json` + `img/`, never shipped): `GET/POST /api/benchmarks` (save keeps `data.json.bak`),
   pictures at `/data/benchmarks/`; the top-bar link shows only when data exists. Blocks: goal / note / group / input / cards /
@@ -94,8 +93,6 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   and the compare labels (only the facts that differ). `web/imageedit.js` is the input editor (rotate / crop modal).
   Post-processing geometry: dx/dy/scale + stretch `sx`/`sy` + `corners` (perspective, `align.transform`); the corner handles sit on
   the viewer (`placeCorners`). Adjust mask (`web/maskedit.js`) uploads a mask, `PostReq.mask` → `run.post_mask_url` (`post_mask_url`).
-  A template run (`params.template`) shows no before/compare (`runFromStored`: `beforeUrl` null, `templateUrl` = before.png); the **Template** button next to
-  Post-processed / Raw (`#tplShow`, off until pressed, off again for another run) overlays the template's colour edges (`templateOutline`, canvas) on the picture.
 - Jobs: `finish_job` runs once per job; a silent (30 s) or closed ComfyUI socket falls back to polling (`follow_job`,
   5 failed polls end the run); deleting a queued/running run is a 409; `POST /api/jobs` input is checked (`JobCheck`).
   Missing files (`installer.job_missing`: the preset's model / encoder / VAE / nodes, upscaler, control patch) → 409
@@ -111,7 +108,7 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
 - Prompt ideas (Generate, right column above the prompt preset, `#ideasSec`): `POST /api/ideas` {request, model, count, same_style, text_in_image} frees
   ComfyUI (when no job runs), asks LM Studio with a JSON-schema `response_format` (`enhance.ideas_request`), parses
   `[{title, subject, setting, style, camera, prompt}]` (`enhance.ideas`, `compose` = the fields as one paragraph, mirrored
-  in `web/app.js` `composeIdea`; `IDEAS_SYSTEM` makes requirements of the request, e.g. a camera angle, hold for every prompt) and unloads the model. Tiles run normal Generate jobs with the form's settings.
+  in `web/app.js` `composeIdea`) and unloads the model. Tiles run normal Generate jobs with the form's settings.
   Imports of kind `llm` (.gguf) are linked into LM Studio's models folder (`imports.lmstudio_models`), not into ComfyUI.
   With Add title the schema also asks for `title_position` / `title_size` / `title_font` (enum of `title.fonts()`);
   a `title_position` other than auto (`#ideasTitlePosition`) is fixed: one-value enum, and `enhance.ideas` sets it on every idea.
@@ -128,15 +125,11 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
 - Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts + Prompt ideas requests, 50 each), written by
   `create_job` / `/api/mask`, read by `GET /api/prompt-history`. Top bar: CPU / GPU / RAM meters (`sysload.py`: the app part = this server + ComfyUI, RAM as phys footprint; GPU only as a whole), **Free** (`POST /api/comfy/free`) is enabled only while `MODELS["loaded"]` (set by a finished run or mask, cleared by Free or a new ComfyUI pid).
-- Template (Generate, `params.template` {image, w, h, strict}, `web/template.js`): a family with a canny control patch
-  (`presets.control_patch(family, "canny")`) stays Generate and gets `params.control` = canny of the template, strength / end
-  from the "How strict" slider (`graphs.template_control`, default 0.5 → 0.75 / 0.65; the soft setting kept the exact shape
-  and a natural look, Benchmarks → Template fit). Other edit-capable presets of `graphs.TEMPLATE_FAMILIES` (FLUX.2, Edit 2511)
-  fall back to a whole-image edit of it (task edit, image = template, denoise 1, `graphs.TEMPLATE_NOTE`), which comes out
-  5–10 % smaller. Refuses a user `control` (400). The editor draws black shapes on white only (no colours).
-  `editParams` sends it from `state.template` only for Generate (Prompt ideas and variations go through it too); Prompt ideas
-  also send `template` = the shapes in words (`templateShapes`), which adds `enhance.IDEAS_TEMPLATE` (fit the shape, top-down
-  = only a surface, no lens words) to the system prompt.
+- Template (Generate, `params.template` {image, w, h}, `web/template.js`): `create_job` turns the Generate job into a
+  whole-image edit of the template (task edit, image = template, src size = template size, no mask, denoise 1; the params
+  keep `template`). Needs an edit-capable preset of `graphs.TEMPLATE_FAMILIES` (not Z-Image: img2img only) and refuses
+  `control` (400). `graphs.TEMPLATE_NOTE` (`template_note`, names image 1 the encoder's way) is added after the prompt.
+  `editParams` sends it from `state.template` only for Generate (Prompt ideas and variations go through it too).
 - Guidance (Generate, `graphs.apply_control`, `CONTROL_FAMILIES` mirrored in `web/app.js` `guideFamily`): Z-Image Fun
   ControlNet Union (`ZImageFunControlnet`), Qwen-Image 2512 DiffSynth patches or the Qwen-Image 2.1 Fun ControlNet Union
   (both `QwenImageDiffsynthControlnet`, which detects the 2.1 branch; it wraps `QwenImage21Cache`) via `ModelPatchLoader`

@@ -57,6 +57,8 @@ COMFY_PROC = installer.ComfyProcess()
 RUNS = Path(os.environ.get("INPAINT_STUDIO_DATA") or installer.APP_SUPPORT) / "runs"
 # the very first start (no setup config, no runs yet) opens the beginner guide once; guide.html marks it seen
 GUIDE_SEEN = installer.APP_SUPPORT / "guide_seen"
+# Leonard's benchmark results (web/benchmarks.html): data.json + img/, kept on this Mac only, never shipped with the app
+BENCH = installer.APP_SUPPORT / "benchmarks"
 FRESH_INSTALL = not installer.CONFIG_FILE.exists() and not RUNS.exists()
 RUNS.mkdir(parents=True, exist_ok=True)
 imports.apply()   # own files from the Download Center become components / presets
@@ -1577,7 +1579,6 @@ class IdeasReq(BaseModel):
     same_style: bool = False
     add_title: bool = False
     title_position: str = "auto"   # not auto: every title goes there, the model does not choose
-    template: str = Field("", max_length=2000)   # Generate with a template: its shapes in words (web/app.js templateShapes)
 
 
 @app.get("/api/title/sample")
@@ -1608,8 +1609,7 @@ async def prompt_ideas(req: IdeasReq):
             pass   # ComfyUI down: nothing to free
     fonts = await asyncio.to_thread(title.fonts) if req.add_title else None
     pos = req.title_position if req.title_position in title.POSITIONS else "auto"
-    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)), fonts, pos,
-                                req.template)
+    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)), fonts, pos)
     try:
         await ensure_llm_server()
         async with httpx.AsyncClient(timeout=enhance.TIMEOUT) as llm:
@@ -1978,7 +1978,7 @@ async def create_job(params: dict):
         # Advanced overrides: an explicitly chosen unet / clip / vae wins over the preset's file
         resolved = presets.resolve(params["preset"], params.get("quant"))
         params.update({k: params.get(k) or v for k, v in resolved.items()})
-    if t := params.get("template"):   # Generate with a template: a soft canny ControlNet on it, or a whole-image edit of it
+    if t := params.get("template"):   # Generate with a template: a whole-image edit of the flat shape template
         if params.get("task") != "generate":
             params.pop("template")
         else:
@@ -1992,19 +1992,11 @@ async def create_job(params: dict):
                 raise HTTPException(400, "invalid template: width and height must be positive")
             if params.get("control"):
                 raise HTTPException(400, "Use either a template or guidance, not both")
-            try:
-                strict = min(1.0, max(0.0, float(t.get("strict", graphs.TEMPLATE_STRICT))))
-            except (TypeError, ValueError):
-                strict = graphs.TEMPLATE_STRICT
-            params["template"] = {"image": t["image"], "w": tw, "h": th, "strict": strict}
-            if presets.control_patch(params.get("family", ""), "canny"):   # stays Generate; the control block below checks it
-                strength, end = graphs.template_control(strict)
-                params["control"] = {"type": "canny", "image": t["image"], "source": "photo", "strength": strength, "end": end}
-            elif params.get("family") in graphs.TEMPLATE_FAMILIES and not (pr and "edit" not in pr["modes"]):
-                params.update(task="edit", image=t["image"], src_w=tw, src_h=th, use_mask=False, mask=None,
-                              mode="inpaint", keep_whole=False, denoise=1.0, crop_stitch=False, outpaint=None)
-            else:
-                raise HTTPException(400, "This model cannot use a template")
+            if params.get("family") not in graphs.TEMPLATE_FAMILIES or (pr and "edit" not in pr["modes"]):
+                raise HTTPException(400, "This model cannot use a template (it needs a model that edits images)")
+            params["template"] = {"image": t["image"], "w": tw, "h": th}
+            params.update(task="edit", image=t["image"], src_w=tw, src_h=th, use_mask=False, mask=None,
+                          mode="inpaint", keep_whole=False, denoise=1.0, crop_stitch=False, outpaint=None)
     if params.get("task") == "generate":
         params.update(use_mask=False, mask=None, image=None, denoise=1.0)
     # extra reference images: only as many as the model's text encoder takes
@@ -2169,3 +2161,36 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT") or 7380))
+@app.get("/api/benchmarks")
+async def get_benchmarks():
+    """The benchmarks page's content (data.json); 404 until a benchmark was added."""
+    f = BENCH / "data.json"
+    if not f.is_file():
+        raise HTTPException(404, "no benchmarks yet")
+    return FileResponse(f, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/benchmarks")
+async def save_benchmarks(data: dict):
+    """Edit mode of the benchmarks page: replaces data.json, the previous version is kept as data.json.bak."""
+    if not isinstance(data.get("chapters"), list):
+        raise HTTPException(400, "not benchmark data")
+    BENCH.mkdir(parents=True, exist_ok=True)
+    f = BENCH / "data.json"
+    if f.exists():
+        f.replace(BENCH / "data.json.bak")
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n")
+    tmp.replace(f)
+    return {"ok": True}
+
+
+@app.get("/data/benchmarks/{path:path}")
+async def benchmark_file(path: str):
+    """Pictures of the benchmarks page (img/ in the benchmarks folder)."""
+    f = (BENCH / path).resolve()
+    if not f.is_relative_to(BENCH.resolve()) or not f.is_file():
+        raise HTTPException(404, "not found")
+    return FileResponse(f)
+
+

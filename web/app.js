@@ -2148,9 +2148,7 @@ function renderViewer() {
   // toolbar above the image
   renderViewSeg(run);
   $("compareRow").hidden = !(done && run.beforeUrl);
-  $("tplSeg").hidden = !(done && run.templateUrl);
-  if (state.tplRun && state.tplRun !== run) setTemplateShown(false);   // the outline belongs to one run
-  $("viewerTools").hidden = $("rawSeg").hidden && $("compareRow").hidden && $("tplSeg").hidden;
+  $("viewerTools").hidden = $("rawSeg").hidden && $("compareRow").hidden;
   // image area by status
   const msg = (text) => {
     $("liveImg").hidden = true; $("compare").hidden = true;
@@ -2280,7 +2278,7 @@ const isHidden = (run) => state.removed.some((r) => r.serverId === run?.serverId
 const cmpRuns = () => state.cmp.keys.map(knownRun).filter(Boolean);
 const cmpPickable = (run) => !!run.resultUrl && run.status !== "error" && !!run.serverId;
 // the input image a run started from ("" for text-to-image)
-const cmpSource = (r) => (runTask(r) === "generate" || r.params?.template ? "" : r.params?.image || r.beforeUrl || "");
+const cmpSource = (r) => (runTask(r) === "generate" ? "" : r.params?.image || r.beforeUrl || "");
 const multiCmp = createMultiCompare($("multiCmp"), { onExit: () => exitCompare() });
 
 // tile label: the model, plus every setting that differs between the compared runs (runFacts)
@@ -2887,9 +2885,7 @@ function refreshRunFiles(run, stored) {
 function runFromStored(r) {
   return {
     id: r.id, serverId: r.id, prompt: r.params?.prompt || "", seed: r.params?.seed, steps: r.params?.steps,
-    frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url,
-    templateUrl: r.params?.template ? inputViewUrl(r.params.template.image) : null,   // the template of a Generate run with one
-    beforeUrl: r.params?.template ? null : r.before_url,   // a template run is a generated picture: its "before" is only the stencil
+    frames: (r.frames || []).map((f) => ({ ...f })), resultUrl: r.result_url, beforeUrl: r.before_url,
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
     wholeUrl: r.whole_url || null, sourceUrl: r.source_url || null, resultKind: r.result_kind || null, postMaskUrl: r.post_mask_url || null,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
@@ -3697,8 +3693,7 @@ async function writeIdeas() {
     const withTitle = $("ideasText").checked;
     if (withTitle) state.titleFonts = (await loadTitleOpts()).fonts;
     const r = await postJson("/api/ideas", { request, model: $("ideasModel").value, count: parseInt($("ideasCount").value, 10) || 0,
-      same_style: $("ideasSameStyle").checked, add_title: withTitle, title_position: $("ideasTitlePosition").value,
-      template: templateParams() ? await templateShapes() : "" });
+      same_style: $("ideasSameStyle").checked, add_title: withTitle, title_position: $("ideasTitlePosition").value });
     state.ideas = r.ideas.map((i) => ({ ...i, withTitle }));
     renderIdeas();
     $("ideasHint").textContent = "Done, the model is unloaded again. Edit a prompt if you like, then run one or all.";
@@ -4080,9 +4075,8 @@ $("refInput").addEventListener("change", async (e) => {
 });
 
 // ------------------------------------------------------------------ template (Generate)
-// A flat shape template drawn in web/template.js. The job gets params.template {image, w, h, strict}; the server runs it
-// as a soft canny ControlNet on the template (graphs.template_control, strict = the "How strict" slider), or as a
-// whole-image edit of it for models without a canny patch (graphs.TEMPLATE_NOTE). state.template = {name, w, h, doc, strict}.
+// A flat shape template drawn in web/template.js. The job gets params.template {image, w, h}; the server runs it as a
+// whole-image edit of the template (graphs.TEMPLATE_NOTE keeps its shapes). state.template = {name, w, h, doc}.
 const TEMPLATE_KEY = "inpaint-studio-template-v1";
 const TEMPLATE_FAMILIES = ["qwen21", "qwen21_turbo", "qwen_edit", "flux2", "flux2_dev"];   // graphs.TEMPLATE_FAMILIES
 const TEMPLATE_IMAGE_MAX = 3e6;   // an imported image above this many characters (data URL) is not kept in localStorage
@@ -4095,35 +4089,15 @@ function saveTemplate() {
     localStorage.setItem(TEMPLATE_KEY, JSON.stringify(t));
   } catch { /* storage optional */ }
 }
-const templateControl = () => guideFamily() && !!guidePatch("canny");   // the server runs it as a canny ControlNet
 const templateAllowed = () => {
   const p = presetById($("preset").value);
-  return !!p && (templateControl() || (p.modes.includes("edit") && TEMPLATE_FAMILIES.includes(p.family)));
+  return !!p && p.modes.includes("edit") && TEMPLATE_FAMILIES.includes(p.family);
 };
-const templateStrict = () => state.template?.strict ?? 0.5;   // graphs.TEMPLATE_STRICT
 // what editParams sends (undefined without a template, outside Generate, or when the model cannot use it)
 function templateParams() {
   const t = state.template;
   if (state.task !== "generate" || !t || !templateAllowed()) return undefined;
-  return { image: t.name, w: t.w, h: t.h, strict: templateStrict() };
-}
-// the template's shapes in words for Prompt ideas, e.g. "a circle 80 % wide, centred" (enhance.IDEAS_TEMPLATE)
-async function templateShapes() {
-  const t = state.template, shapes = t?.doc?.shapes || [];
-  if (!shapes.length) return t?.doc?.image ? "an imported picture whose outlines the picture keeps" : "";
-  const { shapeBox } = await import("/template.js");
-  const pct = (v, of) => Math.round((v / of) * 100);
-  const where = (cx, cy) => {
-    const v = cy < 0.4 ? "top" : cy > 0.6 ? "bottom" : "", h = cx < 0.4 ? "left" : cx > 0.6 ? "right" : "";
-    return v || h ? `at the ${[v, h].filter(Boolean).join(" ")}` : "in the centre";
-  };
-  const names = { rect: "rectangle", triangle: "triangle", star: "five-point star", pen: "free shape" };
-  const list = shapes.map((sh) => {
-    const b = shapeBox(sh), w = pct(b.w, t.w), h = pct(b.h, t.h);
-    const name = sh.type === "ellipse" ? (Math.abs(b.w - b.h) <= 0.03 * Math.max(b.w, b.h) ? "circle" : "ellipse") : names[sh.type] || "shape";
-    return `a ${name} ${w === h ? `${w} %` : `${w} % × ${h} %`} of the picture ${where((b.x + b.w / 2) / t.w, (b.y + b.h / 2) / t.h)}`;
-  });
-  return `${t.w} × ${t.h} px: ${list.join("; ")}`;
+  return { image: t.name, w: t.w, h: t.h };
 }
 // template size: the Generate working size (aspect + megapixels), in steps of 16 px
 function templateDims() {
@@ -4140,14 +4114,9 @@ function renderTemplate() {
   $("tplAdd").hidden = !!t || !ok;
   $("tplEdit").disabled = !ok;
   if (t) $("tplThumb").src = inputViewUrl(t.name);
-  const ctl = ok && templateControl();
-  $("tplStrictRow").hidden = !t || !ctl;
-  $("tplStrict").value = String(Math.round(templateStrict() * 100));
-  $("tplStrictOut").textContent = `${$("tplStrict").value} %`;
-  $("tplHint").textContent = !ok ? "This model cannot use a template: pick Qwen-Image 2.1, Z-Image or FLUX.2."
-    : !t ? "Draw a flat shape template, e.g. a circle. Every picture keeps its shapes."
-    : ctl ? "Every picture keeps the outlines of these shapes (a ControlNet on their edges). Describe the scene so it fits them, e.g. seen straight from above."
-    : "This model has no ControlNet: the template runs as an edit of it, so the shapes can come out a little smaller.";
+  $("tplHint").textContent = !ok ? "This model cannot use a template: pick one that edits images (Qwen-Image 2.1, FLUX.2)."
+    : t ? "Every picture keeps the shapes of this template (it runs as an edit of it)."
+    : "Draw a flat shape template, e.g. a circle. Every picture keeps its shapes.";
 }
 async function editTemplate() {
   const t = state.template;
@@ -4159,18 +4128,12 @@ async function editTemplate() {
     const fd = new FormData();
     fd.append("file", res.blob, "template.png");
     const up = await api("/api/upload", { method: "POST", body: fd });
-    state.template = { name: up.name, w, h, doc: res.doc, strict: t?.strict ?? 0.5 };
+    state.template = { name: up.name, w, h, doc: res.doc };
     if (state.guide.type) { state.guide.type = ""; renderGuide(); showToast("Guidance is off: a template and guidance cannot be combined."); }
     saveTemplate(); renderTemplate(); syncRunButtons();
   } catch (err) { showError(err.message); }
 }
 $("tplAdd").addEventListener("click", editTemplate);
-$("tplStrict").addEventListener("input", () => {
-  if (!state.template) return;
-  state.template.strict = num("tplStrict") / 100;
-  $("tplStrictOut").textContent = `${$("tplStrict").value} %`;
-  saveTemplate();
-});
 $("tplEdit").addEventListener("click", editTemplate);
 $("tplRemove").addEventListener("click", () => { state.template = null; saveTemplate(); renderTemplate(); syncRunButtons(); });
 
@@ -4485,60 +4448,6 @@ function setCornersMode(on) {
   });
 }
 $("cornersBtn").onclick = () => setCornersMode(!post.cornersOn);
-
-// ---- Template button next to Post-processed / Raw (template runs): the outline of the template's shapes over the
-// picture, to check size and position. A view only, off until pressed and again when another run is shown; follows
-// zoom, pan and resizing while it is on.
-const tplLayer = document.createElement("img");
-tplLayer.className = "tpl-overlay"; tplLayer.alt = ""; tplLayer.hidden = true;
-bigArea.append(tplLayer);
-const tplOutlines = new Map();
-// the template's colour edges as a transparent PNG (2 px lines) at the template's own size
-function templateOutline(url) {
-  if (!tplOutlines.has(url)) tplOutlines.set(url, new Promise((resolve, reject) => {
-    const im = new Image();
-    im.onload = () => {
-      const w = im.naturalWidth, h = im.naturalHeight, c = document.createElement("canvas");
-      c.width = w; c.height = h;
-      const ctx = c.getContext("2d", { willReadFrequently: true });
-      ctx.drawImage(im, 0, 0);
-      const src = ctx.getImageData(0, 0, w, h).data, out = ctx.createImageData(w, h), o = out.data;
-      const diff = (a, b) => Math.abs(src[a] - src[b]) + Math.abs(src[a + 1] - src[b + 1]) + Math.abs(src[a + 2] - src[b + 2]) > 60;
-      const mark = (x, y) => { if (x < w && y < h) { const i = (y * w + x) * 4; o[i] = 255; o[i + 1] = 45; o[i + 2] = 149; o[i + 3] = 255; } };
-      for (let y = 0; y < h - 1; y++) for (let x = 0; x < w - 1; x++) {
-        const i = (y * w + x) * 4;
-        if (diff(i, i + 4) || diff(i, i + w * 4)) { mark(x, y); mark(x + 1, y); mark(x, y + 1); }
-      }
-      ctx.putImageData(out, 0, 0);
-      resolve(c.toDataURL("image/png"));
-    };
-    im.onerror = () => reject(new Error("Could not read the template."));
-    im.src = url;
-  }));
-  return tplOutlines.get(url);
-}
-let tplSeq = 0;
-function setTemplateShown(on) {
-  const seq = ++tplSeq;
-  $("tplShow").setAttribute("aria-pressed", String(on));
-  tplLayer.hidden = !on;
-  const run = state.run;
-  state.tplRun = on ? run : null;
-  if (!on) return;
-  templateOutline(run.templateUrl).then((src) => {
-    if (seq !== tplSeq) return;
-    tplLayer.src = src;
-    requestAnimationFrame(function tick() {
-      if (seq !== tplSeq) return;
-      if (state.run !== run) { setTemplateShown(false); return; }
-      const box = cornerImageBox();
-      tplLayer.style.visibility = box ? "" : "hidden";
-      if (box) Object.assign(tplLayer.style, { left: `${box.x}px`, top: `${box.y}px`, width: `${box.w * box.s}px`, height: `${box.h * box.s}px` });
-      requestAnimationFrame(tick);
-    });
-  }).catch((e) => { if (seq === tplSeq) { setTemplateShown(false); showError(e.message); } });
-}
-$("tplShow").addEventListener("click", () => setTemplateShown($("tplShow").getAttribute("aria-pressed") !== "true"));
 
 // ---- Add title in Post-processing: text, font, size, colour, shadow, position (snap grid, X / Y, the cross on the
 // picture). x / y / colour left empty (null) are filled by the server (title.layout: calmest band, picture's palette).

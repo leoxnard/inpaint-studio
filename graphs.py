@@ -135,24 +135,12 @@ REF_NOTE = ("{main} is the image to edit. Keep its framing, composition, camera 
             "Add no body parts, people or objects that the instruction does not ask for.")
 
 
-# Template (Generate): a model with a canny control patch (CONTROL_FAMILIES) runs it as a soft canny ControlNet on the
-# template (template_control); the others fall back to a whole-image edit of the template (TEMPLATE_FAMILIES, with
-# TEMPLATE_NOTE). The edit keeps the look but makes the shapes 5-10 % too small (benchmarks, chapter 7). Z-Image edits are
-# plain img2img (no instructions), so Z-Image only has the ControlNet way.
+# Template (Generate): the job runs as a whole-image edit of a flat shape template. Z-Image edits are plain
+# img2img (no instructions), so they are left out.
 TEMPLATE_FAMILIES = ("qwen21", "qwen21_turbo", "qwen_edit", "flux2", "flux2_dev")
-TEMPLATE_STRICT = 0.5   # default of the "How strict" slider
-
-
-def template_control(strict: float) -> tuple[float, float]:
-    """ControlNet strength and end (fraction of the steps) for a template from the "How strict" slider, 0 loose .. 1 exact.
-    The default 0.5 gives 0.75 / 0.65: the shape is fixed early, the later steps keep light and detail natural."""
-    s = min(1.0, max(0.0, float(strict)))
-    return round(0.5 + 0.5 * s, 3), round(0.35 + 0.6 * s, 3)
 TEMPLATE_NOTE = ("{main} is a flat shape template: keep the position, size and outline of its shapes exactly, but "
                  "render them as the real objects and scene described above; replace the flat colours and the "
-                 "plain background completely. Every flat shape marks where its object goes: the outer edge of the "
-                 "object lies exactly on the outline of its shape and fills it from edge to edge, not smaller, "
-                 "not larger and not shifted. Do not crop, zoom or rescale the picture.")
+                 "plain background completely.")
 
 
 def template_note(p: dict[str, Any]) -> str:

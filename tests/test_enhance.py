@@ -125,13 +125,6 @@ def test_ideas_request_with_title_fields():
     assert "title_font" not in plain["properties"]
 
 
-def test_ideas_request_with_template_shapes():
-    shapes = "992 × 992 px: a circle 80 % of the picture in the centre"
-    system = enhance.ideas_request("m", "x", template=shapes)["messages"][0]["content"]
-    assert shapes in system and "no room, no wall and no horizon" in system
-    assert "fixed template" not in enhance.ideas_request("m", "x")["messages"][0]["content"]
-
-
 def test_loaded_instances():
     listing = {"models": [{"key": "a", "loaded_instances": [{"id": "a"}, {"id": "a:2"}]}, {"key": "b", "loaded_instances": []}]}
     assert enhance.loaded_instances(listing, "a") == ["a", "a:2"] and enhance.loaded_instances(listing, "b") == []

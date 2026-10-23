@@ -30,6 +30,7 @@
       <button id="freeMem" class="linkbtn">Free</button>
     </div>
     <a class="guidelink" href="/guide.html" title="How everything works, for beginners">How it works</a>
+    <a class="guidelink" id="benchLink" href="/benchmarks.html" hidden title="Measured comparisons of models and settings">Benchmarks</a>
     <button id="setupBtn" title="Models, components and folders">Download Center</button>
   </header>
 
@@ -95,7 +96,7 @@
         <input type="file" id="refInput" accept="image/*" multiple hidden>
         <div class="tpl-block gen-only" id="tplBlock" hidden>
           <div class="tpl-title">Template</div>
-          <p class="hint" id="tplHint">Every picture keeps the shapes of a template you draw.</p>
+          <p class="hint" id="tplHint">Every picture keeps the shapes of a template you draw (it runs as an edit of it).</p>
           <div class="tpl-row" id="tplRow" hidden>
             <img class="batch-item tpl-thumb" id="tplThumb" alt="Template preview">
             <div class="row wrap">
@@ -103,8 +104,6 @@
               <button class="small" id="tplRemove" type="button">Remove</button>
             </div>
           </div>
-          <label class="range-row" id="tplStrictRow" hidden title="How exactly the picture follows the template's outlines. More = the exact outline; less = freer, the model may bend it for a more natural picture.">How strict <output id="tplStrictOut">50 %</output>
-            <input type="range" id="tplStrict" min="0" max="100" step="5" value="50"></label>
           <button id="tplAdd" type="button">Add template…</button>
         </div>
       </section>
@@ -477,9 +476,6 @@
       </div>
       <div class="row wrap viewer-tools" id="viewerTools">
         <div class="seg" id="rawSeg" role="group" aria-label="Which image"></div>
-        <div class="seg" id="tplSeg" role="group" aria-label="Template" hidden>
-          <button type="button" id="tplShow" aria-pressed="false" title="Draws the outline of the template's shapes over the picture, to check that the result has the same size and position. Only a view, nothing is changed.">Template</button>
-        </div>
         <input type="checkbox" id="viewRaw" hidden>
         <label class="check" id="compareRow"><input type="checkbox" id="compareToggle" checked> Compare with original</label>
       </div>

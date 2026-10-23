@@ -199,6 +199,10 @@ async function loadPromptHistory() {
     sel.length = 1;
     for (const t of h.prompts) sel.add(new Option(t.length > 80 ? `${t.slice(0, 80)}…` : t, t));
     sel.disabled = !h.prompts.length;
+    const ideas = $("ideasHistory");
+    ideas.length = 1;
+    for (const t of h.ideas) ideas.add(new Option(t.length > 80 ? `${t.slice(0, 80)}…` : t, t));
+    ideas.disabled = !h.ideas.length;
     $("maskHistory").replaceChildren(...h.masks.map((t) => new Option(t)));
   } catch { /* the history is a convenience */ }
 }
@@ -206,6 +210,13 @@ $("promptHistory").onchange = (e) => {
   if (!e.target.value) return;
   $("prompt").value = e.target.value;
   $("prompt").dispatchEvent(new Event("input", { bubbles: true }));
+  e.target.value = "";
+};
+
+$("ideasHistory").onchange = (e) => {
+  if (!e.target.value) return;
+  $("ideasRequest").value = e.target.value;
+  $("ideasRequest").dispatchEvent(new Event("input", { bubbles: true }));
   e.target.value = "";
 };
 
@@ -3693,6 +3704,7 @@ async function writeIdeas() {
     btn.disabled = false;
     btn.textContent = label;
   }
+    loadPromptHistory();
 }
 // one Generate job per idea, with the current settings (model, size, steps, variations…)
 async function runIdeas(ideas) {

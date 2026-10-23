@@ -123,7 +123,7 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   the panel is open: changed values (`post.saved` snapshot) → `choiceDialog` apply / discard / keep editing.
 - Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
-- Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by
+- Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts + Prompt ideas requests, 50 each), written by
   `create_job` / `/api/mask`, read by `GET /api/prompt-history`. Top bar: CPU / GPU / RAM meters (`sysload.py`: the app part = this server + ComfyUI, RAM as phys footprint; GPU only as a whole), **Free** (`POST /api/comfy/free`) is enabled only while `MODELS["loaded"]` (set by a finished run or mask, cleared by Free or a new ComfyUI pid).
 - Template (Generate, `params.template` {image, w, h}, `web/template.js`): `create_job` turns the Generate job into a
   whole-image edit of the template (task edit, image = template, src size = template size, no mask, denoise 1; the params

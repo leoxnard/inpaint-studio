@@ -219,9 +219,9 @@ async def free_memory():
     return {"freed": True}
 
 
-# ---------------------------------------------------------------- prompt history (edit/generate prompts, mask texts)
+# ---------------------------------------------------------------- prompt history (edit/generate prompts, mask texts, Prompt ideas requests)
 
-HISTORY_KINDS, HISTORY_MAX = ("prompts", "masks"), 50
+HISTORY_KINDS, HISTORY_MAX = ("prompts", "masks", "ideas"), 50
 
 
 def load_prompt_history() -> dict:
@@ -1716,6 +1716,7 @@ async def _complete_run(job: dict, pid: str) -> None:
         return
     use_mask = params.get("use_mask") and params.get("mask")
     run.update(before_url=view_url(before) if before else run.get("before_url"), raw_url=view_url(raw) if raw else None,
+    remember_prompt("ideas", req.request)
                mask_url=input_mask_url(params["mask"]) if use_mask else None, result_url=view_url(res) if res else None)
     post = {k: bool(params.get(f"post_{k}")) for k in ("colors", "warp", "poisson")} | {"auto": bool(params.get("post_align"))}
     if params.get("outpaint") and params.get("mode") != "paste" and before and raw:

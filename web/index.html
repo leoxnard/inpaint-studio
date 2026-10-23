@@ -297,7 +297,9 @@
 
       <section class="sec gen-only ideas" id="ideasSec" data-fold="ideas">
         <h2 class="h" title="A language model in LM Studio writes the prompts">Prompt ideas</h2>
-        <label>What do you want?
+        <div class="row between"><label for="ideasRequest">What do you want?</label>
+          <select id="ideasHistory" class="compact" aria-label="Recent requests" title="Recent requests"><option value="">Recent…</option></select></div>
+        <label>
           <textarea id="ideasRequest" rows="3" placeholder="e.g. Covers for my playlists: Late Night Jazz, Gym Hardstyle, Sunday Coffee"></textarea>
         </label>
         <div class="grid2">

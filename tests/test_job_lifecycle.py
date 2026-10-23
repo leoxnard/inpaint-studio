@@ -107,8 +107,9 @@ def test_prompt_history_dedupes_newest_first(tmp_path, monkeypatch):
     for t in ("a", "b", "a", "  ", "c"):
         server.remember_prompt("prompts", t)
     server.remember_prompt("masks", "person")
+    server.remember_prompt("ideas", "playlist covers")
     h = TestClient(server.app).get("/api/prompt-history").json()
-    assert h == {"prompts": ["c", "a", "b"], "masks": ["person"]}
+    assert h == {"prompts": ["c", "a", "b"], "masks": ["person"], "ideas": ["playlist covers"]}
 
 
 def test_comfyui_png_carries_the_graph(tmp_path, monkeypatch):

@@ -258,7 +258,7 @@ The same options are in Create and run automatically when the job is done.
 - Shortcuts: **Tab** switches between Create and Runs. In Create **B** paint, **E** erase, **W** wand, **G** bucket, **[ ]** brush size,
   **Enter** or **⌘↵** add to queue. In Runs **← →** previous / next run, **↑ ↓** a row up / down, **Shift** + arrow extends
   the selection (and starts it), **Delete** deletes the run (asks first), **+ − 0** zoom the image, **Alt + ← →** steps through saved steps.
-- **Recent…** above the prompt and the mask field remember your last prompts and mask texts.
+- **Recent…** above the prompt, the mask field and Prompt ideas' *What do you want?* remember your last prompts, mask texts and idea requests.
 - Hover a result tile to see the original on its right half. **Download for ComfyUI** saves the result with its
   workflow inside: drop it onto ComfyUI to open the exact graph.
 

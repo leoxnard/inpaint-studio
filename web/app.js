@@ -4979,6 +4979,7 @@ $("upscale").addEventListener("change", syncUpscaler);
 async function waitForComfy() {
   const view = $("bootView");
   const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  let listed = null;   // the step the list shows: rebuilt only when it changes, else the spinner restarts every poll
   for (;;) {
     let s;
     try { s = await api("/api/status"); } catch { s = null; }
@@ -5010,10 +5011,14 @@ async function waitForComfy() {
     $("bootStep").textContent = `${b.steps[b.step]}…`;
     $("bootTime").textContent = `${Math.round(b.elapsed)} s`;
     $("bootBar").style.width = `${pct.toFixed(1)}%`;
-    $("bootSteps").innerHTML = b.steps.map((label, i) => {
-      const icon = i < b.step ? '<i class="icon-check static">✓</i>' : i === b.step ? '<i class="icon-spin"></i>' : '<i class="icon-wait"></i>';
-      return `<li class="${i < b.step ? "done" : i === b.step ? "now" : ""}"><span class="ic">${icon}</span>${esc(label)}</li>`;
-    }).join("");
+    const key = `${b.step}/${b.steps.join("|")}`;
+    if (key !== listed || !$("bootSteps").childElementCount) {
+      listed = key;
+      $("bootSteps").innerHTML = b.steps.map((label, i) => {
+        const icon = i < b.step ? '<i class="icon-check static">✓</i>' : i === b.step ? '<i class="icon-spin"></i>' : '<i class="icon-wait"></i>';
+        return `<li class="${i < b.step ? "done" : i === b.step ? "now" : ""}"><span class="ic">${icon}</span>${esc(label)}</li>`;
+      }).join("");
+    }
     await new Promise((r) => setTimeout(r, 400));
   }
   if (!view.hidden) {

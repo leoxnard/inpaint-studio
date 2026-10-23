@@ -52,6 +52,12 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   Design tokens (Ollama style) are CSS variables at the top of `styles.css`. `guide.html` (+ `guide.css`, `guide.js`) is the
   standalone beginner guide ("How it works" in the top bar; `/#downloads` opens the Download Center). On a fresh install
   (no config, no runs at server start) `/` serves it once until `POST /api/guide/seen` writes `guide_seen` in App Support.
+  `template.js` (+ `template.css`) is the Template editor modal (`openTemplateEditor({width, height, doc})` → `{blob, doc}`; SVG
+  shapes + pen paths, exported to a PNG via Path2D); `state.template` lives in localStorage (`app.js`, "Template" block).
+  `benchmarks.html` (+ `benchmarks.css`, `benchmarks.js`, `benchmarks-viewer.js`) renders benchmark results from
+  App Support `benchmarks/` (`data.json` + `img/`, never shipped): `GET/POST /api/benchmarks` (save keeps `data.json.bak`),
+  pictures at `/data/benchmarks/`; the top-bar link shows only when data exists. Blocks: goal / note / group / input / cards /
+  verdict / zoom (synced zoom grid like Compare).
   Its loop frames in `web/guide/` come from a real Qwen-Image 2.1 UC run (guess_NN = step previews, noisy_NN = guess
   mixed with pixel noise at the step's sigma). `compare.js` renders the
   multi-run Compare view (detail grid with synced zoom/pan, split strips); `app.js` handles picking and labels.
@@ -119,6 +125,11 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
 - Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by
   `create_job` / `/api/mask`, read by `GET /api/prompt-history`. Top bar: CPU / GPU / RAM meters (`sysload.py`: the app part = this server + ComfyUI, RAM as phys footprint; GPU only as a whole), **Free** (`POST /api/comfy/free`) is enabled only while `MODELS["loaded"]` (set by a finished run or mask, cleared by Free or a new ComfyUI pid).
+- Template (Generate, `params.template` {image, w, h}, `web/template.js`): `create_job` turns the Generate job into a
+  whole-image edit of the template (task edit, image = template, src size = template size, no mask, denoise 1; the params
+  keep `template`). Needs an edit-capable preset of `graphs.TEMPLATE_FAMILIES` (not Z-Image: img2img only) and refuses
+  `control` (400). `graphs.TEMPLATE_NOTE` (`template_note`, names image 1 the encoder's way) is added after the prompt.
+  `editParams` sends it from `state.template` only for Generate (Prompt ideas and variations go through it too).
 - Guidance (Generate, `graphs.apply_control`, `CONTROL_FAMILIES` mirrored in `web/app.js` `guideFamily`): Z-Image Fun
   ControlNet Union (`ZImageFunControlnet`), Qwen-Image 2512 DiffSynth patches or the Qwen-Image 2.1 Fun ControlNet Union
   (both `QwenImageDiffsynthControlnet`, which detects the 2.1 branch; it wraps `QwenImage21Cache`) via `ModelPatchLoader`

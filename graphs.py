@@ -135,6 +135,21 @@ REF_NOTE = ("{main} is the image to edit. Keep its framing, composition, camera 
             "Add no body parts, people or objects that the instruction does not ask for.")
 
 
+# Template (Generate): the job runs as a whole-image edit of a flat shape template. Z-Image edits are plain
+# img2img (no instructions), so they are left out.
+TEMPLATE_FAMILIES = ("qwen21", "qwen21_turbo", "qwen_edit", "flux2", "flux2_dev")
+TEMPLATE_NOTE = ("{main} is a flat shape template: keep the position, size and outline of its shapes exactly, but "
+                 "render them as the real objects and scene described above; replace the flat colours and the "
+                 "plain background completely.")
+
+
+def template_note(p: dict[str, Any]) -> str:
+    """Hidden instruction for a Generate run with a template; names image 1 the encoder's way (ref_labels)."""
+    if not p.get("template"):
+        return ""
+    return TEMPLATE_NOTE.format(main=ref_labels(p.get("family", "qwen21"), 0)[0].capitalize())
+
+
 def ref_labels(family: str, n: int) -> tuple[str, list[str]]:
     """The encoder's own names for the edited image and the references: Qwen 2.1 tags them <image1>, <image2>
     (TextEncodeQwenImage21), Edit 2511 "Picture 1", "Picture 2" (TextEncodeQwenImageEditPlus)."""
@@ -183,6 +198,8 @@ def edit_prompt(p: dict[str, Any]) -> str:
         prompt = f"{note}\n\n{prompt}"
     if takes := reference_takes(p):
         prompt = f"{prompt}\n\n{takes}"
+    if note := template_note(p):
+        prompt = f"{prompt}\n\n{note}"
     if p.get("clean_overlays"):
         prompt = f"{prompt}\n\n{CLEAN_NOTE_GENERATE if p.get('task') == 'generate' else CLEAN_NOTE}"
     if p.get("outpaint"):

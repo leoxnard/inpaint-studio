@@ -752,6 +752,11 @@ button.big { min-height: 52px; font-size: 15px; font-weight: 700; }
 .ref-row.skipped { opacity: .4; }
 .ref-row .batch-item { width: 52px; }
 .ref-list > .batch-item.add { width: 52px; }
+.tpl-block { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.tpl-block[hidden], .tpl-row[hidden] { display: none; }
+.tpl-title { font-weight: 600; font-size: 13px; }
+.tpl-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; align-items: center; }
+.tpl-thumb { width: 72px; height: 72px; object-fit: contain; background: var(--surface); }
 .ref-row .ref-take { grid-column: 2 / -1; font-size: 13px; color: var(--body); overflow-wrap: anywhere; }
 .ref-row .ref-del {
   min-height: 0; width: 24px; height: 24px; padding: 0;

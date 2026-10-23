@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700&display=swap">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/imageedit.css">
+  <link rel="stylesheet" href="/template.css">
   <link rel="stylesheet" href="/maskedit.css">
 </head>
 <body>
@@ -92,6 +93,18 @@
         <p class="hint" id="refsHint"></p>
         <div class="ref-list" id="refGrid"></div>
         <input type="file" id="refInput" accept="image/*" multiple hidden>
+        <div class="tpl-block gen-only" id="tplBlock" hidden>
+          <div class="tpl-title">Template</div>
+          <p class="hint" id="tplHint">Every picture keeps the shapes of a template you draw (it runs as an edit of it).</p>
+          <div class="tpl-row" id="tplRow" hidden>
+            <img class="batch-item tpl-thumb" id="tplThumb" alt="Template preview">
+            <div class="row wrap">
+              <button class="small" id="tplEdit" type="button">Edit</button>
+              <button class="small" id="tplRemove" type="button">Remove</button>
+            </div>
+          </div>
+          <button id="tplAdd" type="button">Add template…</button>
+        </div>
       </section>
 
       <section class="sec" id="sizeSec" data-fold="size">

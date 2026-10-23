@@ -64,7 +64,7 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family", "enhance", "prompt_original",
                   "upscale", "upscale_width", "upscale_long_side", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "upscale_colors", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control", "title")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control", "title", "template")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -1964,6 +1964,7 @@ async def create_job(params: dict):
                            **{k: t[k] for k in ("font", "size", "x", "y", "color", "shadow") if t.get(k) is not None}}
         if not params["title"]["text"] or params.get("remove_bg"):
             params.pop("title")
+    pr = None
     if params.get("preset"):
         pr = presets.PRESETS.get(params["preset"])
         if not pr:
@@ -1974,6 +1975,25 @@ async def create_job(params: dict):
         # Advanced overrides: an explicitly chosen unet / clip / vae wins over the preset's file
         resolved = presets.resolve(params["preset"], params.get("quant"))
         params.update({k: params.get(k) or v for k, v in resolved.items()})
+    if t := params.get("template"):   # Generate with a template: a whole-image edit of the flat shape template
+        if params.get("task") != "generate":
+            params.pop("template")
+        else:
+            if not isinstance(t, dict) or not isinstance(t.get("image"), str) or not t["image"]:
+                raise HTTPException(400, "invalid template: image is missing")
+            try:
+                tw, th = int(t.get("w")), int(t.get("h"))
+            except (TypeError, ValueError):
+                tw = th = 0
+            if tw <= 0 or th <= 0:
+                raise HTTPException(400, "invalid template: width and height must be positive")
+            if params.get("control"):
+                raise HTTPException(400, "Use either a template or guidance, not both")
+            if params.get("family") not in graphs.TEMPLATE_FAMILIES or (pr and "edit" not in pr["modes"]):
+                raise HTTPException(400, "This model cannot use a template (it needs a model that edits images)")
+            params["template"] = {"image": t["image"], "w": tw, "h": th}
+            params.update(task="edit", image=t["image"], src_w=tw, src_h=th, use_mask=False, mask=None,
+                          mode="inpaint", keep_whole=False, denoise=1.0, crop_stitch=False, outpaint=None)
     if params.get("task") == "generate":
         params.update(use_mask=False, mask=None, image=None, denoise=1.0)
     # extra reference images: only as many as the model's text encoder takes

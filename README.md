@@ -26,6 +26,7 @@ of the app; after that only from the top bar.
 - [Edit modes](#edit-modes)
 - [Prompt options](#prompt-options)
 - [Reference images](#reference-images)
+- [Template (Generate)](#template-generate)
 - [Folders (batch)](#folders-batch)
 - [Upscaling](#upscaling)
 - [Post-processing](#post-processing)
@@ -332,6 +333,25 @@ LoRAs, Your files).
   linked into the models folder, not copied, and **Remove** deletes only the link. A **Language model (LM Studio)**
   (.gguf) is linked into LM Studio's models folder instead and shows up in Improve prompt and Prompt ideas.
 - **Free memory** in the top bar unloads ComfyUI's models; next to it you see how much RAM is free.
+
+## Template (Generate)
+
+**Reference images → Add template…** opens a small shape editor. Draw a flat stencil, e.g. a circle for a vinyl record,
+and every picture you generate keeps exactly those shapes (position, size, outline) while the model paints the real
+scene into them. It runs as a whole-image edit of the template with denoise 1, so it needs a model that edits images
+(Qwen-Image 2.1, Edit 2511, FLUX.2); Z-Image and Qwen-Image 2512 cannot use it.
+
+| Tool | How |
+|---|---|
+| Select (V) | click a shape, drag to move, 8 handles to resize (Shift = proportional), arrow keys nudge (Shift = 10 px) |
+| Rectangle (R), Ellipse (O), Triangle (T), Star (S) | drag to draw, Shift = square / circle; rectangles have a corner radius |
+| Pen (P) | click = sharp anchor, click and drag = smooth anchor; click the first anchor or press Enter to close, Esc cancels. Select the shape to edit anchors and handles, Alt-click an anchor to switch smooth / sharp |
+
+- Delete removes, Cmd/Ctrl+Z undoes (Shift redoes), Cmd/Ctrl+D duplicates. **Image…** adds a picture as the background
+  layer (contain or cover); the image alone can also be the template.
+- The template has the working size of Generate (aspect and megapixels) and is kept in the browser, so it survives reloads;
+  **Edit** and **Remove** sit next to its preview. Prompt ideas and variations use it too.
+- A template and **Guidance** exclude each other: choosing one removes the other.
 
 ## Guidance (Generate)
 

@@ -1435,6 +1435,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     save_last: parseInt($("saveLast").value, 10) || 0,
     clean_overlays: state.task !== "generate" && $("cleanOverlays").checked,
     control: guideParams() || undefined,
+    template: templateParams(),
     keep_whole: wholeImage() && $("keepWhole").checked && !removeBgOn(),
     remove_bg: removeBgOn() || undefined,
     ...enhanceParams(),
@@ -3861,10 +3862,13 @@ for (const sec of document.querySelectorAll(".sec[data-fold]")) {
 
 function renderRefs() {
   const max = maxRefs();
-  if (state.refs.length) setFold($("refsSec"), false, false);   // added references are never hidden
+  if (state.refs.length || (state.template && state.task === "generate")) setFold($("refsSec"), false, false);   // added references / a template are never hidden
   $("refNoteRow").hidden = !(max && state.task === "edit" && state.refs.length);   // only with a reference image
   if (isDefaultRefNote($("refNote").value)) $("refNote").value = defaultRefNote();
-  $("refsSec").hidden = !max;
+  const tplOk = templateAllowed();
+  $("refsSec").hidden = !(max || (state.task === "generate" && tplOk));
+  $("refsHint").hidden = $("refGrid").hidden = !max;
+  renderTemplate();
   const first = state.task === "generate" ? 1 : 2;
   $("refsHint").textContent = (state.task === "generate"
     ? "Optional. Refer to them as image 1, 2 … in the prompt."
@@ -3954,6 +3958,10 @@ function renderGuide() {
 $("guideType").addEventListener("click", (e) => {
   if (e.target.dataset.type == null) return;
   state.guide.type = e.target.dataset.type;
+  if (state.guide.type && state.template) {   // a template and guidance cannot be combined (the server refuses it)
+    state.template = null; saveTemplate(); renderTemplate();
+    showToast("Template removed: a template and guidance cannot be combined.");
+  }
   const patch = guidePatch(state.guide.type);
   if (patch?.strength) { $("guideStrength").value = patch.strength; $("guideStrength").dispatchEvent(new Event("input")); }
   renderGuide(); syncRunButtons();
@@ -4053,6 +4061,69 @@ $("refInput").addEventListener("change", async (e) => {
   saveSession({ refs: state.refs });
   renderRefs();
 });
+
+// ------------------------------------------------------------------ template (Generate)
+// A flat shape template drawn in web/template.js. The job gets params.template {image, w, h}; the server runs it as a
+// whole-image edit of the template (graphs.TEMPLATE_NOTE keeps its shapes). state.template = {name, w, h, doc}.
+const TEMPLATE_KEY = "inpaint-studio-template-v1";
+const TEMPLATE_FAMILIES = ["qwen21", "qwen21_turbo", "qwen_edit", "flux2", "flux2_dev"];   // graphs.TEMPLATE_FAMILIES
+const TEMPLATE_IMAGE_MAX = 3e6;   // an imported image above this many characters (data URL) is not kept in localStorage
+state.template = (() => { try { return JSON.parse(localStorage.getItem(TEMPLATE_KEY) || "null"); } catch { return null; } })();
+function saveTemplate() {
+  try {
+    if (!state.template) { localStorage.removeItem(TEMPLATE_KEY); return; }
+    const t = JSON.parse(JSON.stringify(state.template));
+    if (t.doc?.image && (t.doc.image.src || "").length > TEMPLATE_IMAGE_MAX) t.doc.image = null;
+    localStorage.setItem(TEMPLATE_KEY, JSON.stringify(t));
+  } catch { /* storage optional */ }
+}
+const templateAllowed = () => {
+  const p = presetById($("preset").value);
+  return !!p && p.modes.includes("edit") && TEMPLATE_FAMILIES.includes(p.family);
+};
+// what editParams sends (undefined without a template, outside Generate, or when the model cannot use it)
+function templateParams() {
+  const t = state.template;
+  if (state.task !== "generate" || !t || !templateAllowed()) return undefined;
+  return { image: t.name, w: t.w, h: t.h };
+}
+// template size: the Generate working size (aspect + megapixels), in steps of 16 px
+function templateDims() {
+  const { w: aw, h: ah } = aspectDims();
+  const k = Math.sqrt(Math.max(0.1, num("megapixels") || 1) * 1e6 / (aw * ah));
+  return { w: Math.max(64, Math.round(aw * k / 16) * 16), h: Math.max(64, Math.round(ah * k / 16) * 16) };
+}
+function renderTemplate() {
+  const show = state.task === "generate" && !$("refsSec").hidden;
+  $("tplBlock").hidden = !show;
+  if (!show) return;
+  const ok = templateAllowed(), t = state.template;
+  $("tplRow").hidden = !t;
+  $("tplAdd").hidden = !!t || !ok;
+  $("tplEdit").disabled = !ok;
+  if (t) $("tplThumb").src = inputViewUrl(t.name);
+  $("tplHint").textContent = !ok ? "This model cannot use a template: pick one that edits images (Qwen-Image 2.1, FLUX.2)."
+    : t ? "Every picture keeps the shapes of this template (it runs as an edit of it)."
+    : "Draw a flat shape template, e.g. a circle. Every picture keeps its shapes.";
+}
+async function editTemplate() {
+  const t = state.template;
+  const { w, h } = t ? { w: t.w, h: t.h } : templateDims();
+  const { openTemplateEditor } = await import("/template.js");
+  const res = await openTemplateEditor({ width: w, height: h, doc: t?.doc });
+  if (!res) return;
+  try {
+    const fd = new FormData();
+    fd.append("file", res.blob, "template.png");
+    const up = await api("/api/upload", { method: "POST", body: fd });
+    state.template = { name: up.name, w, h, doc: res.doc };
+    if (state.guide.type) { state.guide.type = ""; renderGuide(); showToast("Guidance is off: a template and guidance cannot be combined."); }
+    saveTemplate(); renderTemplate(); syncRunButtons();
+  } catch (err) { showError(err.message); }
+}
+$("tplAdd").addEventListener("click", editTemplate);
+$("tplEdit").addEventListener("click", editTemplate);
+$("tplRemove").addEventListener("click", () => { state.template = null; saveTemplate(); renderTemplate(); syncRunButtons(); });
 
 // ------------------------------------------------------------------ session restore (image + mask survive reloads)
 const SESSION_KEY = "inpaint-studio-session-v1";

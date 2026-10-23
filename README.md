@@ -302,6 +302,8 @@ The model is unloaded in LM Studio right after the rewrite, so the image model h
 
 **Prompt ideas** (Generate, right column above the prompt preset): describe what you want, e.g. "covers for my playlists A, B, C", and a language model
 in LM Studio writes English prompts for it, each split into subject, setting, style and camera.
+Things the request fixes, like a camera angle ("top-down", "from above"), a framing or what must be in the picture, go into every
+prompt unchanged; the model only picks a camera itself when the request names none.
 
 | Option | What it does |
 |---|---|
@@ -337,9 +339,16 @@ LoRAs, Your files).
 ## Template (Generate)
 
 **Reference images → Add template…** opens a small shape editor. Draw a flat stencil, e.g. a circle for a vinyl record,
-and every picture you generate keeps exactly those shapes (position, size, outline) while the model paints the real
-scene into them. It runs as a whole-image edit of the template with denoise 1, so it needs a model that edits images
-(Qwen-Image 2.1, Edit 2511, FLUX.2); Z-Image and Qwen-Image 2512 cannot use it.
+and every picture you generate keeps those outlines (position, size, shape) while the model paints the real scene into
+them. Shapes are always black on white: only their outlines count.
+
+- With Qwen-Image 2.1 (all variants), Z-Image and Qwen-Image 2512 the template runs as a soft **canny ControlNet** on its
+  edges (the ControlNet is downloaded on the first run). **How strict** sets how exactly: 50 % (default) keeps the exact
+  outline and leaves light and details free; more = stricter, less = freer.
+- FLUX.2 and Edit 2511 have no ControlNet: there the template runs as a whole-image edit of it, and the shapes can come out
+  5–10 % smaller (Benchmarks → Template fit).
+- Describe a scene that fits the shapes: a round object seen straight from above with only a surface around it (no room,
+  no horizon, no lens words). **Prompt ideas** do this on their own when a template is set: they get its shapes in words.
 
 | Tool | How |
 |---|---|
@@ -347,11 +356,16 @@ scene into them. It runs as a whole-image edit of the template with denoise 1, s
 | Rectangle (R), Ellipse (O), Triangle (T), Star (S) | drag to draw, Shift = square / circle; rectangles have a corner radius |
 | Pen (P) | click = sharp anchor, click and drag = smooth anchor; click the first anchor or press Enter to close, Esc cancels. Select the shape to edit anchors and handles, Alt-click an anchor to switch smooth / sharp |
 
+- **Snap** (on by default): moving, resizing, drawing and pen anchors snap to the canvas edges, centre and thirds and to the
+  edges, centres and anchors of the other shapes; a pink line shows what it snapped to. Hold Alt while dragging to skip it,
+  or switch Snap off in the toolbar.
 - Delete removes, Cmd/Ctrl+Z undoes (Shift redoes), Cmd/Ctrl+D duplicates. **Image…** adds a picture as the background
   layer (contain or cover); the image alone can also be the template.
 - The template has the working size of Generate (aspect and megapixels) and is kept in the browser, so it survives reloads;
   **Edit** and **Remove** sit next to its preview. Prompt ideas and variations use it too.
-- A template and **Guidance** exclude each other: choosing one removes the other.
+- A run made with a template has a **Template** button next to Post-processed / Raw above the picture: it draws the outline of the template's shapes
+  over the picture (off by default, a view only) to check that the result has the same size and position.
+- A template and **Guidance** exclude each other (both use the control image): choosing one removes the other.
 
 ## Guidance (Generate)
 

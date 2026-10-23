@@ -119,8 +119,24 @@ prompt per picture. Write every field in English, in plain descriptive language,
 - subject: the main subject and what it does or how it looks, concrete and visual (one or two sentences).
 - setting: where it is, the background, time of day, weather, surroundings (one sentence).
 - style: the medium and look, e.g. photo, oil painting, 3D render, flat illustration; colours, mood, light (one sentence).
-- camera: framing, angle, lens and depth of field, e.g. "close-up from a low angle, 35 mm, shallow depth of field".
+- camera: framing, angle, lens and depth of field, e.g. "close-up from a low angle, 35 mm, shallow depth of field". \
+Choose it yourself only when the request names none.
+Requirements in the request (camera angle, perspective, framing, size, what must or must not be in the picture) hold for \
+every prompt: put each into the field it belongs to, in concrete words, and never replace it with your own idea. Make the \
+subject agree with the camera: a record seen from directly above lies flat and is a perfect circle, so it does not stand \
+upright. "90 degrees from the ceiling to the floor" or "top-down" means: camera directly above, pointing straight down, \
+flat lay, no perspective.
 Do not put any text, letters or logos into the picture unless the user asks for it."""
+IDEAS_TEMPLATE = """Every picture follows a fixed template ({shapes}). Each shape is exactly where one main object goes, at \
+exactly that size; the picture keeps these outlines. Plan every prompt around them:
+- Make the main object fit the shape it fills (a circle = a round object such as a record, a plate or a clock) and say \
+that it fills that area.
+- Choose a camera that shows the shape undistorted: a round object straight from above or straight from the front. Write \
+no lens, focal length or depth-of-field words.
+- Keep the background in the same view as the object: seen from above, describe only the surface it lies on (a table, a \
+blanket, a floor) and say there is no room, no wall and no horizon. A bigger object around it (e.g. a record player \
+around a record) has to fill the whole picture, or it ends up smaller than the shape.
+- Add nothing that would cover or tilt the main shape. Describe small visible details concretely (e.g. a crisp printed label)."""
 IDEAS_TITLE = """The app writes each title into its picture afterwards. For every prompt also choose:
 - title_position: {position_rule}
 - title_size: small, medium or large, fitting the title's length and the picture.
@@ -130,10 +146,11 @@ TITLE_FIELDS = ("title_position", "title_size", "title_font")
 
 
 def ideas_request(model: str, text: str, count: int = 0, same_style: bool = False, seed: int = 0,
-                  fonts: list[str] | None = None, position: str = "auto") -> dict[str, Any]:
+                  fonts: list[str] | None = None, position: str = "auto", template: str = "") -> dict[str, Any]:
     """Chat completion body for Prompt ideas: the answer is JSON that follows the schema (LM Studio enforces it).
     fonts (Add title): every idea also gets the title's position, size and font (title.py writes it later).
-    position other than auto is fixed: the model only plans the picture around it."""
+    position other than auto is fixed: the model only plans the picture around it.
+    template (Generate with a template): its shapes in words, e.g. "a circle 80 % wide in the centre"."""
     n = max(0, min(int(count or 0), IDEAS_MAX))
     rules = [f"Write exactly {n} prompts." if n else
              "Write as many prompts as the request asks for (one per item it names); if it names none, write 4."]
@@ -144,6 +161,8 @@ def ideas_request(model: str, text: str, count: int = 0, same_style: bool = Fals
     item = {"type": "object", "additionalProperties": False, "required": ["title", *IDEA_FIELDS],
             "properties": {k: {"type": "string"} for k in ("title", *IDEA_FIELDS)}}
     system = IDEAS_SYSTEM
+    if template.strip():
+        system += "\n\n" + IDEAS_TEMPLATE.format(shapes=template.strip())
     if fonts:
         item["required"] += list(TITLE_FIELDS)
         places = ["top", "center", "bottom"] if position not in ("top", "center", "bottom") else [position]

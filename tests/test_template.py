@@ -1,4 +1,4 @@
-"""Template (Generate): the job turns into a whole-image edit of the flat shape template."""
+"""Template (Generate): a soft canny ControlNet on the template, or a whole-image edit of it for models without one."""
 import asyncio
 
 import pytest
@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 import graphs
 import installer
+import presets
 import server
 
 
@@ -27,7 +28,25 @@ def run_job(monkeypatch, params):
     return seen
 
 
-def test_template_job_is_a_whole_image_edit(monkeypatch):
+def test_template_runs_as_a_soft_canny_controlnet(monkeypatch):
+    seen = run_job(monkeypatch, base())
+    p = seen["params"]
+    assert p["task"] == "generate" and p.get("image") is None
+    assert p["control"] == {"type": "canny", "image": "t.png", "source": "photo", "strength": 0.75, "end": 0.65}
+    assert p["template"] == {"image": "t.png", "w": 960, "h": 960, "strict": 0.5}
+    assert any(n["class_type"] == "Canny" for n in seen["graph"].values())
+    strict = run_job(monkeypatch, base(template={"image": "t.png", "w": 960, "h": 960, "strict": 1}))["params"]["control"]
+    assert (strict["strength"], strict["end"]) == (1.0, 0.95)
+
+
+def test_template_control_follows_the_slider():
+    assert graphs.template_control(0) == (0.5, 0.35)
+    assert graphs.template_control(0.5) == (0.75, 0.65)
+    assert graphs.template_control(7) == (1.0, 0.95)
+
+
+def test_template_without_controlnet_is_a_whole_image_edit(monkeypatch):
+    monkeypatch.setattr(presets, "control_patch", lambda *a: None)   # like FLUX.2: no canny patch
     seen = run_job(monkeypatch, base())
     p = seen["params"]
     assert p["task"] == "edit" and p["image"] == "t.png" and (p["src_w"], p["src_h"]) == (960, 960)
@@ -44,8 +63,8 @@ def test_template_conflicts_are_refused(monkeypatch):
         run_job(monkeypatch, base(template={"image": "t.png", "w": 0, "h": 5}))
     with pytest.raises(HTTPException):
         run_job(monkeypatch, base(template={"w": 5, "h": 5}))
-    with pytest.raises(HTTPException):   # Qwen-Image 2512 only generates
-        run_job(monkeypatch, base(preset="qwen_2512", family="qwen"))
+    with pytest.raises(HTTPException):   # a family with neither a control patch nor a template edit
+        run_job(monkeypatch, base(preset="qwen_2512", family="nope"))
 
 
 def test_template_note_names_image_one_per_family():

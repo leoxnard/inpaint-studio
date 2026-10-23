@@ -60,3 +60,25 @@ def test_import_routes(env):
     assert c.get("/api/imports/guess", params={"path": str(f)}).json()["supported"] is False
     assert c.post("/api/imports", json={"path": str(f), "kind": "lora"}).status_code == 400
     assert c.delete("/api/imports/nope").status_code == 404
+
+
+def test_language_model_links_into_lmstudio(env, monkeypatch):
+    tmp, cfg = env
+    lms = tmp / "lmstudio"
+    monkeypatch.setenv("INPAINT_STUDIO_LMSTUDIO_MODELS", str(lms))
+    (tmp / "chat-Q4_K_M.gguf").write_bytes(b"g" * 4)
+    item = imports.add(cfg, str(tmp / "chat-Q4_K_M.gguf"), "llm")
+    link = lms / "inpaint-studio/chat-Q4_K_M/chat-Q4_K_M.gguf"
+    assert link.is_symlink() and f"imp_{item['id']}" not in presets.COMPONENTS
+    (tmp / "x.safetensors").write_bytes(b"s")
+    with pytest.raises(imports.ImportError_):
+        imports.add(cfg, str(tmp / "x.safetensors"), "llm")
+    imports.remove(cfg, item["id"])
+    assert not link.exists() and (tmp / "chat-Q4_K_M.gguf").exists()
+    own = lms / "pub/own/own-Q4.gguf"   # already in LM Studio: listed without a link, Remove keeps it
+    own.parent.mkdir(parents=True)
+    own.write_bytes(b"o")
+    item = imports.add(cfg, str(own), "llm")
+    assert item["in_lmstudio"] and not (lms / "inpaint-studio/own-Q4").exists()
+    imports.remove(cfg, item["id"])
+    assert own.exists()

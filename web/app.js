@@ -3509,7 +3509,7 @@ function removeBgOn() { return removeBgAvailable() && $("removeBg").checked; }
 // Improve prompt: a language model in LM Studio rewrites the prompt before the picture (enhance.py)
 state.enhancer = { up: false, models: [] };
 function enhanceOn() {
-  return REMOVE_BG_FAMILIES.includes(currentFamily()) && $("enhance").checked && state.enhancer.up && !!$("enhanceModel").value;
+  return REMOVE_BG_FAMILIES.includes(currentFamily()) && $("enhance").checked && state.enhancer.models.length > 0 && !!$("enhanceModel").value;
 }
 function enhanceParams() {
   if (!enhanceOn()) return {};
@@ -3531,7 +3531,7 @@ function syncEnhance() {
   $("enhanceRow").title = avail ? $("enhanceRow").dataset.title : "Only for Qwen-Image 2.1 (or Turbo).";
   $("enhanceModel").hidden = !on || !state.enhancer.models.length;
   const m = state.enhancer.models.find((x) => x.id === $("enhanceModel").value);
-  const hint = !on ? "" : !state.enhancer.up ? "Start the server in LM Studio (Developer → Start server) to use this."
+  const hint = !on ? "" : !state.enhancer.up && !state.enhancer.can_start ? "Start the server in LM Studio (Developer → Start server) to use this."
     : !state.enhancer.models.length ? "No language model in LM Studio. Download one there, e.g. Qwen3.5 9B."
     : state.task === "edit" && m && !m.vision ? "This model does not see images: it rewrites the text only." : "";
   $("enhanceHint").textContent = hint;
@@ -3540,6 +3540,113 @@ function syncEnhance() {
 $("enhanceRow").dataset.title = $("enhanceRow").title;
 $("enhance").addEventListener("change", () => { syncEnhance(); if ($("enhance").checked) loadEnhancer(); });
 $("enhanceModel").addEventListener("change", () => { try { localStorage.setItem("enhanceModel", $("enhanceModel").value); } catch {} syncEnhance(); });
+
+// Prompt ideas (Generate): a language model in LM Studio writes prompts (subject / setting / style / camera) from a
+// request; the server loads it, gets JSON and unloads it again (POST /api/ideas). Each tile runs one Generate job.
+state.ideas = [];
+const IDEA_FIELDS = ["subject", "setting", "style", "camera"];
+const IDEAS_OPTS = { ideasModel: "value", ideasCount: "value", ideasSameStyle: "checked", ideasText: "checked" };
+function mk(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+function composeIdea(i) {   // mirrors enhance.compose
+  const out = IDEA_FIELDS.map((k) => (i[k] || "").trim().replace(/\.+$/, "")).filter(Boolean).join(". ");
+  const title = (i.title || "").trim();
+  return ((out ? `${out}.` : "") + (i.text && title ? ` The title "${title}" is written on it in large, clean, legible letters.` : "")).trim();
+}
+async function loadIdeaModels() {
+  state.enhancer = await api("/api/enhancer").catch(() => ({ up: false, models: [] }));
+  const sel = $("ideasModel"), keep = sel.value || localStorage.getItem("ideasModel");
+  sel.replaceChildren(...state.enhancer.models.map((m) => new Option(m.id + (m.vision ? " (vision)" : ""), m.id)));
+  if (state.enhancer.models.some((m) => m.id === keep)) sel.value = keep;
+  const hint = !state.enhancer.up && !state.enhancer.can_start ? "Start the server in LM Studio (Developer → Start server) to use this."
+    : !state.enhancer.models.length ? "No language model in LM Studio. Download one there or import a .gguf in the Download Center." : "";
+  if (hint) $("ideasHint").textContent = hint;
+  $("ideasGo").disabled = !state.enhancer.models.length;
+}
+function renderIdeas() {
+  const list = $("ideasList");
+  list.replaceChildren(...state.ideas.map((idea, n) => {
+    const tile = mk("div", "idea" + (idea.sent ? " sent" : ""));
+    const title = mk("input", "idea-title");
+    title.value = idea.title;
+    title.setAttribute("aria-label", "Title");
+    const prompt = mk("p", "idea-prompt", idea.prompt);
+    const more = mk("details");
+    more.appendChild(mk("summary", null, "Subject, setting, style, camera"));
+    const update = () => { idea.prompt = composeIdea(idea); prompt.textContent = idea.prompt; };
+    title.addEventListener("input", () => { idea.title = title.value; update(); });
+    for (const k of IDEA_FIELDS) {
+      const lab = mk("label", null, k[0].toUpperCase() + k.slice(1));
+      const ta = mk("textarea");
+      ta.rows = 2;
+      ta.value = idea[k];
+      ta.addEventListener("input", () => { idea[k] = ta.value; update(); });
+      lab.appendChild(ta);
+      more.appendChild(lab);
+    }
+    const row = mk("div", "row between");
+    const del = mk("button", "linkbtn", "Remove");
+    del.onclick = () => { state.ideas.splice(n, 1); renderIdeas(); };
+    const run = mk("button", "small", idea.sent ? "Run again" : "Run");
+    run.onclick = () => runIdeas([idea]);
+    row.append(del, run);
+    tile.append(title, prompt, more, row);
+    return tile;
+  }));
+  $("ideasHead").hidden = !state.ideas.length;
+  $("ideasInfo").textContent = `${state.ideas.length} prompt${state.ideas.length === 1 ? "" : "s"}`;
+}
+async function writeIdeas() {
+  const request = $("ideasRequest").value.trim();
+  if (!request) { showError("Describe what you want first."); return; }
+  const btn = $("ideasGo"), label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Writing…";
+  $("ideasHint").textContent = "Loading the model in LM Studio and writing the prompts. A large model can take a minute or two.";
+  try {
+    const text = $("ideasText").checked;
+    const r = await postJson("/api/ideas", { request, model: $("ideasModel").value, count: parseInt($("ideasCount").value, 10) || 0,
+      same_style: $("ideasSameStyle").checked, text_in_image: text });
+    state.ideas = r.ideas.map((i) => ({ ...i, text }));
+    renderIdeas();
+    $("ideasHint").textContent = "Done, the model is unloaded again. Edit a prompt if you like, then run one or all.";
+  } catch (e) {
+    $("ideasHint").textContent = "No prompts.";
+    showError(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+// one Generate job per idea, with the current settings (model, size, steps, variations…)
+async function runIdeas(ideas) {
+  if (!presetById($("preset").value)) { showError("No model installed. Open the Download Center to get one."); return; }
+  try {
+    if (!(await refreshSize())) return;
+    const { w, h } = aspectDims();
+    for (const [n, idea] of ideas.entries()) {
+      const params = editParams({ image: null, srcW: w, srcH: h, maskName: null, useMask: false });
+      await submitVariants({ ...params, prompt: idea.prompt }, { quiet: n < ideas.length - 1 });
+      idea.sent = true;
+    }
+  } catch (e) {
+    showError(e.message);
+  }
+  renderIdeas();
+}
+for (const [id, prop] of Object.entries(IDEAS_OPTS)) {
+  try { const v = localStorage.getItem(id); if (v != null) $(id)[prop] = prop === "checked" ? v === "1" : v; } catch {}
+  $(id).addEventListener("change", () => {
+    try { localStorage.setItem(id, prop === "checked" ? ($(id).checked ? "1" : "0") : $(id).value); } catch {}
+  });
+}
+$("ideasSec").addEventListener("fold", () => { if (!$("ideasSec").classList.contains("folded")) loadIdeaModels(); });
+$("ideasGo").addEventListener("click", writeIdeas);
+$("ideasRunAll").addEventListener("click", () => runIdeas(state.ideas));
 function syncRemoveBg() {
   const avail = removeBgAvailable(), on = removeBgOn();
   $("removeBg").disabled = !avail;
@@ -3654,12 +3761,14 @@ const isDefaultRefNote = (v) => ["qwen21", "qwen_edit"].some((f) => [1, 2, 3].so
 $("refNote").value = refNoteFor("qwen21", 1);   // before loadForm: a stored text wins
 $("refNoteReset").onclick = () => { $("refNote").value = defaultRefNote(); $("refNote").dispatchEvent(new Event("change")); };
 
-// Fold sections in the Create sidebar by clicking their heading; kept per browser. Reference images start folded.
-const FOLD_KEY = "inpaint-studio-folds-v1", FOLD_DEFAULT = { refs: true };
+// Fold sections in the Create sidebar by clicking their heading; kept per browser. Reference images and Prompt ideas
+// start folded. A "fold" event tells the section it opened or closed.
+const FOLD_KEY = "inpaint-studio-folds-v1", FOLD_DEFAULT = { refs: true, ideas: true };
 const readFolds = () => { try { return { ...FOLD_DEFAULT, ...JSON.parse(localStorage.getItem(FOLD_KEY) || "{}") }; } catch { return { ...FOLD_DEFAULT }; } };
 function setFold(sec, folded, save = true) {
   sec.classList.toggle("folded", folded);
   sec.querySelector("h2.h").setAttribute("aria-expanded", String(!folded));
+  sec.dispatchEvent(new Event("fold"));
   if (!save) return;
   const all = readFolds(); all[sec.dataset.fold] = folded;
   try { localStorage.setItem(FOLD_KEY, JSON.stringify(all)); } catch { /* a convenience */ }
@@ -4678,9 +4787,15 @@ const setup = createSetup({
   onChanged: (data) => {
     const loraIds = (d) => (d?.components || []).filter((c) => c.kind === "lora" && c.installed).map((c) => c.id).join();
     const lorasChanged = loraIds(data) !== loraIds(state.setup);
+    const llmIds = (d) => (d?.imports || []).filter((i) => i.kind === "llm").map((i) => i.id).join();
+    const llmsChanged = llmIds(data) !== llmIds(state.setup);
     state.setup = data;
     if (appStarted && data.mask_available !== state.maskAvailable) { location.reload(); return; }
     if (appStarted) { renderModelPicker(); renderUpscalers(); renderGuide(); if (lorasChanged) loadModels(); }
+    if (appStarted && llmsChanged) {   // an imported language model: LM Studio lists it now
+      if (!$("ideasSec").classList.contains("folded")) loadIdeaModels();
+      if ($("enhance").checked) loadEnhancer();
+    }
   },
 });
 $("setupBtn").onclick = () => (setupOpen ? showApp() : showSetup());

@@ -483,6 +483,18 @@ body.task-generate .edit-only { display: none !important; }
 body:not(.task-generate) .gen-only { display: none !important; }
 body.fam-zimage .paste-only { display: none !important; }
 
+/* Prompt ideas (Generate): tiles of LLM-written prompts */
+.ideas-list { display: flex; flex-direction: column; gap: 8px; }
+.idea { border: 1px solid var(--hairline); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 6px; background: var(--surface); }
+.idea.sent { opacity: .7; }
+.idea .idea-title { font-weight: 600; color: var(--ink); border: 0; background: none; padding: 0; min-height: 0; font-size: 14px; width: 100%; }
+.idea .idea-prompt { font-size: 12px; color: var(--body); margin: 0; overflow-wrap: anywhere; }
+.idea details { border: 0; padding: 0; gap: 6px; }
+.idea details > summary { min-height: 24px; margin: 0; font-size: 12px; }
+.idea textarea { font-size: 12px; }
+.idea .row { gap: 6px; }
+#ideasGo, #ideasRunAll { white-space: nowrap; flex: none; }
+
 /* central model picker in the topbar */
 .topbar { gap: 16px; flex-wrap: wrap; }
 .modelbar { align-items: flex-start; }

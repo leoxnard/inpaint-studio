@@ -277,8 +277,23 @@ dialog lists it with its size; confirm and the run starts by itself once the dow
 
 **Improve prompt** (under the prompt, Qwen-Image 2.1): a language model in **LM Studio** rewrites your prompt into the
 detailed description Qwen-Image was trained on (the official Qwen prompt enhancer instructions) before the picture is made.
-Start LM Studio's server (Developer → Start server) and pick a model, e.g. Qwen3.5 9B; a model that "sees images" also
+Pick a model (LM Studio's server is started by itself when a prompt is written), e.g. Qwen3.5 9B; a model that "sees images" also
 looks at the picture of an edit. It takes 5–20 s. The run shows the new prompt and keeps yours (**Your prompt** in the details).
+The model is unloaded in LM Studio right after the rewrite, so the image model has the memory.
+
+**Prompt ideas** (Generate, right column above the prompt preset): describe what you want, e.g. "covers for my playlists A, B, C", and a language model
+in LM Studio writes English prompts for it, each split into subject, setting, style and camera.
+
+| Option | What it does |
+|---|---|
+| How many | *Auto* = one per item the request names (else 4), or a fixed number |
+| One style for all | the same style and camera for every prompt, so the pictures look like one series |
+| Title as text in the picture | each title is written into the picture (Qwen-Image does text well) |
+
+- ComfyUI's models are freed first (when nothing runs), the language model is loaded, writes the prompts and is
+  unloaded again.
+- The prompts show as tiles: title and fields can be edited, the prompt follows. **Run** queues one, **Run all** all
+  of them, with the current settings (model, size, steps, variations).
 For each model you pick a quantisation in an LM Studio style list (format, RAM fit, recommended for
 this Mac, downloaded, size). Q4 (Q4_K_M where there is one) is preselected; models without a Q4 file get the largest
 quantisation that fits. A bar at the top jumps between the sections (Components, Models, Upscalers, Control,
@@ -296,7 +311,8 @@ LoRAs, Your files).
   model line a LoRA is for, starts with its suggested strength and warns when it does not fit.
 - **Upscalers** and **Control** (guidance patches, Depth Anything) have their own sections.
 - **Your files:** import a model, LoRA, upscaler or other model file that is already on your Mac. It is
-  linked into the models folder, not copied, and **Remove** deletes only the link.
+  linked into the models folder, not copied, and **Remove** deletes only the link. A **Language model (LM Studio)**
+  (.gguf) is linked into LM Studio's models folder instead and shows up in Improve prompt and Prompt ideas.
 - **Free memory** in the top bar unloads ComfyUI's models; next to it you see how much RAM is free.
 
 ## Guidance (Generate)

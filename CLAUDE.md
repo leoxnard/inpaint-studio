@@ -96,6 +96,14 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   enhancer system prompt (read from ComfyUI's `/templates/`); a vision model also gets the edit's images. `GET /api/enhancer`
   lists LM Studio's chat models. Run keeps `prompt_original`; a failed rewrite → `run.enhance_error`, the run goes on.
   Not ComfyUI's `TextGenerate`: on a Mac it keeps text models on the CPU (25–39 s/token) and `--gpu-only` fails (no int8 matmul on MPS).
+  While LM Studio's server is off, `/api/enhancer` lists models via `lms ls --json` (`can_start`) and
+  `server.ensure_llm_server` runs `lms server start` right before a rewrite or Prompt ideas (local URL only).
+  After the rewrite `server.unload_llm` unloads the model (LM Studio `POST /api/v1/models/unload` per loaded instance).
+- Prompt ideas (Generate, right column above the prompt preset, `#ideasSec`): `POST /api/ideas` {request, model, count, same_style, text_in_image} frees
+  ComfyUI (when no job runs), asks LM Studio with a JSON-schema `response_format` (`enhance.ideas_request`), parses
+  `[{title, subject, setting, style, camera, prompt}]` (`enhance.ideas`, `compose` = the fields as one paragraph, mirrored
+  in `web/app.js` `composeIdea`) and unloads the model. Tiles run normal Generate jobs with the form's settings.
+  Imports of kind `llm` (.gguf) are linked into LM Studio's models folder (`imports.lmstudio_models`), not into ComfyUI.
 - Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
 - Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by

@@ -1,10 +1,12 @@
 """Own files imported in the Download Center: a model, LoRA, upscaler or any other model file that is already on
 the Mac. The file is not copied: a symlink in the matching models/ folder points to it (ComfyUI follows symlinks,
-Finder aliases do not work). Imports are kept in imports.json and registered into presets.COMPONENTS / PRESETS
+Finder aliases do not work). A language model (.gguf, kind "llm") is linked into LM Studio's models folder instead,
+for Improve prompt and Prompt ideas. Imports are kept in imports.json and registered into presets.COMPONENTS / PRESETS
 (`apply`), so pickers, the installed check and the graphs treat them like downloaded items."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -24,7 +26,19 @@ KINDS: dict[str, tuple[str, str]] = {
     "vae": ("vae", "VAE"),
     "model_patch": ("model_patches", "Control patch"),
     "controlnet": ("controlnet", "ControlNet"),
+    "llm": ("", "Language model (LM Studio)"),
 }
+
+
+def lmstudio_models() -> Path:
+    """LM Studio's models folder (its settings name it; INPAINT_STUDIO_LMSTUDIO_MODELS overrides)."""
+    if os.environ.get("INPAINT_STUDIO_LMSTUDIO_MODELS"):
+        return Path(os.environ["INPAINT_STUDIO_LMSTUDIO_MODELS"]).expanduser()
+    try:
+        folder = json.loads((Path.home() / ".lmstudio" / "settings.json").read_text()).get("downloadsFolder")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        folder = None
+    return Path(folder).expanduser() if folder else Path.home() / ".lmstudio" / "models"
 
 
 class ImportError_(ValueError):
@@ -66,6 +80,8 @@ def guess_scale(path: str) -> int:
 
 
 def _link(cfg: dict, item: dict[str, Any]) -> Path:
+    if item["kind"] == "llm":   # LM Studio wants <publisher>/<model>/<file>
+        return lmstudio_models() / "inpaint-studio" / Path(item["file"]).stem / item["file"]
     return Path(cfg["models_dir"]) / KINDS[item["kind"]][0] / item["file"]
 
 
@@ -78,6 +94,8 @@ def add(cfg: dict, path: str, kind: str, title: str = "", base: str = "", famili
         raise ImportError_(f"{src} is not a file")
     if src.suffix.lower() not in EXTENSIONS:
         raise ImportError_(f"{src.name}: only {', '.join(EXTENSIONS)} files can be imported")
+    if kind == "llm" and src.suffix.lower() != ".gguf":
+        raise ImportError_("LM Studio runs language models as .gguf files")
     if kind == "model" and base not in presets.PRESETS:
         raise ImportError_("pick the model line the file belongs to (it decides text encoder and VAE)")
     item = {"id": uuid.uuid4().hex[:8], "kind": kind, "source": str(src.resolve()), "file": src.name,
@@ -89,12 +107,15 @@ def add(cfg: dict, path: str, kind: str, title: str = "", base: str = "", famili
     if kind == "upscaler":
         item["scale"] = int(scale or guess_scale(src.name))
     link = _link(cfg, item)
-    if link.exists() or link.is_symlink():
+    if kind == "llm" and src.resolve().is_relative_to(lmstudio_models().resolve()):
+        item["in_lmstudio"] = True   # LM Studio has it already: only listed, no link (Remove leaves it alone)
+    elif link.exists() or link.is_symlink():
         if link.resolve() == src.resolve():
-            raise ImportError_(f"{src.name} is already in models/{KINDS[kind][0]}")
-        raise ImportError_(f"another file named {src.name} is already in models/{KINDS[kind][0]}")
-    link.parent.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(src.resolve())
+            raise ImportError_(f"{src.name} is already in {link.parent}")
+        raise ImportError_(f"another file named {src.name} is already in {link.parent}")
+    else:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(src.resolve())
     _save([*load(), item])
     apply()
     return item
@@ -106,7 +127,7 @@ def remove(cfg: dict, import_id: str) -> dict[str, Any]:
     if not item:
         raise KeyError(import_id)
     link = _link(cfg, item)
-    if link.is_symlink():   # only our link goes; the file it points to stays
+    if link.is_symlink() and not item.get("in_lmstudio"):   # only our link goes; the file it points to stays
         link.unlink()
     _save([i for i in items if i["id"] != import_id])
     apply()
@@ -121,6 +142,8 @@ def apply() -> None:
         del presets.PRESETS[key]
     for i in load():
         key = f"imp_{i['id']}"
+        if i["kind"] == "llm":   # a language model lives in LM Studio, not in ComfyUI
+            continue
         if i["kind"] == "model":
             base = presets.PRESETS.get(i.get("base", ""))
             if not base:

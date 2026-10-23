@@ -1453,6 +1453,7 @@ async def enhance_prompt(job: dict) -> None:
         if k == "i2i" and params.get("enhance_vision") and params.get("image"):
             images = [await enhancer_image(n) for n in [params["image"], *(params.get("refs") or [])]]
         body = enhance.request(params["enhance_model"], system, prompt, images, int(params.get("seed") or 0))
+        await ensure_llm_server()
         async with httpx.AsyncClient(timeout=enhance.TIMEOUT) as llm:
             for attempt in range(2):   # a second try only when the answer came in the wrong language
                 r = await llm.post(f"{enhance.URL}/v1/chat/completions", json={**body, "seed": body["seed"] + attempt})
@@ -1465,15 +1466,29 @@ async def enhance_prompt(job: dict) -> None:
     except asyncio.CancelledError:
         raise
     except Exception as e:
+        await unload_llm(params["enhance_model"])
         run["enhance_error"] = str(getattr(e, "detail", None) or e)[:300] or type(e).__name__
         save_run(run)
         return
+    await unload_llm(params["enhance_model"])   # out of RAM before ComfyUI loads the image model
     params["prompt_original"], params["prompt"] = prompt, text
     run["params"].update(prompt=text, prompt_original=prompt)
     job["graph"] = graphs.build_edit_graph(params)
     save_run_config(run["id"], run, params, job["graph"])
     save_run(run)
     (RUNS / run["id"] / "job.json").write_text(json.dumps({"params": params, "graph": job["graph"]}, default=str))
+
+
+async def unload_llm(model: str) -> None:
+    """Unloads every loaded instance of the model in LM Studio (best effort: an older LM Studio falls back to the TTL)."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as llm:
+            r = await llm.get(f"{enhance.URL}/api/v1/models")
+            r.raise_for_status()
+            for iid in enhance.loaded_instances(r.json(), model):
+                await llm.post(f"{enhance.URL}/api/v1/models/unload", json={"instance_id": iid})
+    except (httpx.HTTPError, ValueError) as e:
+        print(f"could not unload {model} in LM Studio: {e!r}")
 
 
 async def enhancer_image(name: str) -> str:
@@ -1491,14 +1506,90 @@ async def enhancer_image(name: str) -> str:
 
 @app.get("/api/enhancer")
 async def enhancer_status():
-    """Improve prompt: is LM Studio's server running, and which chat models does it have."""
+    """Improve prompt / Prompt ideas: is LM Studio's server running, and which chat models does it have. While the
+    server is off the models come from `lms ls` (`can_start`: ensure_llm_server starts it when a prompt is written)."""
     try:
         async with httpx.AsyncClient(timeout=3) as llm:
             r = await llm.get(f"{enhance.URL}/api/v0/models")
             r.raise_for_status()
         return {"up": True, "url": enhance.URL, "models": enhance.chat_models(r.json())}
     except (httpx.HTTPError, ValueError):
-        return {"up": False, "url": enhance.URL, "models": []}
+        pass
+    models = []
+    if lms_cli():
+        try:
+            out = await asyncio.to_thread(subprocess.run, [lms_cli(), "ls", "--json"], capture_output=True, text=True,
+                                          timeout=60)
+            models = enhance.chat_models(enhance.lms_listing(json.loads(out.stdout[out.stdout.find("["):])))
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    return {"up": False, "can_start": bool(models), "url": enhance.URL, "models": models}
+
+
+def lms_cli() -> str | None:
+    """LM Studio's command line tool, only for the local default server (the .app has no ~/.lmstudio/bin in PATH)."""
+    if urlsplit(enhance.URL).hostname not in ("127.0.0.1", "localhost"):
+        return None
+    path = shutil.which("lms") or str(Path.home() / ".lmstudio/bin/lms")
+    return path if os.access(path, os.X_OK) else None
+
+
+async def ensure_llm_server() -> None:
+    """Starts LM Studio's server (`lms server start`) only when a prompt is about to be written and it is off."""
+    async with httpx.AsyncClient(timeout=3) as llm:
+        try:
+            (await llm.get(f"{enhance.URL}/api/v1/models")).raise_for_status()
+            return
+        except httpx.HTTPError:
+            pass
+        if not lms_cli():
+            return   # the request fails with "not reachable"
+        port = str(urlsplit(enhance.URL).port or 1234)
+        await asyncio.to_thread(subprocess.run, [lms_cli(), "server", "start", "--port", port], capture_output=True,
+                                timeout=60)
+        for _ in range(30):
+            try:
+                (await llm.get(f"{enhance.URL}/api/v1/models")).raise_for_status()
+                return
+            except httpx.HTTPError:
+                await asyncio.sleep(1)
+
+
+class IdeasReq(BaseModel):
+    request: str = Field(min_length=1, max_length=8000)
+    model: str = Field(min_length=1)
+    count: int = Field(0, ge=0, le=enhance.IDEAS_MAX)
+    same_style: bool = False
+    text_in_image: bool = False
+
+
+@app.post("/api/ideas")
+async def prompt_ideas(req: IdeasReq):
+    """Prompt ideas (Generate): ComfyUI's models leave RAM (when nothing runs), the LM Studio model writes the prompts,
+    then it is unloaded again, so the image model that runs next has the memory."""
+    if not JOBS and MODELS.get("loaded"):
+        try:
+            await comfy_json("POST", "/free", json={"unload_models": True, "free_memory": True})
+            MODELS["loaded"] = False
+        except HTTPException:
+            pass   # ComfyUI down: nothing to free
+    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)))
+    try:
+        await ensure_llm_server()
+        async with httpx.AsyncClient(timeout=enhance.TIMEOUT) as llm:
+            r = await llm.post(f"{enhance.URL}/v1/chat/completions", json=body)
+            if r.status_code >= 400:
+                raise HTTPException(502, f"LM Studio: {r.text[:300]}")
+            out = enhance.ideas(r.json(), req.same_style, req.text_in_image)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"LM Studio is not reachable at {enhance.URL} ({type(e).__name__})")
+    except ValueError as e:
+        raise HTTPException(502, str(e))
+    finally:
+        await unload_llm(req.model)
+    if not out:
+        raise HTTPException(502, "the model returned no prompts")
+    return {"ideas": out}
 
 
 async def drop_prompt(pid: str | None) -> None:

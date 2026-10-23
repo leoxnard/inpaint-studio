@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 import enhance
 import installer
 import presets
@@ -87,3 +91,37 @@ def test_item_info_has_title_and_size():
     assert installer.item_info("component:sam3")["size"] == presets.COMPONENTS["sam3"]["size"]
     m = installer.item_info("model:qwen21_uc:Q8_0")
     assert m["title"].endswith("(Q8_0)") and m["size"] == presets.PRESETS["qwen21_uc"]["quants"]["Q8_0"]["size"]
+
+
+def test_ideas_request_schema_and_count():
+    b = enhance.ideas_request("m", "covers for A and B", 3, same_style=True)
+    ideas = b["response_format"]["json_schema"]["schema"]["properties"]["ideas"]
+    assert ideas["minItems"] == ideas["maxItems"] == 3
+    assert "exactly 3" in b["messages"][1]["content"] and "same style" in b["messages"][1]["content"]
+    auto = enhance.ideas_request("m", "x")["response_format"]["json_schema"]["schema"]["properties"]["ideas"]
+    assert auto["maxItems"] == enhance.IDEAS_MAX
+
+
+def test_ideas_parse_same_style_and_title_text():
+    content = json.dumps({"ideas": [
+        {"title": "Late Night Jazz", "subject": "A saxophone.", "setting": "A dark bar", "style": "Oil painting", "camera": "Close-up"},
+        {"title": "Gym", "subject": "Dumbbells", "setting": "A gym", "style": "Neon 3D", "camera": "Wide"}]})
+    out = enhance.ideas({"choices": [{"message": {"content": f"<think>x</think>```json\n{content}\n```"}}]},
+                        same_style=True, text_in_image=True)
+    assert [i["style"] for i in out] == ["Oil painting", "Oil painting"]
+    assert out[0]["prompt"] == ('A saxophone. A dark bar. Oil painting. Close-up. '
+                                'The title "Late Night Jazz" is written on it in large, clean, legible letters.')
+    with pytest.raises(ValueError):
+        enhance.ideas({"choices": [{"message": {"content": "no json"}}]})
+
+
+def test_loaded_instances():
+    listing = {"models": [{"key": "a", "loaded_instances": [{"id": "a"}, {"id": "a:2"}]}, {"key": "b", "loaded_instances": []}]}
+    assert enhance.loaded_instances(listing, "a") == ["a", "a:2"] and enhance.loaded_instances(listing, "b") == []
+
+
+def test_lms_listing_feeds_chat_models():
+    items = [{"type": "llm", "modelKey": "qwen3.8", "architecture": "qwen35", "vision": False},
+             {"type": "llm", "modelKey": "img", "architecture": "qwen_image"},
+             {"type": "embedding", "modelKey": "nomic"}]
+    assert enhance.chat_models(enhance.lms_listing(items)) == [{"id": "qwen3.8", "vision": False, "loaded": False}]

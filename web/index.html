@@ -282,6 +282,28 @@
         <p class="hint" id="upscaleHint"></p>
       </section>
 
+      <section class="sec gen-only ideas" id="ideasSec" data-fold="ideas">
+        <h2 class="h" title="A language model in LM Studio writes the prompts">Prompt ideas</h2>
+        <label>What do you want?
+          <textarea id="ideasRequest" rows="3" placeholder="e.g. Covers for my playlists: Late Night Jazz, Gym Hardstyle, Sunday Coffee"></textarea>
+        </label>
+        <div class="grid2">
+          <label>Language model <select id="ideasModel"></select></label>
+          <label>How many <select id="ideasCount"><option value="0">Auto</option><option>1</option><option>2</option><option>3</option><option>4</option><option>6</option><option>8</option><option>12</option></select></label>
+        </div>
+        <label class="check" title="Same style and camera for every prompt, so the pictures look like one series."><input type="checkbox" id="ideasSameStyle"> One style for all</label>
+        <label class="check" title="The title of each prompt is written into the picture (Qwen-Image renders text well)."><input type="checkbox" id="ideasText"> Title as text in the picture</label>
+        <div class="row between">
+          <span class="hint" id="ideasHint">The model is loaded in LM Studio, writes the prompts and is unloaded again before a picture is made.</span>
+          <button class="small" id="ideasGo">Write prompts</button>
+        </div>
+        <div class="ideas-head row between" id="ideasHead" hidden>
+          <span class="hint" id="ideasInfo"></span>
+          <button class="small primary" id="ideasRunAll">Run all</button>
+        </div>
+        <div class="ideas-list" id="ideasList"></div>
+      </section>
+
       <div class="sec">
         <label for="promptPreset">Preset</label>
         <div class="row">

@@ -187,6 +187,19 @@ and exposure drift of the upscale against the original; like the grain it goes i
 
 Edits can also upscale their own result (choose an upscaler in the run settings), saved as `<run>_x2.png` / `_x4.png`.
 
+## Add title
+
+**Add title** (Generate, under the prompt): the app writes a title into the picture after the run, as real type
+instead of the model's lettering, so it is clean and the same size across a series.
+
+- **Position:** *Automatic* puts it on the calmest band of the picture; *Top / Center / Bottom* also asks the model to
+  leave that area plain. The model is always told not to draw text itself.
+- **Colour:** taken from the picture's own palette, with enough contrast to what is behind the title (a shadow is
+  added when nothing stands out enough).
+- **Runs → Post-processing → Title:** change the text, font (about 30 macOS fonts), size, colour and shadow, drag
+  the handle on the picture to move it, **Auto colour** / **Auto position** to measure again. The picture without
+  the title stays in the run (Clean view); untick **Title** to remove it.
+
 ## Post-processing
 
 **Runs → Post-processing** has every fix a run can get. Tick the steps, check the preview, press **Apply**.
@@ -288,7 +301,7 @@ in LM Studio writes English prompts for it, each split into subject, setting, st
 |---|---|
 | How many | *Auto* = one per item the request names (else 4), or a fixed number |
 | One style for all | the same style and camera for every prompt, so the pictures look like one series |
-| Title as text in the picture | each title is written into the picture (Qwen-Image does text well) |
+| Add title | each picture gets its title (see **Add title**); the model picks position, size and font per prompt |
 
 - ComfyUI's models are freed first (when nothing runs), the language model is loaded, writes the prompts and is
   unloaded again.
@@ -392,6 +405,7 @@ uv run pytest   # tests (the queue test needs a running ComfyUI, otherwise it is
 | `graphs.py` | Size math and the ComfyUI graph builders |
 | `prepare.py` | Crop & stitch, outpaint padding, film grain |
 | `align.py` | Post-processing fixes (align, colours, warp, edges) |
+| `title.py` | Add title: fonts, position, colour and rendering of the title |
 | `presets.py` | Model presets, components, LoRAs, RAM-fit estimate |
 | `installer.py` | Setup, download queue, headless ComfyUI |
 | `web/` | Plain HTML/JS/CSS, no build step |

@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postAlign", "postColors", "postWarp", "postPoisson", "postGrain", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
-  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg", "enhance",
+  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg", "enhance", "addTitle", "titlePosition", "titleText",
   "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleLong", "upscaleMB", "upscaleGrain", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -1438,6 +1438,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     keep_whole: wholeImage() && $("keepWhole").checked && !removeBgOn(),
     remove_bg: removeBgOn() || undefined,
     ...enhanceParams(),
+    title: titleParams(),
     loras: state.loras.filter((l) => l.name && l.strength),
     outpaint: outpaintOn() ? (({ w, h, x, y }) => ({ canvas_w: w, canvas_h: h, x, y }))(outpaintCanvas(srcW, srcH)) : undefined,
     outpaint_colors: outpaintOn() ? $("postColors").checked : undefined,
@@ -2828,7 +2829,7 @@ $("loadSettings").onclick = () => { if (state.run?.params) loadRunSettings(state
 // a run's files after the server changed them (post-processing saved, one image deleted)
 function refreshRunFiles(run, stored) {
   const f = runFromStored(stored);
-  for (const k of ["resultUrl", "rawUrl", "wholeUrl", "sourceUrl", "resultKind", "postMaskUrl", "aligned", "fixedUrl", "grainUrl", "grain", "grainStrength", "filename"]) run[k] = f[k];
+  for (const k of ["resultUrl", "rawUrl", "wholeUrl", "sourceUrl", "resultKind", "postMaskUrl", "aligned", "fixedUrl", "grainUrl", "grain", "grainStrength", "filename", "title"]) run[k] = f[k];
   run.match = null;
 }
 function runFromStored(r) {
@@ -2838,7 +2839,7 @@ function runFromStored(r) {
     rawUrl: r.raw_url || null, maskUrl: r.mask_url || null, filename: r.filename, done: true,
     wholeUrl: r.whole_url || null, sourceUrl: r.source_url || null, resultKind: r.result_kind || null, postMaskUrl: r.post_mask_url || null,
     upscaledUrl: r.upscaled_url || null, upscale: r.params?.upscale || 0,
-    aligned: r.aligned || null, fixedUrl: r.fixed_url || null, grainUrl: r.grain_url || null,
+    aligned: r.aligned || null, fixedUrl: r.fixed_url || null, grainUrl: r.grain_url || null, title: r.title || null,
     grain: r.grain ?? (!!r.grain_url || (r.params?.task === "upscale" && !!r.params?.grain)), grainStrength: r.grain_strength ?? r.params?.grain_strength ?? GRAIN_STRENGTH, task: r.params?.task || "edit", preset: r.params?.preset || null,
     value: r.params?.steps, max: r.params?.steps, created: r.created, finished: r.finished || null,
     started: r.started || null, took: r.took || null,
@@ -3511,6 +3512,22 @@ state.enhancer = { up: false, models: [] };
 function enhanceOn() {
   return REMOVE_BG_FAMILIES.includes(currentFamily()) && $("enhance").checked && state.enhancer.models.length > 0 && !!$("enhanceModel").value;
 }
+// Add title (Generate): the app writes the title into the picture after the run (title.py); the model leaves room
+function titleParams() {
+  if (state.task !== "generate" || !$("addTitle").checked || !$("titleText").value.trim()) return undefined;
+  return { text: $("titleText").value.trim(), position: $("titlePosition").value };
+}
+function syncTitleRow() {
+  $("titleText").hidden = !$("addTitle").checked;
+  $("titlePosition").hidden = !$("addTitle").checked;
+}
+$("addTitle").addEventListener("change", syncTitleRow);
+// fonts on this Mac, positions, sizes (GET /api/title), loaded once
+let titleOpts = null;
+async function loadTitleOpts() {
+  titleOpts ??= api("/api/title").catch(() => ({ fonts: [], sizes: {}, positions: ["auto", "top", "center", "bottom"] }));
+  return titleOpts;
+}
 function enhanceParams() {
   if (!enhanceOn()) return {};
   const m = state.enhancer.models.find((x) => x.id === $("enhanceModel").value);
@@ -3554,8 +3571,15 @@ function mk(tag, cls, text) {
 }
 function composeIdea(i) {   // mirrors enhance.compose
   const out = IDEA_FIELDS.map((k) => (i[k] || "").trim().replace(/\.+$/, "")).filter(Boolean).join(". ");
-  const title = (i.title || "").trim();
-  return ((out ? `${out}.` : "") + (i.text && title ? ` The title "${title}" is written on it in large, clean, legible letters.` : "")).trim();
+  return out ? `${out}.` : "";
+}
+function selectOf(values, value, label, onChange) {
+  const sel = mk("select", "compact");
+  sel.setAttribute("aria-label", label);
+  for (const v of values) sel.add(new Option(v[0].toUpperCase() + v.slice(1), v));
+  if (values.includes(value)) sel.value = value;
+  sel.onchange = () => onChange(sel.value);
+  return sel;
 }
 async function loadIdeaModels() {
   state.enhancer = await api("/api/enhancer").catch(() => ({ up: false, models: [] }));
@@ -3588,6 +3612,14 @@ function renderIdeas() {
       lab.appendChild(ta);
       more.appendChild(lab);
     }
+    if (idea.withTitle) {   // where the app writes the title, chosen by the language model
+      const t = mk("div", "row wrap idea-title-opts");
+      t.append(mk("span", "hint", "Title"),
+        selectOf(["top", "center", "bottom", "auto"], idea.title_position || "auto", "Title position", (v) => { idea.title_position = v; }),
+        selectOf(["small", "medium", "large"], idea.title_size || "medium", "Title size", (v) => { idea.title_size = v; }),
+        selectOf(state.titleFonts || [], idea.title_font, "Title font", (v) => { idea.title_font = v; }));
+      more.appendChild(t);
+    }
     const row = mk("div", "row between");
     const del = mk("button", "linkbtn", "Remove");
     del.onclick = () => { state.ideas.splice(n, 1); renderIdeas(); };
@@ -3608,10 +3640,11 @@ async function writeIdeas() {
   btn.textContent = "Writing…";
   $("ideasHint").textContent = "Loading the model in LM Studio and writing the prompts. A large model can take a minute or two.";
   try {
-    const text = $("ideasText").checked;
+    const withTitle = $("ideasText").checked;
+    if (withTitle) state.titleFonts = (await loadTitleOpts()).fonts;
     const r = await postJson("/api/ideas", { request, model: $("ideasModel").value, count: parseInt($("ideasCount").value, 10) || 0,
-      same_style: $("ideasSameStyle").checked, text_in_image: text });
-    state.ideas = r.ideas.map((i) => ({ ...i, text }));
+      same_style: $("ideasSameStyle").checked, add_title: withTitle });
+    state.ideas = r.ideas.map((i) => ({ ...i, withTitle }));
     renderIdeas();
     $("ideasHint").textContent = "Done, the model is unloaded again. Edit a prompt if you like, then run one or all.";
   } catch (e) {
@@ -3630,7 +3663,10 @@ async function runIdeas(ideas) {
     const { w, h } = aspectDims();
     for (const [n, idea] of ideas.entries()) {
       const params = editParams({ image: null, srcW: w, srcH: h, maskName: null, useMask: false });
-      await submitVariants({ ...params, prompt: idea.prompt }, { quiet: n < ideas.length - 1 });
+      const title = idea.withTitle && idea.title.trim()
+        ? { text: idea.title.trim(), position: idea.title_position || "auto", size: idea.title_size || undefined, font: idea.title_font || undefined }
+        : params.title;
+      await submitVariants({ ...params, prompt: idea.prompt, title }, { quiet: n < ideas.length - 1 });
       idea.sent = true;
     }
   } catch (e) {
@@ -4060,15 +4096,34 @@ function postOptions(run) {
   else if (!p.outpaint && run.beforeUrl && run.rawUrl && run.maskUrl) fix = "paste";
   else if (task === "edit" && p.use_mask === false && !p.outpaint && run.beforeUrl && run.resultUrl) fix = "whole";
   const grain = !!(run.beforeUrl && run.resultUrl && task !== "generate" && !(p.crop_box && p.crop_grain !== false));
-  return fix || grain ? { fix, grain } : null;
+  const title = !p.remove_bg && !!run.resultUrl;   // Add title works on any finished picture
+  return fix || grain || title ? { fix, grain, title } : null;
 }
 let postTimer = 0;
 // what the open panel holds besides its inputs: the four corner offsets (perspective, image px) and the mask
 // (null = the run's current one, "original" = the run's own, else an uploaded mask name)
 const ZERO_CORNERS = () => [[0, 0], [0, 0], [0, 0], [0, 0]];
-const post = { corners: ZERO_CORNERS(), mask: null, cornersOn: false };
+const post = { corners: ZERO_CORNERS(), mask: null, cornersOn: false, titleX: null, titleY: null, titleKnown: false };
+// the title layer as the panel holds it; undefined keeps the run's own (the panel never saw it)
+function titleValues() {
+  if (!post.titleKnown) return undefined;
+  if (!$("titleOn").checked || !$("titleEdit").value.trim()) return { text: "" };
+  return { text: $("titleEdit").value.trim(), font: $("titleFont").value, size: num("titleSize"), x: post.titleX, y: post.titleY,
+           color: post.titleAutoColor ? null : $("titleColor").value, shadow: $("titleShadow").checked };
+}
+function setTitleValues(t) {   // a layer as the server laid it out (title.layout)
+  if (!t) return;
+  if (t.text != null) $("titleEdit").value = t.text;
+  if (t.font && [...$("titleFont").options].some((o) => o.value === t.font)) $("titleFont").value = t.font;
+  if (t.size != null) $("titleSize").value = t.size;
+  if (t.color) $("titleColor").value = t.color;
+  if (t.shadow != null) $("titleShadow").checked = !!t.shadow;
+  post.titleX = t.x ?? post.titleX; post.titleY = t.y ?? post.titleY;
+  post.titleAutoColor = false;
+  syncRangeOutputs();
+}
 function postValues() {
-  return { dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100,
+  return { title: titleValues(), dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100,
            sx: (num("alignSx") || 100) / 100, sy: (num("alignSy") || 100) / 100, corners: post.corners,
            ...(post.mask ? { mask: post.mask } : {}),
            colors: $("fixColors").checked, warp: $("fixWarp").checked, poisson: $("fixPoisson").checked,
@@ -4098,6 +4153,7 @@ async function postRequest(body) {
     if (seq !== postSeq && !res.saved) return;
     // only the shift Auto-align found: everything else stays as the user set it (the response carries the run's saved values)
     if (res.dx != null) setPostValues({ dx: res.dx, dy: res.dy, scale: res.scale });
+    if (res.title && post.titleKnown) setTitleValues(res.title);
     if (res.saved) {
       if (res.run) refreshRunFiles(run, res.run);
       $("postPanel").hidden = true;
@@ -4105,14 +4161,23 @@ async function postRequest(body) {
       renderViewer();
       return;
     }
-    $("cmpBefore").src = run.beforeUrl;
-    $("cmpAfter").src = res.url;
-    $("liveImg").hidden = true; $("compare").hidden = false;
+    showPostPreview(run, res.url);
     const where = res.kind === "paste" ? "Outside-mask difference" : "Difference in unchanged areas";
     $("postInfo").textContent = res.outside_diff != null
       ? `${where}: ${res.unaligned_diff} → ${res.outside_diff} / 255` + (res.confidence ? ` · match confidence ${res.confidence}` : "")
       : "Preview";
   } catch (e) { $("postInfo").textContent = ""; showError(e.message); }
+}
+// before / after when the run has an original; a generated picture has none: the preview alone
+function showPostPreview(run, url) {
+  if (!run.beforeUrl) {
+    $("liveImg").src = url;
+    $("liveImg").hidden = false; $("compare").hidden = true;
+    return;
+  }
+  $("cmpBefore").src = run.beforeUrl;
+  $("cmpAfter").src = url;
+  $("liveImg").hidden = true; $("compare").hidden = false;
 }
 function schedulePreview() {
   clearTimeout(postTimer);
@@ -4126,6 +4191,8 @@ $("postBtn").onclick = () => {
   for (const el of $("postPanel").querySelectorAll(".post-paste")) el.hidden = opt.fix !== "paste";
   for (const el of $("postPanel").querySelectorAll(".post-geo")) el.hidden = !opt.fix || opt.fix === "upscale";
   for (const el of $("postPanel").querySelectorAll(".post-grain")) el.hidden = !opt.grain;
+  $("postTitleGroup").hidden = !opt.title;
+  openTitle(run);
   // the panel starts at what the run has now
   const a = opt.fix && run.aligned ? run.aligned : {};
   post.mask = null;
@@ -4142,6 +4209,9 @@ $("postReset").onclick = () => {
   setPostValues({ dx: 0, dy: 0, scale: 1, sx: 1, sy: 1, corners: null, colors: false, warp: false, poisson: false, grain: false, grain_strength: GRAIN_STRENGTH });
   post.mask = state.run?.postMaskUrl ? "original" : null;
   syncMaskButtons();
+  $("titleOn").checked = false;
+  post.titleKnown = true;
+  syncTitleHandle();
   schedulePreview();
 };
 $("postSave").onclick = () => postRequest({ ...postValues(), save: true });
@@ -4200,11 +4270,7 @@ async function fastPreview() {
   const seq = ++postSeq;
   try {
     const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, { ...postValues(), save: false, fast: true });
-    if (seq === postSeq && state.run === run && !$("postPanel").hidden) {
-      $("cmpBefore").src = run.beforeUrl;
-      $("cmpAfter").src = res.url;
-      $("liveImg").hidden = true; $("compare").hidden = false;
-    }
+    if (seq === postSeq && state.run === run && !$("postPanel").hidden) showPostPreview(run, res.url);
   } catch { /* the full preview after the drag reports errors */ }
   finally {
     fastBusy = false;
@@ -4235,6 +4301,82 @@ function setCornersMode(on) {
   });
 }
 $("cornersBtn").onclick = () => setCornersMode(!post.cornersOn);
+
+// ---- Add title in Post-processing: text, font, size, colour, shadow; the handle on the picture moves it.
+// x / y / colour left empty (null) are filled by the server (title.layout: calmest band, picture's palette)
+async function openTitle(run) {
+  const opts = await loadTitleOpts();
+  if ($("titleFont").options.length !== opts.fonts.length) {
+    $("titleFont").replaceChildren(...opts.fonts.map((f) => new Option(f, f)));
+  }
+  const t = run.title;
+  post.titleKnown = !!t;
+  post.titleX = t?.x ?? null; post.titleY = t?.y ?? null;
+  post.titleAutoColor = !t;
+  $("titleOn").checked = !!t?.text;
+  $("titleEdit").value = t?.text || "";
+  $("titleFont").value = opts.default_font || opts.fonts[0] || "";
+  $("titleSize").value = opts.default_size || 9;
+  $("titleShadow").checked = false;
+  setTitleValues(t);
+  syncRangeOutputs();
+  syncTitleHandle();
+}
+function titleChanged() {
+  post.titleKnown = true;
+  if ($("titleEdit").value.trim() && !$("titleOn").checked) $("titleOn").checked = true;
+  syncTitleHandle();
+  schedulePreview();
+}
+for (const id of ["titleOn", "titleFont", "titleShadow"]) $(id).addEventListener("change", titleChanged);
+for (const id of ["titleEdit", "titleSize"]) $(id).addEventListener("input", titleChanged);
+$("titleColor").addEventListener("input", () => { post.titleAutoColor = false; titleChanged(); });
+$("titleAutoColor").onclick = () => { post.titleAutoColor = true; titleChanged(); };
+$("titleAutoPos").onclick = () => { post.titleX = post.titleY = null; titleChanged(); };
+const titleHandle = document.createElement("button");
+titleHandle.type = "button"; titleHandle.className = "title-handle"; titleHandle.title = "Drag to move the title";
+titleHandle.textContent = "✥";
+titleHandle.hidden = true;
+titleHandle.addEventListener("pointerdown", (e) => {
+  e.preventDefault(); e.stopPropagation();
+  try { titleHandle.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+  const box = cornerImageBox();
+  if (!box || post.titleX == null) return;
+  const start = { x: e.clientX, y: e.clientY, tx: post.titleX, ty: post.titleY };
+  const move = (ev) => {
+    post.titleX = Math.min(1, Math.max(0, start.tx + (ev.clientX - start.x) / (box.w * box.s)));
+    post.titleY = Math.min(1, Math.max(0, start.ty + (ev.clientY - start.y) / (box.h * box.s)));
+    post.titleKnown = true;
+    placeTitleHandle();
+  };
+  const up = () => {
+    titleHandle.removeEventListener("pointermove", move); titleHandle.removeEventListener("pointerup", up);
+    titleHandle.removeEventListener("pointercancel", up);
+    schedulePreview();
+  };
+  titleHandle.addEventListener("pointermove", move);
+  titleHandle.addEventListener("pointerup", up);
+  titleHandle.addEventListener("pointercancel", up);
+});
+bigArea.append(titleHandle);
+function placeTitleHandle() {
+  const box = cornerImageBox();
+  titleHandle.style.visibility = box && post.titleX != null ? "" : "hidden";
+  if (!box || post.titleX == null) return;
+  titleHandle.style.left = `${box.x + post.titleX * box.w * box.s}px`;
+  titleHandle.style.top = `${box.y + post.titleY * box.h * box.s}px`;
+}
+// shown while the panel is open with a title on; follows zoom, pan and resizing like the corner handles
+function syncTitleHandle() {
+  const on = !$("postPanel").hidden && !$("postTitleGroup").hidden && $("titleOn").checked;
+  if (on === !titleHandle.hidden) return;
+  titleHandle.hidden = !on;
+  if (on) requestAnimationFrame(function tick() {
+    if ($("postPanel").hidden || !$("titleOn").checked) { titleHandle.hidden = true; return; }
+    placeTitleHandle();
+    requestAnimationFrame(tick);
+  });
+}
 for (const id of ["cmpAfter", "liveImg"]) $(id).addEventListener("load", () => { if (post.cornersOn) placeCorners(); });
 $("cornersReset").onclick = () => { post.corners = ZERO_CORNERS(); placeCorners(); schedulePreview(); };
 
@@ -5129,6 +5271,7 @@ function syncTaskUi() {
   syncAreaCards();
   syncRemoveBg();
   syncEnhance();
+  syncTitleRow();
   // turbo models: fixed 5-7 steps, no CFG; the server clamps and forces, the form just follows
   const turbo = fam === "qwen21_turbo";
   document.body.classList.toggle("fam-turbo", turbo);

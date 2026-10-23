@@ -495,6 +495,14 @@ body.fam-zimage .paste-only { display: none !important; }
 .idea .row { gap: 6px; }
 #ideasGo, #ideasRunAll { white-space: nowrap; flex: none; }
 
+/* Add title: the move handle on the viewer (Post-processing) */
+.title-handle { position: absolute; z-index: 6; width: 30px; height: 30px; min-height: 0; padding: 0; margin: -15px 0 0 -15px;
+  border-radius: 50%; border: 1px solid var(--ink); background: var(--canvas); color: var(--ink); font-size: 16px; cursor: move; touch-action: none; }
+.post-title { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--hairline); padding-top: 8px; }
+.post-title input[type="text"] { flex: 1; min-width: 140px; }
+.post-title input[type="color"] { width: 36px; height: 30px; padding: 0 2px; }
+.idea-title-opts { gap: 6px; align-items: center; }
+
 /* central model picker in the topbar */
 .topbar { gap: 16px; flex-wrap: wrap; }
 .modelbar { align-items: flex-start; }

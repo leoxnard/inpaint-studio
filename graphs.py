@@ -15,6 +15,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import title
+
 TOKEN_LIMIT = 4096  # first failing token count; keep strictly below
 SCALE_STEPS = 32
 
@@ -185,6 +187,8 @@ def edit_prompt(p: dict[str, Any]) -> str:
         prompt = f"{prompt}\n\n{CLEAN_NOTE_GENERATE if p.get('task') == 'generate' else CLEAN_NOTE}"
     if p.get("outpaint"):
         prompt = f"{prompt}\n\n{OUTPAINT_NOTE}"
+    if (p.get("title") or {}).get("text"):   # Add title: the app writes it later, the model leaves room and no lettering
+        prompt = f"{prompt}\n\n{title.prompt_note(p['title'].get('position') or 'auto')}"
     if p.get("remove_bg"):  # alone it is exactly the template's prompt; the keep instruction would fight it
         return f"{prompt.strip()}\n\n{REMOVE_BG_PROMPT}".strip()
     if p.get("mode") == "paste" or (p.get("keep_whole") and not p.get("use_mask")):

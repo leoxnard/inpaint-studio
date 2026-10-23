@@ -102,17 +102,27 @@ def test_ideas_request_schema_and_count():
     assert auto["maxItems"] == enhance.IDEAS_MAX
 
 
-def test_ideas_parse_same_style_and_title_text():
+def test_ideas_parse_same_style_and_title_fields():
     content = json.dumps({"ideas": [
-        {"title": "Late Night Jazz", "subject": "A saxophone.", "setting": "A dark bar", "style": "Oil painting", "camera": "Close-up"},
+        {"title": "Late Night Jazz", "subject": "A saxophone.", "setting": "A dark bar", "style": "Oil painting", "camera": "Close-up",
+         "title_position": "top", "title_size": "large", "title_font": "Didot Bold"},
         {"title": "Gym", "subject": "Dumbbells", "setting": "A gym", "style": "Neon 3D", "camera": "Wide"}]})
     out = enhance.ideas({"choices": [{"message": {"content": f"<think>x</think>```json\n{content}\n```"}}]},
-                        same_style=True, text_in_image=True)
+                        same_style=True, with_title=True)
     assert [i["style"] for i in out] == ["Oil painting", "Oil painting"]
-    assert out[0]["prompt"] == ('A saxophone. A dark bar. Oil painting. Close-up. '
-                                'The title "Late Night Jazz" is written on it in large, clean, legible letters.')
+    assert out[0]["prompt"] == "A saxophone. A dark bar. Oil painting. Close-up."
+    assert (out[0]["title_position"], out[0]["title_font"], out[1]["title_size"]) == ("top", "Didot Bold", "")
     with pytest.raises(ValueError):
         enhance.ideas({"choices": [{"message": {"content": "no json"}}]})
+
+
+def test_ideas_request_with_title_fields():
+    b = enhance.ideas_request("m", "x", fonts=["Futura Bold", "Didot Bold"])
+    item = b["response_format"]["json_schema"]["schema"]["properties"]["ideas"]["items"]
+    assert item["properties"]["title_font"]["enum"] == ["Futura Bold", "Didot Bold"]
+    assert "title_position" in item["required"] and "Didot Bold" in b["messages"][0]["content"]
+    plain = enhance.ideas_request("m", "x")["response_format"]["json_schema"]["schema"]["properties"]["ideas"]["items"]
+    assert "title_font" not in plain["properties"]
 
 
 def test_loaded_instances():

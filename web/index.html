@@ -292,7 +292,7 @@
           <label>How many <select id="ideasCount"><option value="0">Auto</option><option>1</option><option>2</option><option>3</option><option>4</option><option>6</option><option>8</option><option>12</option></select></label>
         </div>
         <label class="check" title="Same style and camera for every prompt, so the pictures look like one series."><input type="checkbox" id="ideasSameStyle"> One style for all</label>
-        <label class="check" title="The title of each prompt is written into the picture (Qwen-Image renders text well)."><input type="checkbox" id="ideasText"> Title as text in the picture</label>
+        <label class="check" title="Each picture gets its title, written by the app after the run. The language model picks position, size and font per prompt; all of it can be changed later in Runs → Post-processing."><input type="checkbox" id="ideasText"> Add title</label>
         <div class="row between">
           <span class="hint" id="ideasHint">The model is loaded in LM Studio, writes the prompts and is unloaded again before a picture is made.</span>
           <button class="small" id="ideasGo">Write prompts</button>
@@ -321,6 +321,13 @@
           <select id="enhanceModel" class="compact" aria-label="Language model for Improve prompt" hidden></select>
         </div>
         <p class="hint" id="enhanceHint" hidden></p>
+        <div class="row gen-only" id="addTitleRow" title="The app writes the title into the picture after the run, as real type (the model only leaves room for it). Position, font, size and colour can be changed later in Runs → Post-processing.">
+          <label class="check"><input type="checkbox" id="addTitle"> Add title</label>
+          <select id="titlePosition" class="compact" aria-label="Where the title goes">
+            <option value="auto">Automatic</option><option value="top">Top</option><option value="center">Center</option><option value="bottom">Bottom</option>
+          </select>
+        </div>
+        <input type="text" class="gen-only" id="titleText" placeholder="Title text" aria-label="Title text" hidden>
         <label class="check edit-only" title="Adds an instruction to remove watermarks, logos, captions and overlaid text. With a mask only the masked area can change.">
           <input type="checkbox" id="cleanOverlays"> Remove watermarks and text
         </label>
@@ -504,6 +511,22 @@
               <label class="check post-grain"><input type="checkbox" id="fixGrain"> Film grain</label>
               <label class="range-row post-grain">Strength <output id="fixGrainStrengthOut">100 %</output>
                 <input type="range" id="fixGrainStrength" min="0" max="200" step="10" value="100"></label>
+            </div>
+            <div class="post-title" id="postTitleGroup">
+              <div class="row wrap">
+                <label class="check"><input type="checkbox" id="titleOn"> Title</label>
+                <input type="text" id="titleEdit" placeholder="Title text" aria-label="Title text">
+              </div>
+              <div class="row wrap">
+                <select id="titleFont" class="compact" aria-label="Font"></select>
+                <label class="range-row">Size <output id="titleSizeOut">9 %</output>
+                  <input type="range" id="titleSize" min="2" max="25" step="0.5" value="9"></label>
+                <input type="color" id="titleColor" value="#ffffff" aria-label="Title colour">
+                <button id="titleAutoColor" title="A colour of the picture that stands out where the title is">Auto colour</button>
+                <label class="check"><input type="checkbox" id="titleShadow"> Shadow</label>
+                <button id="titleAutoPos" title="Put the title on the calmest band of the picture">Auto position</button>
+              </div>
+              <p class="hint">Drag the title on the picture to move it.</p>
             </div>
             <div class="row wrap">
               <span class="hint" id="postInfo"></span>

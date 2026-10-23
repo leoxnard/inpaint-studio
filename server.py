@@ -43,6 +43,7 @@ import imports
 import installer
 import presets
 import sysload
+import title
 
 ROOT = Path(__file__).parent
 WEB = ROOT / "web"
@@ -63,7 +64,7 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family", "enhance", "prompt_original",
                   "upscale", "upscale_width", "upscale_long_side", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "upscale_colors", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control", "title")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -933,6 +934,7 @@ class PostReq(BaseModel):
     poisson: bool = False  # seamless edges (masked edits only)
     grain: bool = False    # the original's film / sensor grain (prepare.add_grain)
     grain_strength: float = Field(prepare.GRAIN_STRENGTH, ge=0, le=3)   # 1 = what the result lacks compared with the original
+    title: dict | None = None   # Add title layer (title.layout); None keeps the run's, {"text": ""} removes it
     save: bool = False
     fast: bool = False     # live preview while dragging: geometry only, at most FAST_PX, no warp / colours / seam / grain
 
@@ -985,7 +987,8 @@ async def _post_inputs(run: dict, kind: str | None) -> tuple:
     if key not in _align_cache:
         _align_cache.clear()
         mask = await _fetch_view(run["mask_url"]) if kind == "paste" else None
-        _align_cache[key] = (await _fetch_view(run["before_url"]), await _fetch_view(src), mask)
+        original = await _fetch_view(run["before_url"]) if run.get("before_url") else None   # generated: none
+        _align_cache[key] = (original, await _fetch_view(src), mask)
     return _align_cache[key]
 
 
@@ -1126,15 +1129,26 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
         img = await asyncio.to_thread(prepare.add_grain, original, img, seed, mask, req.grain_strength)
         if whole is not None:   # the whole generated image gets the grain everywhere
             whole = await asyncio.to_thread(prepare.add_grain, original, whole, seed, None, req.grain_strength)
+    layer = req.title if req.title is not None else run.get("title")
+    if layer and layer.get("text"):   # the title goes on top of everything (title.py)
+        layer = await asyncio.to_thread(title.layout, img, layer)
+        img = await asyncio.to_thread(title.render, img, layer)
+    result["title"] = layer if layer and layer.get("text") else None
     if req.save:
         run["grain"], run["grain_strength"] = req.grain, req.grain_strength
+        if result["title"]:
+            run["title"] = result["title"]
+        else:
+            run.pop("title", None)
+
         if kind == "paste":
             if mask_url != run.get("mask_url"):
                 run["post_mask_url"] = mask_url
             else:
                 run.pop("post_mask_url", None)
         if not internal:
-            await save_post_files(run, kind, untouched, img, whole, stamp, changed=fixes or req.grain or mask_url != run.get("mask_url"))
+            await save_post_files(run, kind, untouched, img, whole, stamp,
+                                  changed=fixes or req.grain or mask_url != run.get("mask_url") or bool(result["title"]))
         for old in (RUNS / run_id).glob("post_preview*.jpg"):   # the panel's previews are not needed any more
             old.unlink(missing_ok=True)
         save_run(run)
@@ -1560,7 +1574,14 @@ class IdeasReq(BaseModel):
     model: str = Field(min_length=1)
     count: int = Field(0, ge=0, le=enhance.IDEAS_MAX)
     same_style: bool = False
-    text_in_image: bool = False
+    add_title: bool = False
+
+
+@app.get("/api/title")
+async def title_options():
+    """Add title: the fonts on this Mac, positions and size names (title.py)."""
+    return {"fonts": await asyncio.to_thread(title.fonts), "positions": title.POSITIONS, "sizes": title.SIZES,
+            "default_font": title.DEFAULT_FONT, "default_size": title.DEFAULT_SIZE}
 
 
 @app.post("/api/ideas")
@@ -1573,14 +1594,15 @@ async def prompt_ideas(req: IdeasReq):
             MODELS["loaded"] = False
         except HTTPException:
             pass   # ComfyUI down: nothing to free
-    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)))
+    fonts = await asyncio.to_thread(title.fonts) if req.add_title else None
+    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)), fonts)
     try:
         await ensure_llm_server()
         async with httpx.AsyncClient(timeout=enhance.TIMEOUT) as llm:
             r = await llm.post(f"{enhance.URL}/v1/chat/completions", json=body)
             if r.status_code >= 400:
                 raise HTTPException(502, f"LM Studio: {r.text[:300]}")
-            out = enhance.ideas(r.json(), req.same_style, req.text_in_image)
+            out = enhance.ideas(r.json(), req.same_style, req.add_title)
     except httpx.HTTPError as e:
         raise HTTPException(502, f"LM Studio is not reachable at {enhance.URL} ({type(e).__name__})")
     except ValueError as e:
@@ -1694,9 +1716,10 @@ async def _complete_run(job: dict, pid: str) -> None:
     kind = fix_kind(run) if (params.get("mode") == "paste" and use_mask) or not use_mask else None
     fixes = kind is not None and any(post.values())
     grain = bool(params.get("post_grain")) and (params.get("task") or "edit") == "edit" and not params.get("crop_box")
-    if res and (fixes or grain):
+    layer = params.get("title") if (params.get("title") or {}).get("text") and not params.get("crop_box") else None
+    if res and (fixes or grain or layer):
         try:
-            await post_process(run, PostReq(save=True, grain=grain, grain_strength=grain_strength(params),
+            await post_process(run, PostReq(save=True, grain=grain, grain_strength=grain_strength(params), title=layer,
                                             **(post if fixes else {})), kind if fixes else None,
                                internal=bool(params.get("crop_box")))
         except Exception as e:  # never fail the run because of the post-processing
@@ -1922,6 +1945,13 @@ async def create_job(params: dict):
         raise HTTPException(400, f"invalid job: {bad}") from e
     if params.get("task", "edit") != "generate" and not params.get("image"):
         raise HTTPException(400, "invalid job: image is missing")
+    if t := params.get("title"):   # Add title: {text, position, font, size} (title.layout fills the rest after the run)
+        t = t if isinstance(t, dict) else {}
+        params["title"] = {"text": str(t.get("text") or "").strip()[:200],
+                           "position": t.get("position") if t.get("position") in title.POSITIONS else "auto",
+                           **{k: t[k] for k in ("font", "size", "x", "y", "color", "shadow") if t.get(k) is not None}}
+        if not params["title"]["text"] or params.get("remove_bg"):
+            params.pop("title")
     if params.get("preset"):
         pr = presets.PRESETS.get(params["preset"])
         if not pr:

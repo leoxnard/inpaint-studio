@@ -104,6 +104,12 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   `[{title, subject, setting, style, camera, prompt}]` (`enhance.ideas`, `compose` = the fields as one paragraph, mirrored
   in `web/app.js` `composeIdea`) and unloads the model. Tiles run normal Generate jobs with the form's settings.
   Imports of kind `llm` (.gguf) are linked into LM Studio's models folder (`imports.lmstudio_models`), not into ComfyUI.
+  With Add title the schema also asks for `title_position` / `title_size` / `title_font` (enum of `title.fonts()`).
+- Add title (`title.py`, param `title` {text, position, font, size}): `graphs.edit_prompt` adds `title.prompt_note`
+  (no lettering, room at the position); after the run the title is a post-processing step: `PostReq.title` (None keeps
+  `run.title`, {"text": ""} removes it) → `title.layout` (calmest band, palette colour with contrast) + `title.render`
+  (Pillow, macOS font files) on top of fixes and grain; `run.title` keeps the laid-out layer. Runs → Post-processing →
+  Title edits it (`openTitle`, drag handle `.title-handle`), `GET /api/title` lists fonts / positions / sizes.
 - Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
 - Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by

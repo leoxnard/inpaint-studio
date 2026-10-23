@@ -121,10 +121,18 @@ prompt per picture. Write every field in English, in plain descriptive language,
 - style: the medium and look, e.g. photo, oil painting, 3D render, flat illustration; colours, mood, light (one sentence).
 - camera: framing, angle, lens and depth of field, e.g. "close-up from a low angle, 35 mm, shallow depth of field".
 Do not put any text, letters or logos into the picture unless the user asks for it."""
+IDEAS_TITLE = """The app writes each title into its picture afterwards. For every prompt also choose:
+- title_position: where the title goes (top, center or bottom), where the picture will have a calm, plain area for it.
+- title_size: small, medium or large, fitting the title's length and the picture.
+- title_font: the font that fits the mood, one of: {fonts}.
+Describe the picture so the area at title_position stays calm and empty; never describe the title or any lettering."""
+TITLE_FIELDS = ("title_position", "title_size", "title_font")
 
 
-def ideas_request(model: str, text: str, count: int = 0, same_style: bool = False, seed: int = 0) -> dict[str, Any]:
-    """Chat completion body for Prompt ideas: the answer is JSON that follows IDEAS_SCHEMA (LM Studio enforces it)."""
+def ideas_request(model: str, text: str, count: int = 0, same_style: bool = False, seed: int = 0,
+                  fonts: list[str] | None = None) -> dict[str, Any]:
+    """Chat completion body for Prompt ideas: the answer is JSON that follows the schema (LM Studio enforces it).
+    fonts (Add title): every idea also gets the title's position, size and font (title.py writes it later)."""
     n = max(0, min(int(count or 0), IDEAS_MAX))
     rules = [f"Write exactly {n} prompts." if n else
              "Write as many prompts as the request asks for (one per item it names); if it names none, write 4."]
@@ -134,10 +142,17 @@ def ideas_request(model: str, text: str, count: int = 0, same_style: bool = Fals
         rules.append("Give the prompts varied ideas.")
     item = {"type": "object", "additionalProperties": False, "required": ["title", *IDEA_FIELDS],
             "properties": {k: {"type": "string"} for k in ("title", *IDEA_FIELDS)}}
+    system = IDEAS_SYSTEM
+    if fonts:
+        item["required"] += list(TITLE_FIELDS)
+        item["properties"].update(title_position={"type": "string", "enum": ["top", "center", "bottom"]},
+                                  title_size={"type": "string", "enum": ["small", "medium", "large"]},
+                                  title_font={"type": "string", "enum": list(fonts)})
+        system += "\n\n" + IDEAS_TITLE.format(fonts=", ".join(fonts))
     ideas = {"type": "array", "items": item, "minItems": n or 1, "maxItems": n or IDEAS_MAX}
     schema = {"type": "object", "additionalProperties": False, "required": ["ideas"], "properties": {"ideas": ideas}}
     return {"model": model,
-            "messages": [{"role": "system", "content": IDEAS_SYSTEM},
+            "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": f"{text.strip()}\n\n({' '.join(rules)})"}],
             "temperature": 0.8, "top_p": 0.95, "max_tokens": 8192, "seed": seed % 2 ** 31,
             "reasoning_effort": "none", "ttl": UNLOAD_AFTER,
@@ -145,20 +160,16 @@ def ideas_request(model: str, text: str, count: int = 0, same_style: bool = Fals
                                                                        "schema": schema}}}
 
 
-def compose(idea: dict, text_in_image: bool = False) -> str:
-    """The prompt sent to the image model: the four fields as one paragraph (+ the title as text in the picture)."""
+def compose(idea: dict) -> str:
+    """The prompt sent to the image model: the four fields as one paragraph."""
     parts = [str(idea.get(k) or "").strip().rstrip(".") for k in IDEA_FIELDS]
     out = ". ".join(p for p in parts if p)
-    out = out + "." if out else ""
-    title = str(idea.get("title") or "").strip()
-    if text_in_image and title:
-        out += f' The title "{title}" is written on it in large, clean, legible letters.'
-    return out.strip()
+    return f"{out}." if out else ""
 
 
-def ideas(response: dict, same_style: bool = False, text_in_image: bool = False) -> list[dict[str, str]]:
-    """The ideas of a chat completion: [{title, subject, setting, style, camera, prompt}]. same_style copies the first
-    idea's style and camera to all (the model sometimes drifts)."""
+def ideas(response: dict, same_style: bool = False, with_title: bool = False) -> list[dict[str, str]]:
+    """The ideas of a chat completion: [{title, subject, setting, style, camera, prompt}] (+ title_position / _size /
+    _font with_title). same_style copies the first idea's style and camera to all (the model sometimes drifts)."""
     try:
         text = response["choices"][0]["message"].get("content") or ""
     except (KeyError, IndexError, TypeError):
@@ -170,11 +181,12 @@ def ideas(response: dict, same_style: bool = False, text_in_image: bool = False)
     except json.JSONDecodeError:
         raise ValueError("the model did not answer with JSON")
     raw = data.get("ideas") if isinstance(data, dict) else data
-    out = [{k: str(i.get(k) or "").strip() for k in ("title", *IDEA_FIELDS)}
+    keys = ("title", *IDEA_FIELDS, *(TITLE_FIELDS if with_title else ()))
+    out = [{k: str(i.get(k) or "").strip() for k in keys}
            for i in (raw or []) if isinstance(i, dict)][:IDEAS_MAX]
     if same_style and out:
         for i in out[1:]:
             i.update(style=out[0]["style"], camera=out[0]["camera"])
     for i in out:
-        i["prompt"] = compose(i, text_in_image)
+        i["prompt"] = compose(i)
     return [i for i in out if i["prompt"]]

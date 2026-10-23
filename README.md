@@ -207,6 +207,7 @@ instead of the model's lettering, so it is clean and the same size across a seri
 ## Post-processing
 
 **Runs → Post-processing** has every fix a run can get. Tick the steps, check the preview, press **Apply**.
+Opening another picture with changes not applied asks first: apply, discard or keep editing.
 The same options are in Create and run automatically when the job is done.
 
 | Fix | Free edit + paste | Whole image | Upscale | Other edits |

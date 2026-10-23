@@ -1615,6 +1615,7 @@ async function submitJob(params, url = "/api/jobs", { quiet = false } = {}) {
 
 // Viewer on a queued or running job; a progress timer keeps the time estimate fresh
 function viewJob(job) {
+  if (leavingPost(job)) { leavePost().then((go) => { if (go) viewJob(job); }); return; }
   if (state.run !== job) freeRunFrames(state.run);
   state.run = job;
   job.shown = null;
@@ -1625,6 +1626,7 @@ function viewJob(job) {
 
 // Viewer on a saved (finished or failed) run
 function showRun(run) {
+  if (leavingPost(run)) { leavePost().then((go) => { if (go) showRun(run); }); return; }
   if (state.run !== run) freeRunFrames(state.run);
   clearInterval(state.progressTimer);
   state.run = run;
@@ -2386,6 +2388,42 @@ function askDialog({ title, intro = "", build, action = "OK", collect }) {
     document.body.classList.add("dialog-open");
     document.body.append(modal);
     ok.focus();
+  });
+}
+// a dialog with one button per choice (resolves to its value; Escape or a click outside = null)
+function choiceDialog({ title, intro = "", choices }) {
+  return new Promise((resolve) => {
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    const box = document.createElement("div");
+    box.className = "modal-box dialog-box";
+    box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "true");
+    const h = document.createElement("h3"); h.textContent = title;
+    box.append(h);
+    if (intro) { const p = document.createElement("p"); p.className = "hint"; p.textContent = intro; box.append(p); }
+    const actions = document.createElement("div"); actions.className = "modal-actions";
+    const close = (value) => {
+      document.removeEventListener("keydown", onKey, true);
+      modal.remove();
+      document.body.classList.remove("dialog-open");
+      resolve(value);
+    };
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(null); } };
+    let first = null;
+    for (const c of choices) {
+      const b = document.createElement("button");
+      b.textContent = c.label;
+      if (c.primary) { b.className = "primary"; first = b; }
+      b.onclick = () => close(c.value);
+      actions.append(b);
+    }
+    box.append(actions);
+    modal.append(box);
+    modal.addEventListener("pointerdown", (e) => { if (e.target === modal) close(null); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.classList.add("dialog-open");
+    document.body.append(modal);
+    (first || actions.lastChild)?.focus();
   });
 }
 // a labelled checkbox row for a dialog; hint = small grey text under the label
@@ -4198,7 +4236,6 @@ $("postBtn").onclick = () => {
   for (const el of $("postPanel").querySelectorAll(".post-geo")) el.hidden = !opt.fix || opt.fix === "upscale";
   for (const el of $("postPanel").querySelectorAll(".post-grain")) el.hidden = !opt.grain;
   $("postTitleGroup").hidden = !opt.title;
-  openTitle(run);
   // the panel starts at what the run has now
   const a = opt.fix && run.aligned ? run.aligned : {};
   post.mask = null;
@@ -4207,8 +4244,28 @@ $("postBtn").onclick = () => {
                   colors: !!a.colors, warp: !!a.warp,
                   poisson: !!a.poisson, grain: !!run.grain, grain_strength: run.grainStrength ?? GRAIN_STRENGTH });
   $("postPanel").hidden = false;
+  post.saved = null;   // what the panel holds unchanged; taken once the title fields are filled
+  openTitle(run).then(() => { post.saved = JSON.stringify(postValues()); });
   schedulePreview();
 };
+// switching to another picture while Post-processing is open: ask what happens to the changes, then close the panel
+const leavingPost = (next) => !$("postPanel").hidden && !!state.run && state.run !== next;
+async function leavePost() {
+  post.fontHover = null;   // a font only hovered in the list is no change
+  const changed = post.saved != null && JSON.stringify(postValues()) !== post.saved;
+  if (changed) {
+    const choice = await choiceDialog({ title: "Keep the post-processing changes?",
+      intro: "You changed this picture in Post-processing but did not apply it yet.",
+      choices: [{ label: "Keep editing", value: "stay" }, { label: "Discard", value: "discard" }, { label: "Apply", value: "apply", primary: true }] });
+    if (!choice || choice === "stay") return false;
+    if (choice === "apply") {
+      await postRequest({ ...postValues(), save: true });
+      if (!$("postPanel").hidden) return false;   // the save failed: stay on it
+    }
+  }
+  if (!$("postPanel").hidden) $("postClose").click();
+  return true;
+}
 $("postClose").onclick = () => { if (bigArea.classList.contains("picking")) setPicking(false); $("postPanel").hidden = true; showFinal(); };
 $("alignAuto").onclick = () => postRequest({ ...postValues(), auto: true, save: false });
 $("postReset").onclick = () => {

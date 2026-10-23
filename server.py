@@ -1579,6 +1579,7 @@ class IdeasReq(BaseModel):
     same_style: bool = False
     add_title: bool = False
     title_position: str = "auto"   # not auto: every title goes there, the model does not choose
+    template: str = Field("", max_length=2000)   # Generate with a template: its shapes in words (web/app.js templateShapes)
 
 
 @app.get("/api/title/sample")
@@ -1609,7 +1610,8 @@ async def prompt_ideas(req: IdeasReq):
             pass   # ComfyUI down: nothing to free
     fonts = await asyncio.to_thread(title.fonts) if req.add_title else None
     pos = req.title_position if req.title_position in title.POSITIONS else "auto"
-    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)), fonts, pos)
+    body = enhance.ideas_request(req.model, req.request, req.count, req.same_style, int.from_bytes(os.urandom(4)), fonts, pos,
+                                req.template)
     try:
         await ensure_llm_server()
         async with httpx.AsyncClient(timeout=enhance.TIMEOUT) as llm:
@@ -1978,7 +1980,7 @@ async def create_job(params: dict):
         # Advanced overrides: an explicitly chosen unet / clip / vae wins over the preset's file
         resolved = presets.resolve(params["preset"], params.get("quant"))
         params.update({k: params.get(k) or v for k, v in resolved.items()})
-    if t := params.get("template"):   # Generate with a template: a whole-image edit of the flat shape template
+    if t := params.get("template"):   # Generate with a template: a soft canny ControlNet on it, or a whole-image edit of it
         if params.get("task") != "generate":
             params.pop("template")
         else:
@@ -1992,11 +1994,19 @@ async def create_job(params: dict):
                 raise HTTPException(400, "invalid template: width and height must be positive")
             if params.get("control"):
                 raise HTTPException(400, "Use either a template or guidance, not both")
-            if params.get("family") not in graphs.TEMPLATE_FAMILIES or (pr and "edit" not in pr["modes"]):
-                raise HTTPException(400, "This model cannot use a template (it needs a model that edits images)")
-            params["template"] = {"image": t["image"], "w": tw, "h": th}
-            params.update(task="edit", image=t["image"], src_w=tw, src_h=th, use_mask=False, mask=None,
-                          mode="inpaint", keep_whole=False, denoise=1.0, crop_stitch=False, outpaint=None)
+            try:
+                strict = min(1.0, max(0.0, float(t.get("strict", graphs.TEMPLATE_STRICT))))
+            except (TypeError, ValueError):
+                strict = graphs.TEMPLATE_STRICT
+            params["template"] = {"image": t["image"], "w": tw, "h": th, "strict": strict}
+            if presets.control_patch(params.get("family", ""), "canny"):   # stays Generate; the control block below checks it
+                strength, end = graphs.template_control(strict)
+                params["control"] = {"type": "canny", "image": t["image"], "source": "photo", "strength": strength, "end": end}
+            elif params.get("family") in graphs.TEMPLATE_FAMILIES and not (pr and "edit" not in pr["modes"]):
+                params.update(task="edit", image=t["image"], src_w=tw, src_h=th, use_mask=False, mask=None,
+                              mode="inpaint", keep_whole=False, denoise=1.0, crop_stitch=False, outpaint=None)
+            else:
+                raise HTTPException(400, "This model cannot use a template")
     if params.get("task") == "generate":
         params.update(use_mask=False, mask=None, image=None, denoise=1.0)
     # extra reference images: only as many as the model's text encoder takes

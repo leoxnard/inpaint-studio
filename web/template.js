@@ -6,14 +6,18 @@
 // The document lives in image pixels (width x height): a background colour, an optional imported image and a list of
 // shapes. Every shape is rendered from its parameters into SVG path data (`d`); the export draws the same data with
 // Path2D onto a canvas (an SVG element rasterised through an <img> would taint the canvas in Safari / WKWebView).
-//   shape = { id, type: "rect" | "ellipse" | "triangle" | "star", x, y, w, h, r (rect radius), fill, d }
-//         | { id, type: "pen", nodes: [{ x, y, i, o, smooth }], closed, fill, d }     (i / o = absolute handle points or null)
+//   shape = { id, type: "rect" | "ellipse" | "triangle" | "star", x, y, w, h, r (rect radius), d }
+//         | { id, type: "pen", nodes: [{ x, y, i, o, smooth }], closed, d }     (i / o = absolute handle points or null)
+// Shapes are always black on white: the template only gives outlines (a canny ControlNet on its edges), colours do not count.
 
 const MIN_SIZE = 2;          // smallest shape side in px
 const HIT_PX = 9;            // screen px around anchors / handles that grab them
+const SNAP_PX = 8;           // screen px within which a shape snaps to a line
 const HISTORY_MAX = 80;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ACCENT = "#2f6fed";
+const SHAPE = "#000000", BG = "#ffffff";   // every template is black shapes on white
+const GUIDE = "#ff2d95";     // snap lines
 
 const ICONS = {
   select: '<path d="m4 4 7.07 16.97 2.51-7.39 7.39-2.51L4 4z"/>',
@@ -30,8 +34,8 @@ const ICONS = {
 };
 
 const TOOLS = [
-  { id: "select", label: "Select", key: "V", hint: "Click a shape to select it, drag to move, drag the handles to resize. Alt-click an anchor of a pen shape to switch it between smooth and sharp." },
-  { id: "rect", label: "Rectangle", key: "R", hint: "Drag to draw (Shift = square). Set the corner radius next to the colour." },
+  { id: "select", label: "Select", key: "V", hint: "Click a shape to select it, drag to move, drag the handles to resize. Shapes snap to the canvas edges, centre, thirds and each other (hold Alt to skip). Alt-click an anchor of a pen shape to switch it between smooth and sharp." },
+  { id: "rect", label: "Rectangle", key: "R", hint: "Drag to draw (Shift = square). Set the corner radius in the toolbar." },
   { id: "ellipse", label: "Ellipse", key: "O", hint: "Drag to draw (Shift = circle)." },
   { id: "triangle", label: "Triangle", key: "T", hint: "Drag to draw (Shift = proportional)." },
   { id: "star", label: "Star", key: "S", hint: "Drag to draw a five-point star (Shift = proportional)." },
@@ -141,6 +145,36 @@ export function dragBox(x0, y0, x1, y1, square) {
   return { x: Math.min(x0, x0 + dx), y: Math.min(y0, y0 + dy), w: Math.abs(dx), h: Math.abs(dy) };
 }
 
+/**
+ * Snap lines for one drag: the canvas edges, centre and thirds, plus the edges and centre of every other shape (and the
+ * anchors of pen shapes). `skip` = the shape being edited, `extra` = more points (e.g. the other anchors of a pen path).
+ */
+export function snapTargets(W, H, shapes, skip, extra = []) {
+  const xs = [0, W / 3, W / 2, (2 * W) / 3, W], ys = [0, H / 3, H / 2, (2 * H) / 3, H];
+  for (const sh of shapes) {
+    if (sh === skip) continue;
+    const b = shapeBox(sh);
+    xs.push(b.x, b.x + b.w / 2, b.x + b.w);
+    ys.push(b.y, b.y + b.h / 2, b.y + b.h);
+    if (sh.type === "pen") for (const n of sh.nodes) { xs.push(n.x); ys.push(n.y); }
+  }
+  for (const p of extra) { xs.push(p.x); ys.push(p.y); }
+  return { xs, ys };
+}
+
+/** The smallest offset (|off| <= tol) that puts one of `cands` onto one of `targets`, and the target lines it then sits on. */
+export function snapAxis(cands, targets, tol) {
+  let off = null;
+  for (const c of cands) for (const t of targets) {
+    const d = t - c;
+    if (Math.abs(d) <= tol && (off === null || Math.abs(d) < Math.abs(off))) off = d;
+  }
+  if (off === null) return { off: 0, lines: [] };
+  const lines = new Set();
+  for (const c of cands) for (const t of targets) if (Math.abs(t - (c + off)) < 1e-3) lines.add(t);
+  return { off, lines: [...lines] };
+}
+
 /** Where an imported image is drawn: contain = whole image visible, cover = fills the canvas (cropped). */
 export function imageRect(iw, ih, W, H, fit) {
   const k = (fit === "cover" ? Math.max : Math.min)(W / iw, H / ih);
@@ -157,16 +191,18 @@ export function openTemplateEditor({ width, height, doc } = {}) {
 
     // ---- state ---------------------------------------------------------------------------------------
     const s = {
-      shapes: [], bg: "#ffffff", fill: "#000000", radius: 0,
+      shapes: [], radius: 0,
       images: [],            // [{ src, el }], history refers to them by index
       img: -1, fit: "contain",
       sel: null, tool: "select",
       pen: null,             // path being drawn: { nodes }
       drag: null,
+      snap: true,            // snap to canvas lines and other shapes (Alt held = off for one drag)
+      guides: null,          // { xs, ys }: the snap lines to draw while a drag is snapped
     };
     const undo = [], redo = [];
     if (doc) {
-      s.bg = doc.bg || s.bg; s.fill = doc.fill || s.fill; s.radius = doc.radius || 0;
+      s.radius = doc.radius || 0;
       s.shapes = clone(doc.shapes || []);
       for (const sh of s.shapes) nextId = Math.max(nextId, (sh.id || 0) + 1);
       if (doc.image?.src) {
@@ -193,13 +229,12 @@ export function openTemplateEditor({ width, height, doc } = {}) {
       toolBtns[t.id] = b;
       toolRow.append(b);
     }
-    const fillIn = el("input", "te-color", { type: "color", value: s.fill, "aria-label": "Shape colour", title: "Colour of the selected shape and of new shapes" });
     const radiusIn = el("input", "te-num", { type: "number", min: "0", max: "4000", step: "1", value: "0", "aria-label": "Corner radius", title: "Corner radius of rectangles (px)" });
     const radiusBox = el("label", "te-radius", { title: "Corner radius of rectangles (px)" }, [el("span", "", { text: "Radius" }), radiusIn]);
-    const bgIn = el("input", "te-color", { type: "color", value: s.bg, "aria-label": "Background colour", title: "Background colour" });
     const mkBtn = (ic, label, text) => el("button", "small te-act", { type: "button", "aria-label": label, title: label }, [ic ? icon(ic) : null, text ? el("span", "", { text }) : null]);
     const bUndo = mkBtn("undo", "Undo (Cmd/Ctrl+Z)"), bRedo = mkBtn("redo", "Redo (Shift+Cmd/Ctrl+Z)");
     const bDup = mkBtn("copy", "Duplicate (Cmd/Ctrl+D)"), bDel = mkBtn("trash", "Delete (Backspace)");
+    const bSnap = el("button", "small te-act", { type: "button", "aria-pressed": "true", text: "Snap", title: "Snap to the canvas edges, centre, thirds and other shapes (hold Alt to skip it while dragging)" });
     const bImg = mkBtn("image", "Import an image as the background layer", "Image…");
     const bFit = el("button", "small te-act", { type: "button", "aria-pressed": "false", title: "Imported image: contain (whole image) or cover (fills the canvas)" });
     const bRemoveImg = el("button", "small te-act", { type: "button", text: "Remove image" });
@@ -207,11 +242,11 @@ export function openTemplateEditor({ width, height, doc } = {}) {
     const bar = el("div", "te-bar", null, [
       toolRow,
       el("span", "te-sep"),
-      el("label", "te-lab", { title: "Colour of the selected shape and of new shapes" }, [el("span", "", { text: "Fill" }), fillIn]),
       radiusBox,
-      el("label", "te-lab", { title: "Background colour" }, [el("span", "", { text: "Background" }), bgIn]),
       el("span", "te-sep"),
       bUndo, bRedo, bDup, bDel,
+      el("span", "te-sep"),
+      bSnap,
       el("span", "te-sep"),
       bImg, bFit, bRemoveImg, fileIn,
     ]);
@@ -237,10 +272,10 @@ export function openTemplateEditor({ width, height, doc } = {}) {
       const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
       return { x: p.x, y: p.y };
     };
-    const snap = () => JSON.stringify({ shapes: s.shapes, bg: s.bg, img: s.img, fit: s.fit, sel: s.sel });
+    const snap = () => JSON.stringify({ shapes: s.shapes, img: s.img, fit: s.fit, sel: s.sel });
     const restore = (str) => {
       const v = JSON.parse(str);
-      Object.assign(s, { shapes: v.shapes, bg: v.bg, img: v.img, fit: v.fit, sel: v.shapes.some((x) => x.id === v.sel) ? v.sel : null });
+      Object.assign(s, { shapes: v.shapes, img: v.img, fit: v.fit, sel: v.shapes.some((x) => x.id === v.sel) ? v.sel : null });
     };
     let before = null;
     const begin = () => { before = snap(); };
@@ -253,6 +288,15 @@ export function openTemplateEditor({ width, height, doc } = {}) {
     };
     const change = (fn) => { begin(); fn(); commit(); render(); sync(); };
 
+    const snapOn = (e) => s.snap && !e.altKey;
+    /** Snaps a point to the lines of `tg` (per axis) and remembers the lines it hit, so render() can draw them. */
+    function snapPoint(p, tg, on, ax = true, ay = true) {
+      const tol = SNAP_PX / scale(), none = { off: 0, lines: [] };
+      const sx = on && ax ? snapAxis([p.x], tg.xs, tol) : none, sy = on && ay ? snapAxis([p.y], tg.ys, tol) : none;
+      s.guides = sx.lines.length || sy.lines.length ? { xs: sx.lines, ys: sy.lines } : null;
+      return { x: p.x + sx.off, y: p.y + sy.off };
+    }
+
     const hitCtx = document.createElement("canvas").getContext("2d");
     const shapeAt = (p) => {
       for (let k = s.shapes.length - 1; k >= 0; k--) if (hitCtx.isPointInPath(new Path2D(shapePath(s.shapes[k])), p.x, p.y)) return s.shapes[k];
@@ -262,14 +306,18 @@ export function openTemplateEditor({ width, height, doc } = {}) {
     // ---- render --------------------------------------------------------------------------------------
     function render() {
       const k = scale(), hs = 9 / k, line = 1.5 / k;
-      const out = [`<rect x="0" y="0" width="${W}" height="${H}" fill="${s.bg}"/>`];
+      const out = [`<rect x="0" y="0" width="${W}" height="${H}" fill="${BG}"/>`];
       const im = s.images[s.img];
       if (im) {
         const r = imageRect(im.el.naturalWidth, im.el.naturalHeight, W, H, s.fit);
         out.push(`<svg x="0" y="0" width="${W}" height="${H}" overflow="hidden"><image href="${im.src}" x="${f(r.x)}" y="${f(r.y)}" width="${f(r.w)}" height="${f(r.h)}" preserveAspectRatio="none"/></svg>`);
       }
-      for (const sh of s.shapes) { sh.d = shapePath(sh); out.push(`<path d="${sh.d}" fill="${sh.fill}"/>`); }
+      for (const sh of s.shapes) { sh.d = shapePath(sh); out.push(`<path d="${sh.d}" fill="${SHAPE}"/>`); }
       out.push(`<rect x="0" y="0" width="${W}" height="${H}" fill="none" stroke="rgba(128,128,128,.6)" stroke-width="${line}"/>`);
+      if (s.guides) {
+        for (const x of s.guides.xs) out.push(`<line x1="${f(x)}" y1="0" x2="${f(x)}" y2="${H}" stroke="${GUIDE}" stroke-width="${line}"/>`);
+        for (const y of s.guides.ys) out.push(`<line x1="0" y1="${f(y)}" x2="${W}" y2="${f(y)}" stroke="${GUIDE}" stroke-width="${line}"/>`);
+      }
       const sel = selShape();
       if (sel && !s.pen) {
         const b = shapeBox(sel);
@@ -304,13 +352,13 @@ export function openTemplateEditor({ width, height, doc } = {}) {
     function sync() {
       for (const [id, b] of Object.entries(toolBtns)) b.setAttribute("aria-pressed", String(s.tool === id));
       const sel = selShape();
-      if (sel) fillIn.value = sel.fill;
       const rectLike = s.tool === "rect" || sel?.type === "rect";
       radiusBox.hidden = !rectLike;
       if (sel?.type === "rect") radiusIn.value = String(Math.round(sel.r || 0));
       else if (document.activeElement !== radiusIn) radiusIn.value = String(Math.round(s.radius));
       bUndo.disabled = !undo.length; bRedo.disabled = !redo.length;
       bDup.disabled = bDel.disabled = !sel;
+      bSnap.setAttribute("aria-pressed", String(s.snap));
       const hasImg = s.img >= 0;
       bFit.hidden = bRemoveImg.hidden = !hasImg;
       bFit.textContent = `Fit: ${s.fit}`;
@@ -333,7 +381,7 @@ export function openTemplateEditor({ width, height, doc } = {}) {
       s.pen = null;
       if (close && nodes.length >= 2) {
         begin();
-        const sh = { id: nextId++, type: "pen", nodes, closed: true, fill: s.fill };
+        const sh = { id: nextId++, type: "pen", nodes, closed: true };
         s.shapes.push(sh); s.sel = sh.id; s.tool = "select";
         commit();
       }
@@ -349,15 +397,17 @@ export function openTemplateEditor({ width, height, doc } = {}) {
       if (s.tool === "pen") {
         const nodes = (s.pen ||= { nodes: [] }).nodes;
         if (nodes.length >= 2 && Math.hypot(p.x - nodes[0].x, p.y - nodes[0].y) <= grab) { finishPen(true); s.drag = null; return; }
-        nodes.push({ x: p.x, y: p.y, i: null, o: null, smooth: false });
+        const q = snapPoint(p, snapTargets(W, H, s.shapes, null, nodes), snapOn(e));
+        nodes.push({ x: q.x, y: q.y, i: null, o: null, smooth: false });
         s.drag = { kind: "pennode", node: nodes[nodes.length - 1] };
         render(); return;
       }
       if (s.tool !== "select") {
-        const sh = { id: nextId++, type: s.tool, x: p.x, y: p.y, w: 0, h: 0, r: s.tool === "rect" ? s.radius : 0, fill: s.fill };
+        const tg = snapTargets(W, H, s.shapes, null), q = snapPoint(p, tg, snapOn(e));
+        const sh = { id: nextId++, type: s.tool, x: q.x, y: q.y, w: 0, h: 0, r: s.tool === "rect" ? s.radius : 0 };
         begin();
         s.shapes.push(sh); s.sel = sh.id;
-        s.drag = { kind: "create", x0: p.x, y0: p.y, sh, moved: false };
+        s.drag = { kind: "create", x0: q.x, y0: q.y, sh, moved: false, tg };
         render(); return;
       }
       // select tool: anchors and handles of a selected pen shape, then the resize handles, then shapes
@@ -367,7 +417,8 @@ export function openTemplateEditor({ width, height, doc } = {}) {
           const n = sel.nodes[idx];
           for (const which of ["i", "o"]) {
             if (n[which] && Math.hypot(p.x - n[which].x, p.y - n[which].y) <= grab) {
-              begin(); s.drag = { kind: "handle", n, which }; return;
+              // the anchors of the path (this one too) give the handle horizontal / vertical lines
+              begin(); s.drag = { kind: "handle", n, which, tg: snapTargets(W, H, s.shapes, sel, sel.nodes) }; return;
             }
           }
         }
@@ -376,7 +427,8 @@ export function openTemplateEditor({ width, height, doc } = {}) {
           if (Math.hypot(p.x - n.x, p.y - n.y) <= grab) {
             begin();
             if (e.altKey) { toggleSmooth(sel, idx); commit(); s.drag = null; render(); sync(); return; }
-            s.drag = { kind: "anchor", n, last: p }; return;
+            // grabbed off-centre: keep the offset so the anchor does not jump under the pointer
+            s.drag = { kind: "anchor", n, off: { x: n.x - p.x, y: n.y - p.y }, tg: snapTargets(W, H, s.shapes, sel, sel.nodes.filter((o) => o !== n)) }; return;
           }
         }
       }
@@ -384,7 +436,7 @@ export function openTemplateEditor({ width, height, doc } = {}) {
         for (const [h, hx, hy] of handlePoints(shapeBox(sel))) {
           if (Math.hypot(p.x - hx, p.y - hy) <= grab) {
             begin();
-            s.drag = { kind: "resize", h, from: clone(sel), box0: shapeBox(sel), sh: sel };
+            s.drag = { kind: "resize", h, from: clone(sel), box0: shapeBox(sel), sh: sel, tg: snapTargets(W, H, s.shapes, sel) };
             return;
           }
         }
@@ -392,7 +444,7 @@ export function openTemplateEditor({ width, height, doc } = {}) {
       const hit = shapeAt(p);
       if (hit) {
         s.sel = hit.id; begin();
-        s.drag = { kind: "move", last: p, sh: hit };
+        s.drag = { kind: "move", start: p, applied: { x: 0, y: 0 }, box0: shapeBox(hit), sh: hit, tg: snapTargets(W, H, s.shapes, hit) };
       } else { s.sel = null; s.drag = null; }
       render(); sync();
     }
@@ -422,21 +474,32 @@ export function openTemplateEditor({ width, height, doc } = {}) {
         const n = d.node;
         if (Math.hypot(p.x - n.x, p.y - n.y) * k > 3) { n.o = { x: p.x, y: p.y }; n.i = { x: 2 * n.x - p.x, y: 2 * n.y - p.y }; n.smooth = true; }
       } else if (d.kind === "create") {
-        const b = dragBox(d.x0, d.y0, p.x, p.y, e.shiftKey);
+        const q = snapPoint(p, d.tg, snapOn(e) && !e.shiftKey);   // Shift squares the box after the snap, so it would undo it
+        const b = dragBox(d.x0, d.y0, q.x, q.y, e.shiftKey);
         Object.assign(d.sh, b);
         d.moved = d.moved || Math.max(b.w, b.h) * k > 4;
       } else if (d.kind === "move") {
-        moveShape(d.sh, p.x - d.last.x, p.y - d.last.y); d.last = p;
+        // the box edges and the centre snap, so a shape lines up with the canvas and with its neighbours on either side
+        const b = d.box0, raw = { x: p.x - d.start.x, y: p.y - d.start.y }, on = snapOn(e), tol = SNAP_PX / k;
+        const sx = on ? snapAxis([b.x + raw.x, b.x + b.w / 2 + raw.x, b.x + b.w + raw.x], d.tg.xs, tol) : { off: 0, lines: [] };
+        const sy = on ? snapAxis([b.y + raw.y, b.y + b.h / 2 + raw.y, b.y + b.h + raw.y], d.tg.ys, tol) : { off: 0, lines: [] };
+        s.guides = sx.lines.length || sy.lines.length ? { xs: sx.lines, ys: sy.lines } : null;
+        const to = { x: raw.x + sx.off, y: raw.y + sy.off };
+        moveShape(d.sh, to.x - d.applied.x, to.y - d.applied.y); d.applied = to;
       } else if (d.kind === "anchor") {
-        const dx = p.x - d.last.x, dy = p.y - d.last.y;
-        for (const q of [d.n, d.n.i, d.n.o]) if (q) { q.x += dx; q.y += dy; }
-        d.last = p;
+        const q = snapPoint({ x: p.x + d.off.x, y: p.y + d.off.y }, d.tg, snapOn(e));
+        const dx = q.x - d.n.x, dy = q.y - d.n.y;
+        for (const r of [d.n, d.n.i, d.n.o]) if (r) { r.x += dx; r.y += dy; }
       } else if (d.kind === "handle") {
         const { n, which } = d, other = which === "i" ? "o" : "i";
-        n[which] = { x: p.x, y: p.y };
-        if (n.smooth) n[other] = { x: 2 * n.x - p.x, y: 2 * n.y - p.y };
+        const q = snapPoint(p, d.tg, snapOn(e));
+        n[which] = { x: q.x, y: q.y };
+        if (n.smooth) n[other] = { x: 2 * n.x - q.x, y: 2 * n.y - q.y };
       } else if (d.kind === "resize") {
         const b = d.box0, h = d.h;
+        // only the edges the handle moves snap; a proportional corner resize is derived from the pointer, so it does not
+        const q = snapPoint(p, d.tg, snapOn(e) && !(e.shiftKey && h.length === 2), h.includes("w") || h.includes("e"), h.includes("n") || h.includes("s"));
+        p.x = q.x; p.y = q.y;
         let x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
         if (h.includes("w")) x0 = p.x; if (h.includes("e")) x1 = p.x;
         if (h.includes("n")) y0 = p.y; if (h.includes("s")) y1 = p.y;
@@ -455,7 +518,7 @@ export function openTemplateEditor({ width, height, doc } = {}) {
 
     function onUp() {
       const d = s.drag;
-      s.drag = null;
+      s.drag = null; s.guides = null;
       if (!d) return;
       if (d.kind === "pennode") { render(); return; }   // the path goes on until it is closed
       if (d.kind === "create") {
@@ -500,20 +563,15 @@ export function openTemplateEditor({ width, height, doc } = {}) {
       change(() => moveShape(sel, dx, dy));
     }
 
-    fillIn.addEventListener("input", () => {
-      s.fill = fillIn.value;
-      const sel = selShape();
-      if (sel) { if (sel.fill !== fillIn.value) { begin(); sel.fill = fillIn.value; commit(); } render(); }
-    });
     radiusIn.addEventListener("input", () => {
       const r = Math.max(0, parseFloat(radiusIn.value) || 0);
       s.radius = r;
       const sel = selShape();
       if (sel?.type === "rect") { begin(); sel.r = r; commit(); render(); sync(); }
     });
-    bgIn.addEventListener("input", () => { if (s.bg !== bgIn.value) { begin(); s.bg = bgIn.value; commit(); render(); sync(); } });
     bUndo.addEventListener("click", doUndo);
     bRedo.addEventListener("click", doRedo);
+    bSnap.addEventListener("click", () => { s.snap = !s.snap; s.guides = null; sync(); });
     bDup.addEventListener("click", duplicate);
     bDel.addEventListener("click", remove);
     bImg.addEventListener("click", () => fileIn.click());
@@ -572,20 +630,21 @@ export function openTemplateEditor({ width, height, doc } = {}) {
       const c = document.createElement("canvas");
       c.width = W; c.height = H;
       const ctx = c.getContext("2d");
-      ctx.fillStyle = s.bg; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H);
       const im = s.images[s.img];
       if (im) {
         const r = imageRect(im.el.naturalWidth, im.el.naturalHeight, W, H, s.fit);
         ctx.imageSmoothingQuality = "high";
         ctx.drawImage(im.el, r.x, r.y, r.w, r.h);
       }
-      for (const sh of s.shapes) { ctx.fillStyle = sh.fill; ctx.fill(new Path2D(shapePath(sh))); }
+      ctx.fillStyle = SHAPE;
+      for (const sh of s.shapes) ctx.fill(new Path2D(shapePath(sh)));
       return new Promise((res) => c.toBlob(res, "image/png"));
     }
     function docOut() {
       const im = s.images[s.img];
       return {
-        bg: s.bg, fill: s.fill, radius: s.radius,
+        radius: s.radius,
         image: im ? { src: im.src, fit: s.fit } : null,
         shapes: s.shapes.map((sh) => ({ ...clone(sh), d: shapePath(sh) })),
       };

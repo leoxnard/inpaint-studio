@@ -110,7 +110,9 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   (no lettering, room at the position); after the run the title is a post-processing step: `PostReq.title` (None keeps
   `run.title`, {"text": ""} removes it) → `title.layout` (calmest band, palette colour with contrast) + `title.render`
   (Pillow, macOS font files) on top of fixes and grain; `run.title` keeps the laid-out layer. Runs → Post-processing →
-  Title edits it (`openTitle`, drag handle `.title-handle`), `GET /api/title` lists fonts / positions / sizes.
+  Title edits it (`openTitle`, drag handle `.title-handle`), `GET /api/title` lists fonts / positions / sizes,
+  `GET /api/title/sample?font=` is the font's name in its face (the font list; hover = `post.fontHover`, fast preview).
+  x / y = centre of the ink box (`title._fit` offset); the response's `title_box` [w, h] feeds the snap grid (`snapPos`).
 - Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the
   original on the right half. `GET /api/runs/{id}/comfyui.png` = result with the API graph as PNG `prompt` chunk.
 - Prompt history: `prompt_history.json` in App Support (edit/generate prompts + SAM3 mask texts, 50 each), written by

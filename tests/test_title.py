@@ -46,7 +46,7 @@ def test_render_draws_in_the_layer_colour_and_keeps_size_and_mode():
 
 def test_long_text_is_set_smaller_to_fit():
     img = Image.new("RGB", (200, 200))
-    font, (w, _) = title._fit(img, {"text": "A very very long playlist title indeed", "size": 20})
+    font, (w, _), _ = title._fit(img, {"text": "A very very long playlist title indeed", "size": 20})
     assert w <= 200 * title.MAX_WIDTH
 
 
@@ -59,3 +59,16 @@ def test_generate_prompt_gets_the_room_note():
     p = graphs.edit_prompt({"prompt": "A record player", "task": "generate", "title": {"text": "Jazz", "position": "top"}})
     assert p.startswith("A record player") and "across the top" in p and "Jazz" not in p
     assert "No text" not in graphs.edit_prompt({"prompt": "A record player", "task": "generate"})
+
+
+def test_text_is_centred_on_its_ink_box():
+    img = Image.new("RGB", (400, 400))
+    out = title.render(img, {"text": "gyMH", "font": title.DEFAULT_FONT, "size": 20, "x": 0.5, "y": 0.5, "color": "#ffffff"})
+    ys, xs = np.nonzero(np.asarray(out.convert("L")) > 128)
+    assert abs((ys.min() + ys.max()) / 2 - 200) <= 2 and abs((xs.min() + xs.max()) / 2 - 200) <= 2
+    w, h = title.box(img, {"text": "gyMH", "size": 20})
+    assert 0 < h < w < 1
+
+
+def test_font_sample_is_a_png():
+    assert title.sample(title.DEFAULT_FONT)[:8] == b"\x89PNG\r\n\x1a\n"

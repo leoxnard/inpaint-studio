@@ -516,20 +516,41 @@
                 <input type="range" id="fixGrainStrength" min="0" max="200" step="10" value="100"></label>
             </div>
             <div class="post-title" id="postTitleGroup">
-              <div class="row wrap">
+              <div class="tt-head">
                 <label class="check"><input type="checkbox" id="titleOn"> Title</label>
                 <input type="text" id="titleEdit" placeholder="Title text" aria-label="Title text">
               </div>
-              <div class="row wrap">
-                <select id="titleFont" class="compact" aria-label="Font"></select>
-                <label class="range-row">Size <output id="titleSizeOut">9 %</output>
-                  <input type="range" id="titleSize" min="2" max="25" step="0.5" value="9"></label>
-                <input type="color" id="titleColor" value="#ffffff" aria-label="Title colour">
-                <button id="titleAutoColor" title="A colour of the picture that stands out where the title is">Auto colour</button>
-                <label class="check"><input type="checkbox" id="titleShadow"> Shadow</label>
-                <button id="titleAutoPos" title="Put the title on the calmest band of the picture">Auto position</button>
+              <div class="tt-grid">
+                <span class="tt-label">Font</span>
+                <div class="font-pick">
+                  <button type="button" class="font-btn" id="titleFontBtn" aria-haspopup="listbox" aria-expanded="false" title="Hover a font to try it on the picture">
+                    <img id="titleFontImg" alt=""><span class="caret" aria-hidden="true"></span></button>
+                  <div class="font-list" id="titleFontList" role="listbox" aria-label="Fonts" hidden></div>
+                  <select id="titleFont" hidden aria-hidden="true"></select>
+                </div>
+                <span class="tt-label">Size</span>
+                <div class="tt-inline range-row"><input type="range" id="titleSize" min="2" max="25" step="0.5" value="9" aria-label="Title size"><output id="titleSizeOut">9 %</output></div>
+                <span class="tt-label">Colour</span>
+                <div class="tt-inline">
+                  <input type="color" id="titleColor" value="#ffffff" aria-label="Title colour">
+                  <button type="button" class="small" id="titleAutoColor" title="A colour of the picture that stands out where the title is">Auto</button>
+                  <label class="check"><input type="checkbox" id="titleShadow"> Shadow</label>
+                </div>
+                <span class="tt-label">Position</span>
+                <div class="tt-inline tt-pos">
+                  <div class="pos-grid" role="group" aria-label="Move the title to"><button type="button" data-snap="0,0" title="Top left"><i></i></button><button type="button" data-snap="1,0" title="Top"><i></i></button><button type="button" data-snap="2,0" title="Top right"><i></i></button><button type="button" data-snap="0,1" title="Left"><i></i></button><button type="button" data-snap="1,1" title="Center"><i></i></button><button type="button" data-snap="2,1" title="Right"><i></i></button><button type="button" data-snap="0,2" title="Bottom left"><i></i></button><button type="button" data-snap="1,2" title="Bottom"><i></i></button><button type="button" data-snap="2,2" title="Bottom right"><i></i></button></div>
+                  <div class="tt-xy">
+                    <label>X <input type="number" id="titleX" min="0" max="100" step="0.5" aria-label="Title centre X in %"> %</label>
+                    <label>Y <input type="number" id="titleY" min="0" max="100" step="0.5" aria-label="Title centre Y in %"> %</label>
+                    <div class="tt-btns">
+                      <button type="button" class="small" id="titlePosCopy" title="Copy this position (to paste it on another run)">Copy</button>
+                      <button type="button" class="small" id="titlePosPaste" title="Put the title where the copied position is" disabled>Paste</button>
+                      <button type="button" class="small" id="titleAutoPos" title="Put the title on the calmest band of the picture">Auto</button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <p class="hint">Drag the title on the picture to move it.</p>
+              <p class="hint">Drag the cross on the picture to move the title; hold Shift to keep it on one axis.</p>
             </div>
             <div class="row wrap">
               <span class="hint" id="postInfo"></span>

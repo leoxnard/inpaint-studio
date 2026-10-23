@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import glob
+import io
 from pathlib import Path
 from typing import Any
 
@@ -71,8 +72,9 @@ def prompt_note(position: str) -> str:
     return f"{room} No text, letters or logos in the picture.".strip()
 
 
-def _fit(img: Image.Image, layer: dict) -> tuple[Any, tuple[int, int]]:
-    """The font at the layer's size (smaller when the text would be wider than MAX_WIDTH) and the text's size in px."""
+def _fit(img: Image.Image, layer: dict) -> tuple[Any, tuple[int, int], tuple[int, int]]:
+    """The font at the layer's size (smaller when the text would be wider than MAX_WIDTH), the size of the text's
+    ink box in px and that box's offset from the drawing origin (so x / y can be its exact centre)."""
     w = img.width
     px = round(w * float(layer.get("size") or DEFAULT_SIZE) / 100)
     draw = ImageDraw.Draw(img)
@@ -80,9 +82,30 @@ def _fit(img: Image.Image, layer: dict) -> tuple[Any, tuple[int, int]]:
         font = load_font(layer.get("font") or DEFAULT_FONT, px)
         l, t, r, b = draw.multiline_textbbox((0, 0), layer["text"], font=font, align="center")
         if r - l <= w * MAX_WIDTH or px <= 6:
-            return font, (r - l, b - t)
+            break
         px = int(px * 0.92)
-    return font, (r - l, b - t)
+    return font, (r - l, b - t), (l, t)
+
+
+def box(img: Image.Image, layer: dict) -> tuple[float, float]:
+    """Width and height of the title's ink box as fractions of the picture (the editor's snap positions)."""
+    if not layer.get("text"):
+        return 0.0, 0.0
+    _, (tw, th), _ = _fit(img, layer)
+    return tw / img.width, th / img.height
+
+
+@functools.lru_cache(maxsize=64)
+def sample(name: str) -> bytes:
+    """A PNG of the font's own name set in that font (the editor's font list; browsers cannot pick a face by name)."""
+    font = load_font(name, 30)
+    draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+    l, t, r, b = draw.textbbox((0, 0), name, font=font)
+    img = Image.new("RGBA", (r - l + 8, b - t + 8), (0, 0, 0, 0))
+    ImageDraw.Draw(img).text((4 - l, 4 - t), name, font=font, fill=(150, 150, 150, 255))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
 
 
 def _detail(img: Image.Image) -> tuple[np.ndarray, float]:
@@ -156,7 +179,7 @@ def layout(img: Image.Image, layer: dict) -> dict:
         out["size"] = SIZES.get(out["size"], DEFAULT_SIZE)
     if not out.get("text"):
         return out
-    _, (tw, th) = _fit(img, out)
+    _, (tw, th), _ = _fit(img, out)
     if out.get("x") is None or out.get("y") is None:
         pos = out.get("position") or "auto"
         out["x"] = 0.5
@@ -175,16 +198,17 @@ def render(img: Image.Image, layer: dict) -> Image.Image:
     if not layer.get("text"):
         return img
     base = img.convert("RGBA")
-    font, (_, th) = _fit(base, layer)
-    pos = (layer["x"] * base.width, layer["y"] * base.height)
+    font, (tw, th), (l, t) = _fit(base, layer)
+    # x / y is the centre of the ink box, not of the line (anchor "mm" sits between ascender and descender)
+    pos = (layer["x"] * base.width - l - tw / 2, layer["y"] * base.height - t - th / 2)
     text = Image.new("RGBA", base.size, (0, 0, 0, 0))
     if layer.get("shadow"):
         shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
         off = max(1, round(th * 0.04))
         ImageDraw.Draw(shadow).multiline_text((pos[0] + off, pos[1] + off), layer["text"], font=font,
-                                              fill=(0, 0, 0, 150), anchor="mm", align="center")
+                                              fill=(0, 0, 0, 150), align="center")
         text = Image.alpha_composite(text, shadow.filter(ImageFilter.GaussianBlur(max(1, th * 0.05))))
     ImageDraw.Draw(text).multiline_text(pos, layer["text"], font=font, fill=layer.get("color") or "#ffffff",
-                                        anchor="mm", align="center")
+                                        align="center")
     out = Image.alpha_composite(base, text)
     return out if img.mode == "RGBA" else out.convert(img.mode)

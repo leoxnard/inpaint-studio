@@ -4106,12 +4106,13 @@ let postTimer = 0;
 // what the open panel holds besides its inputs: the four corner offsets (perspective, image px) and the mask
 // (null = the run's current one, "original" = the run's own, else an uploaded mask name)
 const ZERO_CORNERS = () => [[0, 0], [0, 0], [0, 0], [0, 0]];
-const post = { corners: ZERO_CORNERS(), mask: null, cornersOn: false, titleX: null, titleY: null, titleKnown: false };
+const post = { corners: ZERO_CORNERS(), mask: null, cornersOn: false, titleX: null, titleY: null, titleKnown: false,
+               titleBox: null, fontHover: null };   // titleBox: [w, h] of the text as fractions (server, title.box)
 // the title layer as the panel holds it; undefined keeps the run's own (the panel never saw it)
 function titleValues() {
   if (!post.titleKnown) return undefined;
   if (!$("titleOn").checked || !$("titleEdit").value.trim()) return { text: "" };
-  return { text: $("titleEdit").value.trim(), font: $("titleFont").value, size: num("titleSize"), x: post.titleX, y: post.titleY,
+  return { text: $("titleEdit").value.trim(), font: post.fontHover || $("titleFont").value, size: num("titleSize"), x: post.titleX, y: post.titleY,
            color: post.titleAutoColor ? null : $("titleColor").value, shadow: $("titleShadow").checked };
 }
 function setTitleValues(t) {   // a layer as the server laid it out (title.layout)
@@ -4124,6 +4125,7 @@ function setTitleValues(t) {   // a layer as the server laid it out (title.layou
   post.titleX = t.x ?? post.titleX; post.titleY = t.y ?? post.titleY;
   post.titleAutoColor = false;
   syncRangeOutputs();
+  syncTitleFields();
 }
 function postValues() {
   return { title: titleValues(), dx: num("alignDx") || 0, dy: num("alignDy") || 0, scale: (num("alignScale") || 100) / 100,
@@ -4156,6 +4158,7 @@ async function postRequest(body) {
     if (seq !== postSeq && !res.saved) return;
     // only the shift Auto-align found: everything else stays as the user set it (the response carries the run's saved values)
     if (res.dx != null) setPostValues({ dx: res.dx, dy: res.dy, scale: res.scale });
+    if (res.title_box) post.titleBox = res.title_box;
     if (res.title && post.titleKnown) setTitleValues(res.title);
     if (res.saved) {
       if (res.run) refreshRunFiles(run, res.run);
@@ -4273,6 +4276,7 @@ async function fastPreview() {
   const seq = ++postSeq;
   try {
     const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, { ...postValues(), save: false, fast: true });
+    if (res.title_box) post.titleBox = res.title_box;
     if (seq === postSeq && state.run === run && !$("postPanel").hidden) showPostPreview(run, res.url);
   } catch { /* the full preview after the drag reports errors */ }
   finally {
@@ -4305,16 +4309,28 @@ function setCornersMode(on) {
 }
 $("cornersBtn").onclick = () => setCornersMode(!post.cornersOn);
 
-// ---- Add title in Post-processing: text, font, size, colour, shadow; the handle on the picture moves it.
-// x / y / colour left empty (null) are filled by the server (title.layout: calmest band, picture's palette)
+// ---- Add title in Post-processing: text, font, size, colour, shadow, position (snap grid, X / Y, the cross on the
+// picture). x / y / colour left empty (null) are filled by the server (title.layout: calmest band, picture's palette).
+// Changes show at once as a small preview (fastPreview), the full one follows when they stop (schedulePreview).
+const TITLE_POS_KEY = "inpaint-studio-title-pos";
+const SNAP_MARGIN = 0.05;   // the snap grid keeps the text this far from the picture's edges
 async function openTitle(run) {
   const opts = await loadTitleOpts();
   if ($("titleFont").options.length !== opts.fonts.length) {
     $("titleFont").replaceChildren(...opts.fonts.map((f) => new Option(f, f)));
+    $("titleFontList").replaceChildren(...opts.fonts.map((f) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.dataset.font = f; b.setAttribute("role", "option"); b.title = f;
+      const img = document.createElement("img");
+      img.src = `/api/title/sample?font=${encodeURIComponent(f)}`; img.alt = f; img.loading = "lazy";
+      b.append(img);
+      return b;
+    }));
   }
   const t = run.title;
   post.titleKnown = !!t;
   post.titleX = t?.x ?? null; post.titleY = t?.y ?? null;
+  post.titleBox = null; post.fontHover = null;
   post.titleAutoColor = !t;
   $("titleOn").checked = !!t?.text;
   $("titleEdit").value = t?.text || "";
@@ -4323,22 +4339,117 @@ async function openTitle(run) {
   $("titleShadow").checked = false;
   setTitleValues(t);
   syncRangeOutputs();
+  syncTitleFields();
   syncTitleHandle();
 }
-function titleChanged() {
+// X / Y fields, the font button, the snap cell under the title and Paste follow the panel's values
+function syncTitleFields() {
+  const pct = (v) => (v == null ? "" : String(Math.round(v * 1000) / 10));
+  if (document.activeElement !== $("titleX")) $("titleX").value = pct(post.titleX);
+  if (document.activeElement !== $("titleY")) $("titleY").value = pct(post.titleY);
+  const font = $("titleFont").value;
+  $("titleFontImg").src = font ? `/api/title/sample?font=${encodeURIComponent(font)}` : "";
+  $("titleFontImg").alt = font;
+  for (const b of $("titleFontList").children) b.setAttribute("aria-selected", String(b.dataset.font === font));
+  for (const b of $("postTitleGroup").querySelectorAll("[data-snap]")) {
+    const [c, r] = b.dataset.snap.split(",").map(Number);
+    const at = snapPos(c, r);
+    b.classList.toggle("on", post.titleX != null && Math.abs(at[0] - post.titleX) < 0.002 && Math.abs(at[1] - post.titleY) < 0.002);
+  }
+  let saved = null;
+  try { saved = localStorage.getItem(TITLE_POS_KEY); } catch { /* a convenience */ }
+  $("titlePosPaste").disabled = !saved;
+}
+// a snap cell's centre: column / row 0 = left / top edge (plus the margin and half the text), 1 = middle, 2 = right / bottom
+function snapPos(c, r) {
+  const [w, h] = post.titleBox || [0, 0];
+  const at = (i, size) => (i === 0 ? SNAP_MARGIN + size / 2 : i === 2 ? 1 - SNAP_MARGIN - size / 2 : 0.5);
+  return [at(c, w), at(r, h)];
+}
+function titleChanged(live = false) {
   post.titleKnown = true;
   if ($("titleEdit").value.trim() && !$("titleOn").checked) $("titleOn").checked = true;
+  syncTitleFields();
   syncTitleHandle();
+  if (live) fastPreview();   // at once, small; the full preview follows when the input stops
   schedulePreview();
 }
-for (const id of ["titleOn", "titleFont", "titleShadow"]) $(id).addEventListener("change", titleChanged);
-for (const id of ["titleEdit", "titleSize"]) $(id).addEventListener("input", titleChanged);
-$("titleColor").addEventListener("input", () => { post.titleAutoColor = false; titleChanged(); });
+for (const id of ["titleOn", "titleShadow"]) $(id).addEventListener("change", () => titleChanged());
+$("titleEdit").addEventListener("input", () => titleChanged(true));
+$("titleSize").addEventListener("input", () => titleChanged(true));
+$("titleColor").addEventListener("input", () => { post.titleAutoColor = false; titleChanged(true); });
 $("titleAutoColor").onclick = () => { post.titleAutoColor = true; titleChanged(); };
 $("titleAutoPos").onclick = () => { post.titleX = post.titleY = null; titleChanged(); };
+for (const [id, k] of [["titleX", "titleX"], ["titleY", "titleY"]]) {
+  $(id).addEventListener("input", () => {
+    const v = parseFloat($(id).value);
+    if (!Number.isFinite(v)) return;
+    post[k] = Math.min(1, Math.max(0, v / 100));
+    if (post.titleX == null || post.titleY == null) { post.titleX ??= 0.5; post.titleY ??= 0.5; }
+    placeTitleHandle();
+    titleChanged(true);
+  });
+}
+for (const b of $("postTitleGroup").querySelectorAll("[data-snap]")) {
+  b.onclick = () => {
+    [post.titleX, post.titleY] = snapPos(...b.dataset.snap.split(",").map(Number));
+    if (!$("titleOn").checked && $("titleEdit").value.trim()) $("titleOn").checked = true;
+    placeTitleHandle();
+    titleChanged(true);
+  };
+}
+$("titlePosCopy").onclick = () => {
+  if (post.titleX == null) return;
+  try { localStorage.setItem(TITLE_POS_KEY, JSON.stringify({ x: post.titleX, y: post.titleY })); } catch { return; }
+  syncTitleFields();
+  showToast("Title position copied. Open another run and press Paste.");
+};
+$("titlePosPaste").onclick = () => {
+  let p = null;
+  try { p = JSON.parse(localStorage.getItem(TITLE_POS_KEY) || "null"); } catch { /* nothing copied */ }
+  if (!p) return;
+  post.titleX = p.x; post.titleY = p.y;
+  placeTitleHandle();
+  titleChanged(true);
+};
+// the font list: every name in its own face (title.sample); hovering one shows it on the picture, a click picks it
+function setFontList(open) {
+  $("titleFontList").hidden = !open;
+  $("titleFontBtn").setAttribute("aria-expanded", String(open));
+  if (open) $("titleFontList").querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  if (!open && post.fontHover) { post.fontHover = null; fastPreview(); schedulePreview(); }
+}
+$("titleFontBtn").onclick = () => setFontList($("titleFontList").hidden);
+$("titleFontList").addEventListener("mouseover", (e) => {
+  const b = e.target.closest("[data-font]");
+  if (!b || post.fontHover === b.dataset.font) return;
+  post.fontHover = b.dataset.font;
+  post.titleKnown = true;
+  if (!$("titleOn").checked && $("titleEdit").value.trim()) $("titleOn").checked = true;
+  fastPreview();
+});
+$("titleFontList").addEventListener("mouseleave", () => {
+  if (!post.fontHover) return;
+  post.fontHover = null;
+  fastPreview();
+});
+$("titleFontList").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-font]");
+  if (!b) return;
+  $("titleFont").value = b.dataset.font;
+  post.fontHover = null;
+  setFontList(false);
+  titleChanged();
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!$("titleFontList").hidden && !e.target.closest(".font-pick")) setFontList(false);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("titleFontList").hidden) setFontList(false); });
+// the cross on the picture: drag to move (Shift keeps the axis the drag mostly goes along), live preview while dragging
 const titleHandle = document.createElement("button");
-titleHandle.type = "button"; titleHandle.className = "title-handle"; titleHandle.title = "Drag to move the title";
-titleHandle.textContent = "✥";
+titleHandle.type = "button"; titleHandle.className = "title-handle"; titleHandle.title = "Drag to move the title (Shift: one axis)";
+titleHandle.innerHTML = '<svg viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="11" fill="rgba(255,255,255,.12)" stroke="#fff" stroke-width="1.5"/>'
+  + '<path d="M17 3v10M17 21v10M3 17h10M21 17h10" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><circle cx="17" cy="17" r="1.6" fill="#fff"/></svg>';
 titleHandle.hidden = true;
 titleHandle.addEventListener("pointerdown", (e) => {
   e.preventDefault(); e.stopPropagation();
@@ -4347,10 +4458,14 @@ titleHandle.addEventListener("pointerdown", (e) => {
   if (!box || post.titleX == null) return;
   const start = { x: e.clientX, y: e.clientY, tx: post.titleX, ty: post.titleY };
   const move = (ev) => {
-    post.titleX = Math.min(1, Math.max(0, start.tx + (ev.clientX - start.x) / (box.w * box.s)));
-    post.titleY = Math.min(1, Math.max(0, start.ty + (ev.clientY - start.y) / (box.h * box.s)));
+    let dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+    if (ev.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }
+    post.titleX = Math.min(1, Math.max(0, start.tx + dx / (box.w * box.s)));
+    post.titleY = Math.min(1, Math.max(0, start.ty + dy / (box.h * box.s)));
     post.titleKnown = true;
     placeTitleHandle();
+    syncTitleFields();
+    fastPreview();
   };
   const up = () => {
     titleHandle.removeEventListener("pointermove", move); titleHandle.removeEventListener("pointerup", up);

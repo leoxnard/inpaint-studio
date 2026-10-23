@@ -1132,6 +1132,7 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
     layer = req.title if req.title is not None else run.get("title")
     if layer and layer.get("text"):   # the title goes on top of everything (title.py)
         layer = await asyncio.to_thread(title.layout, img, layer)
+        result["title_box"] = await asyncio.to_thread(title.box, img, layer)   # the editor's snap positions
         img = await asyncio.to_thread(title.render, img, layer)
     result["title"] = layer if layer and layer.get("text") else None
     if req.save:
@@ -1576,6 +1577,15 @@ class IdeasReq(BaseModel):
     same_style: bool = False
     add_title: bool = False
     title_position: str = "auto"   # not auto: every title goes there, the model does not choose
+
+
+@app.get("/api/title/sample")
+async def title_sample(font: str):
+    """The font's name set in that font (PNG), for the font list in Post-processing → Title."""
+    if font not in await asyncio.to_thread(title.fonts):
+        raise HTTPException(404, "unknown font")
+    png = await asyncio.to_thread(title.sample, font)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
 
 
 @app.get("/api/title")

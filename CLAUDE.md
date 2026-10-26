@@ -41,7 +41,13 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   Older runs may still have `fixed_url` / `grain_url` (`<run>_fixed.png`); the next save migrates them.
 - `imports.py` – own files from the Download Center (Your files): a model, LoRA, upscaler or other model file on the
   Mac is symlinked into `models/<folder>` and registered as preset / component (`imports.apply`, `imports.json` in
-  App Support); Remove deletes only the link. `POST /api/imports/pick` opens the macOS file dialog via osascript.
+  App Support); Remove deletes only the link. An imported model keeps `base` (graph + settings) but may pick its own
+  `text_encoder` / `vae` component (a removed one falls back to the base's). `POST /api/imports/pick` opens the macOS file dialog via osascript.
+  Watched folders (`watch_folders.json` in App Support, `imports.watch_save` / `sync`, `POST /api/imports/folders|scan|pick-folder`):
+  extra folders per kind, every model file in them is imported as an item with `watched` = the folder; run at server start,
+  on save and when the Download Center opens. `guess_base` reads the model line from the name, unknown → default preset + `check`;
+  `PATCH /api/imports/{id}` (`imports.update`) edits base / text encoder / VAE / LoRA families / scale. Removing a watched
+  import by hand puts its source on the `ignored` list.
 - `presets.py` – model presets (files, quants, sizes, defaults), components (encoders, VAEs,
   SAM3, upscalers, Viggle node, LoRAs with their `families`, grouped by `LORA_GROUPS`) and the RAM-fit estimate. `installer.py` – setup and the download queue (more items can be queued while one runs) and
   the headless ComfyUI process.

@@ -62,6 +62,10 @@ BENCH = installer.APP_SUPPORT / "benchmarks"
 FRESH_INSTALL = not installer.CONFIG_FILE.exists() and not RUNS.exists()
 RUNS.mkdir(parents=True, exist_ok=True)
 imports.apply()   # own files from the Download Center become components / presets
+try:
+    imports.sync(installer.load_config())   # new files in the watched folders
+except (OSError, ValueError):
+    pass
 HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", "seed", "cfg", "sampler",
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family", "enhance", "prompt_original",
@@ -288,7 +292,8 @@ async def setup_status():
              "installed": have[f"component:{cid}"], "kind": c.get("kind"), "scale": c.get("scale"),
              "engine": c.get("engine"), "group": c.get("group"), "needs": c.get("needs", []), "families": c.get("families"),
              "strength": c.get("strength"), "repo": c["repo"], "description": c.get("description", ""),
-             "imported": bool(c.get("imported")), "types": c.get("types")}
+             "imported": bool(c.get("imported")), "types": c.get("types"), "folder": c["folder"],
+             "present": (f.name if (f := installer.item_path(cfg, f"component:{cid}")) else None), "gated": bool(c.get("gated"))}
              for cid, c in presets.COMPONENTS.items()]
     ram = system_ram()
     for c in comps:
@@ -316,10 +321,12 @@ async def setup_status():
 
 
 class ImportReq(BaseModel):
-    path: str
-    kind: str
+    path: str = ""
+    kind: str = ""
     title: str = ""
-    base: str = ""                 # diffusion model: the preset whose text encoder, VAE and settings it uses
+    base: str = ""                 # diffusion model: the preset whose graph and settings it uses
+    text_encoder: str = ""         # diffusion model: component key, empty = the one of `base`
+    vae: str = ""
     families: list[str] = []       # LoRA: the model families it works with
     scale: int | None = Field(None, ge=1, le=8)   # upscaler
 
@@ -428,16 +435,61 @@ async def import_guess(path: str):
 @app.post("/api/imports")
 async def add_import(req: ImportReq):
     try:
-        item = imports.add(installer.load_config(), req.path, req.kind, req.title, req.base, req.families, req.scale)
+        item = imports.add(installer.load_config(), req.path, req.kind, req.title, req.base, req.families, req.scale,
+                            req.text_encoder, req.vae)
     except (imports.ImportError_, OSError) as e:
         raise HTTPException(400, str(e)) from e
     return {"item": item, "setup": await setup_status()}
 
 
+class WatchReq(BaseModel):
+    folders: dict[str, list[str]]   # category (imports.KINDS key) -> extra folders
+
+
+@app.post("/api/imports/folders")
+async def save_watch_folders(req: WatchReq):
+    """Saves the extra folders per category and scans them at once."""
+    try:
+        await asyncio.to_thread(imports.watch_save, req.folders)
+    except imports.ImportError_ as e:
+        raise HTTPException(400, str(e)) from e
+    result = await asyncio.to_thread(imports.sync, installer.load_config())
+    return {"scan": result, "setup": await setup_status()}
+
+
+@app.post("/api/imports/scan")
+async def scan_watch_folders():
+    result = await asyncio.to_thread(imports.sync, installer.load_config())
+    return {"scan": result, "setup": await setup_status()}
+
+
+@app.post("/api/imports/pick-folder")
+async def pick_import_folder():
+    """macOS folder dialog (like pick_import_file); cancelled: path null."""
+    script = 'POSIX path of (choose folder with prompt "Add a folder with model files")'
+    proc = await asyncio.create_subprocess_exec("osascript", "-e", script, stdout=asyncio.subprocess.PIPE,
+                                                stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    path = out.decode().strip().rstrip("/") if proc.returncode == 0 else ""
+    return {"path": path or None}
+
+
+@app.patch("/api/imports/{import_id}")
+async def update_import(import_id: str, req: ImportReq):
+    """Changes what an imported file is (the form of Edit in Your files); path and kind are not used."""
+    try:
+        imports.update(import_id, req.title, req.base, req.families, req.scale, req.text_encoder, req.vae)
+    except KeyError as e:
+        raise HTTPException(404, "import not found") from e
+    except imports.ImportError_ as e:
+        raise HTTPException(400, str(e)) from e
+    return await setup_status()
+
+
 @app.delete("/api/imports/{import_id}")
 async def remove_import(import_id: str):
     try:
-        imports.remove(installer.load_config(), import_id)
+        imports.remove(installer.load_config(), import_id, forget=True)
     except KeyError as e:
         raise HTTPException(404, "import not found") from e
     return await setup_status()

@@ -343,8 +343,16 @@ LoRAs, Your files).
   model line a LoRA is for, starts with its suggested strength and warns when it does not fit.
 - **Upscalers** and **Control** (guidance patches, Depth Anything) have their own sections.
 - **Your files:** import a model, LoRA, upscaler or other model file that is already on your Mac. It is
-  linked into the models folder, not copied, and **Remove** deletes only the link. A **Language model (LM Studio)**
+  linked into the models folder, not copied, and **Remove** deletes only the link. A diffusion model gets
+  **Runs like** (graph and settings) plus its own **Text encoder** and **VAE** (any one on your Mac, imported ones
+  included; each shows which models use it now; GGUF encoders load via ComfyUI-GGUF). A **Language model (LM Studio)**
   (.gguf) is linked into LM Studio's models folder instead and shows up in Improve prompt and Prompt ideas.
+  **Edit** changes what an imported file is (model line, text encoder, VAE, LoRA line, upscaler scale).
+- **Folders → More folders:** add extra folders per category (e.g. LM Studio's models folder under Text encoder or
+  Language model). Every model file in them (subfolders too) is imported automatically at app start and whenever the
+  Download Center opens. The model line comes from the file name; if it can't be told, the file is imported with a
+  default and marked **Check what it is** until you set it in **Edit**. Removing a folder unlinks what it added;
+  removing a single file keeps it out.
 - **Free memory** in the top bar unloads ComfyUI's models; next to it you see how much RAM is free.
 
 ## Template (Generate)

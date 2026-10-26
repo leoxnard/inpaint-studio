@@ -803,27 +803,81 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     });
     save.style.alignSelf = "flex-start";
     d.appendChild(save);
+    d.appendChild(buildWatch());
     return d;
+  }
+
+  // More folders per category: every model file in them is imported by itself (e.g. LM Studio's models folder).
+  let watchNote = "";
+  function buildWatch() {
+    const box = el("div", "watch");
+    box.appendChild(el("h3", "sec", "More folders"));
+    box.appendChild(el("div", "hint", "Model files in these folders are added automatically (linked, not copied) and again whenever this window opens. Check what each one is under Your files → Edit."));
+    const folders = data.watch_folders || {};
+    const save = async (next) => {
+      showErr("");
+      try {
+        const r = await postJson("/api/imports/folders", { folders: next });
+        data = r.setup;
+        watchNote = scanNote(r.scan);
+        structural(); onChanged(data);
+      } catch (e) { showErr(e.message); }
+    };
+    for (const [kind, label] of Object.entries(data.import_kinds || {})) {
+      const row = el("div", "watch-row");
+      row.appendChild(el("span", "lbl", label));
+      for (const path of folders[kind] || []) {
+        const p = el("div", "watch-path");
+        p.append(el("span", "mono", path), actBtn("Remove", "danger", () => {
+          save({ ...folders, [kind]: (folders[kind] || []).filter((x) => x !== path) });
+        }, "Stops watching; the files it added are unlinked, your files stay"));
+        row.appendChild(p);
+      }
+      row.appendChild(actBtn("Add folder…", "", async () => {
+        showErr("");
+        try {
+          const g = await postJson("/api/imports/pick-folder", {});
+          if (g.path && !(folders[kind] || []).includes(g.path)) await save({ ...folders, [kind]: [...(folders[kind] || []), g.path] });
+        } catch (e) { showErr(e.message); }
+      }));
+      box.appendChild(row);
+    }
+    if (watchNote) box.appendChild(el("div", "hint", watchNote));
+    return box;
+  }
+
+  function scanNote(scan) {
+    const bits = [];
+    if (scan?.added?.length) bits.push(`${scan.added.length} added`);
+    if (scan?.removed?.length) bits.push(`${scan.removed.length} removed`);
+    return bits.length ? `Folders scanned: ${bits.join(", ")}.` : "Folders scanned: nothing new.";
   }
 
   // ---------------------------------------------------------------- updates
   // ---------------------------------------------------------------- own files (ready mode)
   // A file already on the Mac is linked into the matching models/ folder (not copied); Remove deletes the link only.
   let importDraft = null;   // the picked file while its kind etc. are being chosen
+  let editing = null;       // id of the import whose settings are open
   function buildImports() {
     const sec = section("Your files");
     sec.id = "setupImports";
     sec.appendChild(el("div", "hint", "Use a model, LoRA, upscaler or other model file that is already on this Mac. It is linked into the models folder, not copied."));
     for (const i of data.imports || []) {
+      if (editing === i.id) { sec.appendChild(importForm({ name: i.file, size: i.size, kind: i.kind, supported: true }, i)); continue; }
       const what = data.import_kinds?.[i.kind] || i.kind;
       const base = i.kind === "model" ? data.presets.find((p) => p.id === i.base)?.title : "";
       const groups = i.kind === "lora" ? Object.entries(data.lora_groups || {}).filter(([, f]) => f.some((x) => (i.families || []).includes(x))).map(([g]) => g) : [];
       const r = el("div", "irow");
       const name = el("div", "name");
       name.append(el("span", null, i.title), el("span", "tag-opt", what));
-      r.append(name, el("div", "desc", [base && `runs like ${base}`, groups.length && `for ${groups.join(", ")}`,
-        i.kind === "upscaler" && `${i.scale}×`, i.source].filter(Boolean).join(" · ")));
+      if (i.check) name.appendChild(el("span", "tag-opt", "Check what it is"));
+      const comp = (key) => data.components.find((c) => c.key === key)?.title;
+      const parts = i.kind === "model" ? [comp(i.text_encoder), comp(i.vae)] : [];
+      r.append(name, el("div", "desc", [base && `runs like ${base}`, ...parts, groups.length && `for ${groups.join(", ")}`,
+        i.kind === "upscaler" && `${i.scale}×`, i.watched && "from a watched folder", i.source].filter(Boolean).join(" · ")));
       const side = el("div", "side");
+      const editable = ["model", "lora", "upscaler"].includes(i.kind);
+      if (editable) side.appendChild(actBtn("Edit", "", () => { editing = i.id; structural(); }, "Change what this file is"));
       side.append(el("span", "hint", fmtBytes(i.size)), actBtn("Remove", "danger", async () => {
         showErr("");
         try { data = await api(`/api/imports/${encodeURIComponent(i.id)}`, { method: "DELETE" }); structural(); onChanged(data); }
@@ -849,7 +903,8 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     return sec;
   }
 
-  function importForm(g) {
+  // `item` set: edits an imported file (what it is, not where it is); else the form of a newly picked file
+  function importForm(g, item = null) {
     const f = el("div", "irow import-form");
     const top = el("div", "name");
     top.append(el("span", null, g.name), el("span", "hint", fmtBytes(g.size)));
@@ -858,29 +913,68 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     const field = (label, input) => { const l = el("label"); l.append(el("span", "lbl", label), input); fields.appendChild(l); return input; };
     const kind = field("What is it?", el("select"));
     for (const [k, label] of Object.entries(data.import_kinds || {})) kind.add(new Option(label, k, false, k === g.kind));
+    if (item) kind.disabled = true;
     const title = field("Name", el("input"));
     title.type = "text";
-    title.value = g.name.replace(/\.[^.]+$/, "");
+    title.value = item ? item.title : g.name.replace(/\.[^.]+$/, "");
     const base = field("Runs like", el("select"));
-    for (const p of data.presets.filter((p) => !p.imported)) base.add(new Option(p.title, p.id));
+    for (const p of data.presets.filter((p) => !p.imported)) base.add(new Option(p.title, p.id, false, item?.base === p.id));
+    // text encoder / VAE: what is on this Mac (imported or downloaded), each with the models that use it now
+    let changed = false;   // edit: the saved text encoder / VAE show until the model line is changed
+    const partSelect = (label, folder, key) => {
+      const sel = field(label, el("select"));
+      const fill = () => {
+        const want = (item && !changed ? item[key] : null) || data.presets.find((p) => p.id === base.value)?.[key];
+        sel.replaceChildren();
+        for (const c of data.components.filter((c) => c.folder === folder && c.kind !== "upscaler_vae" && (c.installed || c.imported || c.key === want))) {
+          const users = data.presets.filter((p) => p[key] === c.key).map((p) => p.title);
+          sel.add(new Option(users.length ? `${c.title} · used by ${users.join(", ")}` : `${c.title} · not used yet`, c.key, false, c.key === want));
+        }
+      };
+      fill();
+      return [sel, fill];
+    };
+    const [te, fillTe] = partSelect("Text encoder", "text_encoders", "text_encoder");
+    const [vae, fillVae] = partSelect("VAE", "vae", "vae");
+    base.onchange = () => { changed = true; fillTe(); fillVae(); };
     const group = field("Works with", el("select"));
-    for (const name of Object.keys(data.lora_groups || {})) group.add(new Option(name, name));
+    for (const [name, fams] of Object.entries(data.lora_groups || {})) {
+      group.add(new Option(name, name, false, !!item && fams.some((x) => (item.families || []).includes(x)) && group.options.length === 0));
+    }
+    const everyLine = Object.values(data.lora_groups || {}).flat().every((x) => (item?.families || []).includes(x));
+    if (item?.kind === "lora" && everyLine) group.add(new Option("Every model line", "", true, true));
     const scale = field("Scale", el("select"));
-    for (const s of [1, 2, 4, 8]) scale.add(new Option(`${s}×`, s, false, s === g.scale));
+    for (const s of [1, 2, 4, 8]) scale.add(new Option(`${s}×`, s, false, s === (item ? item.scale : g.scale)));
     const sync = () => {
-      base.parentElement.hidden = kind.value !== "model";
+      for (const s of [base, te, vae]) s.parentElement.hidden = kind.value !== "model";
       group.parentElement.hidden = kind.value !== "lora";
       scale.parentElement.hidden = kind.value !== "upscaler";
     };
     kind.onchange = sync; sync();
     f.appendChild(fields);
+    if (item) {
+      const save = actBtn("Save", "primary", async () => {
+        showErr("");
+        try {
+          const r = await api(`/api/imports/${encodeURIComponent(item.id)}`, {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: title.value, base: base.value, text_encoder: te.value, vae: vae.value,
+              families: group.value === "" ? Object.values(data.lora_groups || {}).flat() : data.lora_groups?.[group.value] || [],
+              scale: parseInt(scale.value, 10) }),
+          });
+          editing = null; data = r; structural(); onChanged(data);
+        } catch (e) { showErr(e.message); }
+      });
+      f.appendChild(el("div", "row")).append(save, actBtn("Cancel", "", () => { editing = null; structural(); }));
+      return f;
+    }
     if (!g.supported) f.appendChild(el("div", "warn", "Only .safetensors, .gguf, .sft, .pth, .pt, .ckpt and .bin files can be imported."));
     const actions = el("div", "row");
     actions.append(actBtn("Import", "primary", async () => {
       showErr("");
       try {
         const r = await postJson("/api/imports", {
-          path: g.path, kind: kind.value, title: title.value, base: base.value,
+          path: g.path, kind: kind.value, title: title.value, base: base.value, text_encoder: te.value, vae: vae.value,
           families: data.lora_groups?.[group.value] || [], scale: parseInt(scale.value, 10),
         });
         importDraft = null; data = r.setup; structural(); onChanged(data);
@@ -995,6 +1089,14 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     stopPoll();
     root.hidden = false;
     await load();
+    if (Object.keys(data.watch_folders || {}).length) {   // new files in the watched folders
+      try {
+        const r = await postJson("/api/imports/scan", {});
+        data = r.setup;
+        watchNote = scanNote(r.scan);
+        if (r.scan.added.length || r.scan.removed.length) onChanged(data);
+      } catch { /* the list below is still right */ }
+    }
     build();
     const ids = { models: "setupModels", upscalers: "setupUpscalers", control: "setupControl", files: "setupImports" };
     const anchor = ids[target] && root.querySelector(`#${ids[target]}`);

@@ -1395,6 +1395,7 @@ def job_summary(job: dict) -> dict:
     return {"job_id": run["id"], "status": run["status"], "prompt": run["params"].get("prompt", ""),
             "seed": run["params"].get("seed"), "steps": run["params"].get("steps"), "value": job.get("value", 0),
             "task": run["params"].get("task"), "upscaler": run["params"].get("upscaler"),
+            "params": run["params"],   # the Settings column also shows a queued / running run that another page or a script queued
             "created": run["created"], "started": run.get("started"), "size": run.get("size"), "frames": run["frames"],
             "error": run.get("error"),
             "phase": job.get("phase"), "enhance": bool(job["params"].get("enhance")), "decode_steps": decode_steps(job["params"]), "reattached": job.get("reattached", False)}

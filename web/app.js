@@ -1558,9 +1558,9 @@ function jobFromSummary(sum) {
   if (!job) {
     job = { id: sum.job_id, serverId: sum.job_id, prompt: sum.prompt, seed: sum.seed, steps: sum.steps,
       max: sum.steps, value: 0, frames: [], done: false, status: "queued", started: null, created: sum.created,
-      task: sum.task, params: { upscaler: sum.upscaler } };
+      task: sum.task, params: { upscaler: sum.upscaler, ...sum.params } };
     state.jobs.set(sum.job_id, job);
-  }
+  } else if (sum.params) job.params = { ...job.params, ...sum.params };
   job.status = sum.status || job.status;
   job.value = sum.value || job.value;
   if (sum.phase) job.phase = sum.phase;
@@ -2252,7 +2252,7 @@ function runFacts(run) {
     add("crop", "Crop & stitch", `${p.crop_box.w} × ${p.crop_box.h} of ${(p.orig_size || []).join(" × ")}${p.crop_context != null ? `, context ${Math.round(p.crop_context * 100)} %` : ""}`, "crop & stitch");
   }
   if (p.outpaint) add("outpaint", "Extend canvas", `${p.outpaint.canvas_w} × ${p.outpaint.canvas_h}`, "extended canvas");
-  if (p.refs?.length) add("refs", "References", p.refs.length, `${p.refs.length} ref${p.refs.length > 1 ? "s" : ""}`, false);
+  if (p.refs?.length) add("refs", "References", p.refs.length, `${p.refs.length} ref${p.refs.length > 1 ? "s" : ""}`, true);
   if (!up && p.prompt) add("prompt", "Prompt", p.prompt, `"${clip(p.prompt, 28)}"`, false);
   // post-processing as it is on the result now (changed later in Runs → Post-processing)
   if (run.aligned) {
@@ -2270,7 +2270,7 @@ function runFacts(run) {
   if (p.group != null && p.variant != null) add("variant", "Variation", `${p.variant + 1}`, null);
   if (p.save_every) add("saveevery", "Saved steps", p.save_last ? `every ${p.save_every}, last ${p.save_last}` : `every ${p.save_every}`, null);
   const took = runTook(run);
-  add("time", "Time", took ? fmtTime(took) : runStatus(run) === "running" ? "…" : "", null);
+  add("time", "Time", took ? fmtTime(took) : runStatus(run) === "running" ? "running…" : runStatus(run) === "queued" ? "queued" : "", null);
   return facts;
 }
 const settingsRows = (run) => runFacts(run).filter((f) => f.row).map((f) => [f.name, f.v]);

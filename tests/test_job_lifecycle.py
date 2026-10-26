@@ -151,3 +151,10 @@ def test_edit_upscale_becomes_a_follow_up_run(monkeypatch):
     asyncio.run(server.follow_up_upscale({**run, "status": "error"}, {"then_upscale": {"upscaler": "up_x", "factor": 2,
                                                                                         "color_correction": "lab"}}))
     assert len(calls) == 1
+
+
+def test_job_summary_carries_the_params_for_the_settings_column():
+    run = {"id": "r9", "status": "running", "created": 1.0, "frames": [],
+           "params": {"prompt": "x", "preset": "qwen21_uc", "quant": "Q4_K_M", "cfg": 1.0, "steps": 20, "task": "edit"}}
+    sum_ = server.job_summary({"run": run, "params": run["params"]})
+    assert sum_["params"]["preset"] == "qwen21_uc" and sum_["params"]["quant"] == "Q4_K_M"

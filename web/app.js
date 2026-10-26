@@ -3820,7 +3820,7 @@ syncModeUi();
 // ------------------------------------------------------------------ extra reference images
 // The text encoder of some models takes more images than the edited one (see graphs.MAX_REFS).
 // The edited image is image 1, references follow; when generating they start at image 1.
-const MAX_REFS = { qwen21: 3, qwen21_turbo: 3, qwen_edit: 2, flux2: 3, flux2_dev: 3 };
+const MAX_REFS = { qwen21: 6, qwen21_turbo: 6, qwen_edit: 2, flux2: 3, flux2_dev: 3 };
 const maxRefs = () => MAX_REFS[currentFamily()] || 0;
 state.refs = [];   // [{name, label, take, crop}] uploaded to ComfyUI's input folder; take = what to take from it,
                    // crop = {x, y, w, h} in the image's pixels or null for the whole image
@@ -3839,8 +3839,10 @@ $("keepNoteReset").onclick = () => { $("keepNote").value = KEEP_NOTE; $("keepNot
 const REF_NOTE = "{main} is the image to edit. Keep its framing, composition, camera angle, perspective and "
   + "everything the instruction does not change. Take from {refs} only what the instruction asks for. "
   + "Add no body parts, people or objects that the instruction does not ask for.";
+// how the prompt names image i: the tags the model's text encoder puts in front of its images
+const refTag = (family, i) => family === "qwen_edit" ? `Picture ${i}` : family.startsWith("flux2") ? `image ${i}` : `<image${i}>`;
 const refNoteFor = (family, n, template = REF_NOTE) => {
-  const name = (i) => family === "qwen_edit" ? `Picture ${i}` : `<image${i}>`;
+  const name = (i) => refTag(family, i);
   const refs = Array.from({ length: Math.max(1, n) }, (_, i) => name(i + 2));
   return template.replaceAll("{main}", name(1))
     .replaceAll("{refs}", refs.length === 1 ? refs[0] : refs.slice(0, -1).join(", ") + " and " + refs.at(-1));
@@ -3892,9 +3894,11 @@ function renderRefs() {
   $("refsHint").hidden = $("refGrid").hidden = !max;
   renderTemplate();
   const first = state.task === "generate" ? 1 : 2;
+  const fam = currentFamily(), tags = state.refs.slice(0, max).map((_, i) => refTag(fam, first + i)).join(", ") || refTag(fam, first);
   $("refsHint").textContent = (state.task === "generate"
-    ? "Optional. Refer to them as image 1, 2 … in the prompt."
-    : "Optional. Your image stays image 1. Name what to take from each reference, e.g. \u201cface\u201d; click it to crop.")
+    ? `Optional. In the prompt they are ${tags} (e.g. \u201cin the style of ${refTag(fam, 1)}\u201d).`
+    : `Optional. Your image stays ${refTag(fam, 1)}; the references are ${tags}, e.g. \u201cthe shirt from ${refTag(fam, 2)}\u201d. `
+      + "Name what to take from each reference, e.g. \u201cface\u201d; click it to crop.")
     + ` Up to ${max}; each one slows the run.`;
   const grid = $("refGrid");
   grid.innerHTML = "";
@@ -3904,7 +3908,7 @@ function renderRefs() {
     row.className = "ref-row" + (unused ? " skipped" : "");
     const t = document.createElement("div");
     t.className = "batch-item ref" + (r.crop ? " cropped" : "");
-    t.title = unused ? `${r.label}: not used by this model` : `${r.label}: image ${first + i}. Click to crop.`;
+    t.title = unused ? `${r.label}: not used by this model` : `${r.label}: ${refTag(currentFamily(), first + i)} in the prompt. Click to crop.`;
     t.tabIndex = 0; t.setAttribute("role", "button");
     t.setAttribute("aria-label", `Crop reference ${first + i}`);
     t.onclick = () => openCrop(r);

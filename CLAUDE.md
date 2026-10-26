@@ -77,10 +77,11 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
 - Remove background (`remove_bg`, checkbox under the prompt): Qwen-Image 2.1 / Turbo, whole image only. Adds
   `graphs.REMOVE_BG_PROMPT` (ComfyUI's `image_qwen_image_2_1_background_removal` template) after the prompt; the 2.1 VAE
   decodes RGBA, so `<run>.png` is transparent. Upscale, post-processing and the keep note are off (they work in RGB).
-- Extra reference images (`refs` in a job): `graphs.MAX_REFS` per family (Qwen 2.1: 3, FLUX.2: 3, Edit 2511: 2), mirrored
+- Extra reference images (`refs` in a job): `graphs.MAX_REFS` per family (Qwen 2.1: 6, FLUX.2: 3, Edit 2511: 2), mirrored
   in `web/app.js` `MAX_REFS`. The edited image stays image 1 (its size sets the latent). `ref_takes` (one
   text per ref, turned into "Replace the X in <image1> with the X from <image2>." after the prompt) and `graphs.REF_NOTE` name the images the encoder's way (`<image2>` / "Picture 2").
-  `ref_crops` ({x,y,w,h} px per ref) → `ImageCrop`, scaled to at most its own size (fewer tokens).
+  `ref_crops` ({x,y,w,h} px per ref) → `ImageCrop`, scaled to at most its own size (fewer tokens). Edit 2511's `TextEncodeQwenImageEditPlus` rescales every image to ~1 MP itself (vision 384²), so crops only select content there.
+  `enhance.image_note` tells Improve prompt how many images a job has (the official enhancer prompt keeps `<imageN>` tags only for 2+ images, so a text-only rewriter would drop them).
 - FLUX.2 klein (`family` "flux2"): `CLIPLoader` type flux2, the edited image and the refs go in as `ReferenceLatent`s,
   sigmas from `Flux2Scheduler` (denoise < 1 = longer schedule, last `steps` sigmas kept), so it always runs the
   chunked sampler; the scheduler picker is ignored. A quant may name its own `repo` / `path` (4B BF16 from Comfy-Org).

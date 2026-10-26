@@ -126,8 +126,9 @@ KEEP_IDENTICAL = ("Keep everything else in the image exactly identical to the or
 
 
 # extra reference images (besides the edited image) the text encoder of each family takes:
-# TextEncodeQwenImage21 has up to 16 slots, TextEncodeQwenImageEditPlus 3 in total (image1 = edited image)
-MAX_REFS = {"qwen21": 3, "qwen21_turbo": 3, "qwen_edit": 2, "flux2": 3, "flux2_dev": 3}
+# TextEncodeQwenImage21 has up to 16 slots (the app stops at 6: every reference costs a lot of RAM and time),
+# TextEncodeQwenImageEditPlus 3 in total (image1 = edited image)
+MAX_REFS = {"qwen21": 6, "qwen21_turbo": 6, "qwen_edit": 2, "flux2": 3, "flux2_dev": 3}
 
 
 REF_NOTE = ("{main} is the image to edit. Keep its framing, composition, camera angle, perspective and "

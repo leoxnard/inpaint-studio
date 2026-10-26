@@ -51,6 +51,14 @@ def test_request_text_and_images():
     assert [p["image_url"]["url"] for p in parts[:2]] == ["data:a", "data:b"] and parts[2]["type"] == "text"
 
 
+def test_request_names_the_images_of_a_job_with_references():
+    text = lambda **kw: enhance.request("m", "sys", "x", **kw)["messages"][1]["content"]
+    assert "<image1> is the image to edit, <image2> is a reference" in text(n_images=2)
+    assert "<image2> to <image3> are references" in text(n_images=3)
+    assert "<image" not in text(n_images=1) and "<image" not in text()   # a single image gets no tags
+    assert "<image1> to <image2>" in text(n_images=2, edit=False) and "<image" not in text(n_images=0, edit=False)
+
+
 def test_request_keeps_a_chinese_prompt_chinese():
     assert "English" not in enhance.request("m", "sys", "一只狗")["messages"][1]["content"]
 

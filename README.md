@@ -140,14 +140,25 @@ Checkboxes under the prompt:
 
 *Experimental.* Extra images the model can take things from.
 
-- Up to **3** for Qwen-Image 2.1 (UC, official, Turbo), up to **2** for Qwen-Image-Edit 2511.
-- Numbering in the prompt: when editing, your image is image 1 and the references are image 2, 3 …;
-  when generating they start at image 1. Example: "Place the red apple from image 2 on the sand".
+- Up to **6** for Qwen-Image 2.1 (UC, official, Turbo), **3** for FLUX.2 (klein, dev), **2** for Qwen-Image-Edit 2511.
+- Name the images in the prompt the way the model's text encoder does (the hint above the references shows them):
+
+  | Model | Your image | Reference 1, 2 … | Example |
+  |---|---|---|---|
+  | Qwen-Image 2.1 | `<image1>` | `<image2>`, `<image3>` | "Dress the man in `<image1>` in the shirt from `<image2>`" |
+  | Qwen-Image-Edit 2511 | Picture 1 | Picture 2, Picture 3 | "Dress the man in Picture 1 in the shirt from Picture 2" |
+  | FLUX.2 | image 1 | image 2, image 3 | "Dress the man in image 1 in the shirt from image 2" |
+
+  When editing, your image is number 1; when generating, the references start at number 1. The app writes these
+  names itself in the hidden instruction and in the "Take from it" orders; only your own prompt needs them.
 - Next to each reference, write in a few words what to take from it (e.g. "face"). The app then adds
-  "Replace the face in image 1 with the face from image 2", and keeps place and size of the part in image 1.
+  "Replace the face in `<image1>` with the face from `<image2>`", and keeps place and size of the part in image 1.
 - **Crop:** click a reference and drag a box around the part you need. Only that part goes to the model
-  and it is not scaled up, so a small crop is also much faster.
+  and it is not scaled up, so a small crop is also much faster. *Not with Edit 2511:* its text encoder scales every
+  picture to about 1 MP itself, so a crop there only selects the content.
 - The general instruction can be changed under **Advanced → Reference instruction**.
+- **Improve prompt** is told how many images the job has, so it keeps the `<image2>` tags even without a vision model;
+  a vision model sees your image and the references (cropped as the model sees them).
 - References are slow: one extra image at 0.95 MP took a 6-step Turbo edit from about 1 to about
   7 minutes on a 32 GB Mac.
 

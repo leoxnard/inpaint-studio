@@ -73,11 +73,27 @@ def loaded_instances(listing: dict, model: str) -> list[str]:
             for i in m.get("loaded_instances") or [] if i.get("id")]
 
 
-def request(model: str, system: str, prompt: str, images: list[str] | None = None, seed: int = 0) -> dict[str, Any]:
+def image_note(n: int, edit: bool = True) -> str:
+    """Names the images of a job for the rewriter. The official system prompt keeps <imageN> tags only for two or more
+    input images, so a text-only model (no images attached) would take a job with references for a single image and
+    write the references away. The tags are the ones TextEncodeQwenImage21 puts in front of the images."""
+    if edit and n >= 2:
+        return (f"\n\n(The edit has {n} images: <image1> is the image to edit, "
+                f"{'<image2>' if n == 2 else f'<image2> to <image{n}>'} {'is a reference' if n == 2 else 'are references'}. "
+                "Use these tags for the images in the rewritten prompt.)")
+    if not edit and n >= 1:
+        return (f"\n\n(The prompt can refer to {n} reference image{'s' if n > 1 else ''} as "
+                f"{'<image1>' if n == 1 else f'<image1> to <image{n}>'}. Keep these tags in the rewritten prompt.)")
+    return ""
+
+
+def request(model: str, system: str, prompt: str, images: list[str] | None = None, seed: int = 0,
+            n_images: int = 0, edit: bool = True) -> dict[str, Any]:
     """Chat completion body. images: data URLs (edited image first, then the references); only for vision models.
+    n_images: how many images the job has in all (image_note), also without vision.
     The language note sits in the user turn: at the end of the long system prompt small models ignore it."""
     lang = "" if CJK.search(prompt) else "\n\n(Write the rewritten prompt in English.)"
-    content: Any = (prompt or "(no instruction)") + lang
+    content: Any = (prompt or "(no instruction)") + image_note(n_images, edit) + lang
     if images:
         content = [*({"type": "image_url", "image_url": {"url": u}} for u in images), {"type": "text", "text": content}]
     return {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],

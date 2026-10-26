@@ -1559,9 +1559,14 @@ async def enhance_prompt(job: dict) -> None:
     try:
         system = enhance.system_prompt(await comfy_json("GET", f"/templates/{enhance.TEMPLATE[k]}.json"))
         images = None
+        refs = params.get("refs") or []
         if k == "i2i" and params.get("enhance_vision") and params.get("image"):
-            images = [await enhancer_image(n) for n in [params["image"], *(params.get("refs") or [])]]
-        body = enhance.request(params["enhance_model"], system, prompt, images, int(params.get("seed") or 0))
+            crops = [None, *(params.get("ref_crops") or [])]   # the model sees the crop of a reference, so does the rewriter
+            images = [await enhancer_image(n, crops[i] if i < len(crops) else None)
+                      for i, n in enumerate([params["image"], *refs])]
+        n_images = len(refs) + (1 if k == "i2i" else 0)
+        body = enhance.request(params["enhance_model"], system, prompt, images, int(params.get("seed") or 0),
+                               n_images=n_images, edit=k == "i2i")
         await ensure_llm_server()
         async with httpx.AsyncClient(timeout=enhance.TIMEOUT) as llm:
             for attempt in range(2):   # a second try only when the answer came in the wrong language
@@ -1600,12 +1605,15 @@ async def unload_llm(model: str) -> None:
         print(f"could not unload {model} in LM Studio: {e!r}")
 
 
-async def enhancer_image(name: str) -> str:
-    """An input image as a JPEG data URL of about 1 MP, enough for the model to see what is in it."""
+async def enhancer_image(name: str, crop: dict | None = None) -> str:
+    """An input image as a JPEG data URL of about 1 MP, enough for the model to see what is in it.
+    crop ({x, y, w, h}, a reference's crop box): only that part."""
     img = await load_input(name)
 
     def encode() -> str:
         im = img.copy()
+        if crop:
+            im = im.crop((crop["x"], crop["y"], crop["x"] + crop["w"], crop["y"] + crop["h"]))
         im.thumbnail((1024, 1024))
         buf = io.BytesIO()
         im.save(buf, "JPEG", quality=90)

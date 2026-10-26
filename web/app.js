@@ -42,7 +42,9 @@ function loadForm() {
 function syncRangeOutputs() {
   for (const row of document.querySelectorAll(".range-row")) {
     const input = row.querySelector("input[type=range]"), out = row.querySelector("output");
-    if (input && out) out.textContent = `${input.value} %`;
+    // Title size: 100 % = the widest line spans the whole picture (the slider's top, set from the server's title_max)
+    if (input && out && input.id === "titleLineSpacing") out.textContent = `${parseFloat((+input.value).toFixed(2))}`;
+    else if (input && out) out.textContent = input.id === "titleSize" ? `${Math.round((100 * input.value) / input.max)} %` : `${input.value} %`;
   }
 }
 document.addEventListener("input", (e) => { if (e.target.closest?.(".range-row")) syncRangeOutputs(); });
@@ -4274,7 +4276,22 @@ function titleValues() {
   if (!post.titleKnown) return undefined;
   if (!$("titleOn").checked || !$("titleEdit").value.trim()) return { text: "" };
   return { text: $("titleEdit").value.trim(), font: post.fontHover || $("titleFont").value, size: num("titleSize"), x: post.titleX, y: post.titleY,
-           color: post.titleAutoColor ? null : $("titleColor").value, shadow: $("titleShadow").checked };
+           color: post.titleAutoColor ? null : $("titleColor").value, shadow: $("titleShadow").checked,
+           align: $("titleAlign").value, caps: $("titleCaps").checked, line_spacing: num("titleLineSpacing"), tracking: num("titleTracking"),
+           outline: num("titleOutline"), opacity: num("titleOpacity") };
+}
+function setTitleMax(max) {   // the size slider reaches exactly the full width, whatever the line breaks
+  const el = $("titleSize");
+  el.max = max;
+  if (+el.value > max) el.value = max;
+  syncRangeOutputs();
+}
+const TITLE_LOOK = [["titleAlign", "align", "center"], ["titleLineSpacing", "line_spacing", 1], ["titleTracking", "tracking", 0],
+                    ["titleOutline", "outline", 0], ["titleOpacity", "opacity", 100]];
+function setTitleLook(t) {   // align / spacing / outline / opacity / caps from a layer (defaults when it has none)
+  t ??= {};
+  for (const [id, key, dflt] of TITLE_LOOK) $(id).value = t[key] ?? dflt;
+  $("titleCaps").checked = !!t.caps;
 }
 function setTitleValues(t) {   // a layer as the server laid it out (title.layout)
   if (!t) return;
@@ -4283,6 +4300,7 @@ function setTitleValues(t) {   // a layer as the server laid it out (title.layou
   if (t.size != null) $("titleSize").value = t.size;
   if (t.color) $("titleColor").value = t.color;
   if (t.shadow != null) $("titleShadow").checked = !!t.shadow;
+  setTitleLook(t);
   post.titleX = t.x ?? post.titleX; post.titleY = t.y ?? post.titleY;
   post.titleAutoColor = false;
   syncRangeOutputs();
@@ -4320,6 +4338,7 @@ async function postRequest(body) {
     // only the shift Auto-align found: everything else stays as the user set it (the response carries the run's saved values)
     if (res.dx != null) setPostValues({ dx: res.dx, dy: res.dy, scale: res.scale });
     if (res.title_box) post.titleBox = res.title_box;
+    if (res.title_max) setTitleMax(res.title_max);
     if (res.title && post.titleKnown) setTitleValues(res.title);
     if (res.saved) {
       if (res.run) refreshRunFiles(run, res.run);
@@ -4457,6 +4476,7 @@ async function fastPreview() {
   try {
     const res = await postJson(`/api/runs/${encodeURIComponent(run.serverId)}/post`, { ...postValues(), save: false, fast: true });
     if (res.title_box) post.titleBox = res.title_box;
+    if (res.title_max) setTitleMax(res.title_max);
     if (seq === postSeq && state.run === run && !$("postPanel").hidden) showPostPreview(run, res.url);
   } catch { /* the full preview after the drag reports errors */ }
   finally {
@@ -4569,8 +4589,10 @@ async function openTitle(run) {
   $("titleOn").checked = !!t?.text;
   $("titleEdit").value = t?.text || "";
   $("titleFont").value = opts.default_font || opts.fonts[0] || "";
+  $("titleSize").max = 25;
   $("titleSize").value = opts.default_size || 9;
   $("titleShadow").checked = false;
+  setTitleLook(t);
   setTitleValues(t);
   syncRangeOutputs();
   syncTitleFields();
@@ -4608,7 +4630,8 @@ function titleChanged(live = false) {
   if (live) fastPreview();   // at once, small; the full preview follows when the input stops
   schedulePreview();
 }
-for (const id of ["titleOn", "titleShadow"]) $(id).addEventListener("change", () => titleChanged());
+for (const id of ["titleOn", "titleShadow", "titleAlign", "titleCaps"]) $(id).addEventListener("change", () => titleChanged());
+for (const id of ["titleLineSpacing", "titleTracking", "titleOutline", "titleOpacity"]) $(id).addEventListener("input", () => titleChanged(true));
 $("titleEdit").addEventListener("input", () => titleChanged(true));
 $("titleSize").addEventListener("input", () => titleChanged(true));
 $("titleColor").addEventListener("input", () => { post.titleAutoColor = false; titleChanged(true); });

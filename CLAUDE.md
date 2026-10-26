@@ -145,6 +145,10 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   Title edits it (`openTitle`, drag handle `.title-handle`), `GET /api/title` lists fonts / positions / sizes,
   `GET /api/title/sample?font=` is the font's name in its face (the font list; hover = `post.fontHover`, fast preview).
   x / y = centre of the ink box (`title._fit` offset); the response's `title_box` [w, h] feeds the snap grid (`snapPos`).
+  The text is multiline (textarea); no padding: a wider text is shrunk until its inked width = the picture width, `title.max_size`
+  (response `title_max`) is the size slider's top, so 100 % = full width (`setTitleMax`); `render` keeps the box inside the picture.
+  Look options on the layer: `align`, `caps`, `line_spacing` (× 1.2 em), `tracking` (% of the size, glyph by glyph when set), `outline` (% of the size,
+  `_draw_text` strokes it black / white opposite to the colour), `opacity`; `title._lines` / `_draw_text` do the layout (no Pillow multiline), `layout` fills the defaults.
   Pipette `#titlePickColor` reads the shown image in a canvas (`colorAt`). `viewJob` / `showRun` call `leavePost` while
   the panel is open: changed values (`post.saved` snapshot) → `choiceDialog` apply / discard / keep editing.
 - Results tiles load `/api/thumb?src=<run image url>` (384 px, cached in App Support `thumbs/`); hover shows the

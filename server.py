@@ -1191,6 +1191,7 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
     if layer and layer.get("text"):   # the title goes on top of everything (title.py)
         layer = await asyncio.to_thread(title.layout, img, layer)
         result["title_box"] = await asyncio.to_thread(title.box, img, layer)   # the editor's snap positions
+        result["title_max"] = await asyncio.to_thread(title.max_size, img, layer)   # size slider's top = full width
         img = await asyncio.to_thread(title.render, img, layer)
     result["title"] = layer if layer and layer.get("text") else None
     if req.save:
@@ -1199,7 +1200,6 @@ async def post_process(run: dict, req: PostReq, kind: str | None, internal: bool
             run["title"] = result["title"]
         else:
             run.pop("title", None)
-
         if kind == "paste":
             if mask_url != run.get("mask_url"):
                 run["post_mask_url"] = mask_url

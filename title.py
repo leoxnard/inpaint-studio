@@ -24,14 +24,23 @@ FONTS = ("Futura Bold", "Futura Medium", "Futura Condensed ExtraBold", "Didot Re
          "Gill Sans Light", "Helvetica Neue Condensed Black", "Helvetica Neue Thin", "Optima Regular", "Copperplate Bold",
          "Baskerville SemiBold Italic", "Big Caslon Medium", "Palatino Italic", "Hoefler Text Black", "Cochin Italic",
          "Rockwell Bold", "American Typewriter Bold", "Impact Regular", "Phosphate Solid", "Snell Roundhand Bold",
-         "Savoye LET Plain", "Bradley Hand Bold", "Marker Felt Wide", "Chalkduster Regular", "Trattatello Regular")
+         "Savoye LET Plain", "Bradley Hand Bold", "Marker Felt Wide", "Chalkduster Regular", "Trattatello Regular",
+         "Arial Black Regular", "Arial Rounded MT Bold Regular", "Avenir Black", "Avenir Next Condensed Heavy",
+         "DIN Condensed Bold", "DIN Alternate Bold", "Superclarendon Black", "Charter Black", "Georgia Bold",
+         "Georgia Bold Italic", "Athelas Bold", "Baskerville Bold", "Didot Italic", "Palatino Bold", "Rockwell Regular",
+         "Copperplate Light", "Academy Engraved LET Plain", "Bodoni 72 Smallcaps Book", "Futura Medium Italic",
+         "Trebuchet MS Bold", "Verdana Bold", "Tahoma Bold", "Comic Sans MS Bold", "Chalkboard SE Bold",
+         "Noteworthy Bold", "Courier New Bold", "Menlo Bold", "Monaco Regular", "Papyrus Condensed", "Luminari Regular",
+         "Herculanum Regular", "Party LET Plain", "Zapfino Regular", "Apple Chancery Chancery",
+         "Brush Script MT Italic", "Permanent Marker Regular", "Bangers Regular", "Archivo Black Regular",
+         "Oswald Bold", "Antonio Bold", "Playfair Display Bold", "Montserrat Black", "Poppins Bold")
 DEFAULT_FONT = "Futura Bold"
 POSITIONS = ("auto", "top", "center", "bottom")
 SIZES = {"small": 6.0, "medium": 9.0, "large": 13.0}   # font size in % of the image width
 DEFAULT_SIZE = SIZES["medium"]
 ROOM = {"top": "across the top", "center": "in the middle", "bottom": "across the bottom"}
 Y = {"top": 0.14, "center": 0.5, "bottom": 0.86}
-MAX_WIDTH = 0.9      # a longer title is set smaller so it fits
+MAX_WIDTH = 1.0      # a wider title is set smaller so its widest line just reaches the picture's edges (no padding)
 MIN_CONTRAST = 4.5   # WCAG contrast ratio between the text and the picture behind it
 
 
@@ -57,7 +66,7 @@ def fonts() -> list[str]:
     return [n for n in FONTS if n in files]
 
 
-def load_font(name: str, px: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def load_font(name: str, px: float) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     files = font_files()
     path, index = files.get(name) or files.get(DEFAULT_FONT) or (None, 0)
     if path is None:
@@ -72,18 +81,87 @@ def prompt_note(position: str) -> str:
     return f"{room} No text, letters or logos in the picture.".strip()
 
 
+ALIGNS = ("center", "left", "right")
+LINE_HEIGHT = 1.2    # line distance as a multiple of the font size, times the layer's line_spacing
+
+
+def _text(layer: dict) -> str:
+    return layer["text"].upper() if layer.get("caps") else layer["text"]
+
+
+def _stroke(layer: dict, px: float) -> int:
+    """Outline width in px: `outline` is a % of the font size."""
+    return round(px * float(layer.get("outline") or 0) / 100)
+
+
+def _lines(layer: dict, font: Any, px: float) -> list[tuple[str, float]]:
+    """Each line with its advance width (letter spacing `tracking` in % of the font size added after every glyph)."""
+    track = px * float(layer.get("tracking") or 0) / 100
+    out = []
+    for line in _text(layer).split("\n"):
+        out.append((line, font.getlength(line) + track * max(0, len(line) - 1)))
+    return out
+
+
+def _draw_text(draw: ImageDraw.ImageDraw, origin: tuple[float, float], layer: dict, font: Any, px: float, fill: Any,
+               stroke_fill: Any = None) -> None:
+    """The lines, aligned inside the widest one, `line_spacing` apart, glyph by glyph when `tracking` is set."""
+    lines = _lines(layer, font, px)
+    block = max((w for _, w in lines), default=0)
+    step = px * LINE_HEIGHT * float(layer.get("line_spacing") or 1)
+    track = px * float(layer.get("tracking") or 0) / 100
+    sw = _stroke(layer, px)
+    align = layer.get("align") if layer.get("align") in ALIGNS else "center"
+    for i, (line, w) in enumerate(lines):
+        x = origin[0] + {"left": 0, "right": block - w}.get(align, (block - w) / 2)
+        y = origin[1] + i * step
+        if not track:
+            draw.text((x, y), line, font=font, fill=fill, stroke_width=sw, stroke_fill=stroke_fill)
+            continue
+        for ch in line:
+            draw.text((x, y), ch, font=font, fill=fill, stroke_width=sw, stroke_fill=stroke_fill)
+            x += font.getlength(ch) + track
+
+
+def _ink(draw: ImageDraw.ImageDraw, layer: dict, px: float) -> tuple[Any, tuple[int, int, int, int]]:
+    """The font at px and the box of the pixels the text really inks (advances and bearings would leave a few px of
+    padding at full width), relative to the drawing origin."""
+    font = load_font(layer.get("font") or DEFAULT_FONT, px)
+    lines = _lines(layer, font, px)
+    step = px * LINE_HEIGHT * float(layer.get("line_spacing") or 1)
+    pad = int(px * 1.5) + _stroke(layer, px) + 2
+    mask = Image.new("L", (int(max((w for _, w in lines), default=0)) + 2 * pad, int(step * len(lines) + px) + 2 * pad))
+    _draw_text(ImageDraw.Draw(mask), (pad, pad), layer, font, px, 255, 255)
+    ink = mask.getbbox()
+    if not ink:
+        return font, (0, 0, 0, 0)
+    return font, (ink[0] - pad, ink[1] - pad, ink[2] - pad, ink[3] - pad)
+
+
+def max_size(img: Image.Image, layer: dict) -> float:
+    """The font size (% of the image width) at which the widest line of the text is exactly as wide as the picture:
+    the top of the editor's size slider, so 100 % of it always means the full width, whatever the line breaks."""
+    draw = ImageDraw.Draw(img)
+    px = 100.0
+    for _ in range(4):   # glyph widths are not exactly linear in the pixel size (hinting): a few rounds settle it
+        _, (l, _, r, _) = _ink(draw, layer, px)
+        if r - l <= 0:
+            return 25.0
+        px = max(4.0, px * img.width * MAX_WIDTH / (r - l))
+    return int(100 * px / img.width * 10) / 10   # rounded down: never wider than the picture
+
+
 def _fit(img: Image.Image, layer: dict) -> tuple[Any, tuple[int, int], tuple[int, int]]:
     """The font at the layer's size (smaller when the text would be wider than MAX_WIDTH), the size of the text's
     ink box in px and that box's offset from the drawing origin (so x / y can be its exact centre)."""
     w = img.width
-    px = round(w * float(layer.get("size") or DEFAULT_SIZE) / 100)
+    px = w * float(layer.get("size") or DEFAULT_SIZE) / 100
     draw = ImageDraw.Draw(img)
     for _ in range(40):
-        font = load_font(layer.get("font") or DEFAULT_FONT, px)
-        l, t, r, b = draw.multiline_textbbox((0, 0), layer["text"], font=font, align="center")
+        font, (l, t, r, b) = _ink(draw, layer, px)
         if r - l <= w * MAX_WIDTH or px <= 6:
             break
-        px = int(px * 0.92)
+        px = min(px - 0.05, px * w * MAX_WIDTH / (r - l))
     return font, (r - l, b - t), (l, t)
 
 
@@ -172,7 +250,8 @@ def pick_color(img: Image.Image, box: tuple[int, int, int, int]) -> tuple[str, b
 def layout(img: Image.Image, layer: dict) -> dict:
     """The layer with everything filled in: font and size defaults, x / y from `position` (auto: the calmest
     band), the colour from the picture. Values the layer already has are kept (an edited layer stays as it is)."""
-    out = {"font": DEFAULT_FONT, "size": DEFAULT_SIZE, "shadow": False, **{k: v for k, v in layer.items() if v is not None}}
+    out = {"font": DEFAULT_FONT, "size": DEFAULT_SIZE, "shadow": False, "align": "center", "line_spacing": 1.0,
+           "tracking": 0.0, "caps": False, "outline": 0.0, "opacity": 100.0, **{k: v for k, v in layer.items() if v is not None}}
     if out.get("font") not in fonts():
         out["font"] = DEFAULT_FONT
     if isinstance(out["size"], str):
@@ -199,16 +278,24 @@ def render(img: Image.Image, layer: dict) -> Image.Image:
         return img
     base = img.convert("RGBA")
     font, (tw, th), (l, t) = _fit(base, layer)
+    px = font.size
     # x / y is the centre of the ink box, not of the line (anchor "mm" sits between ascender and descender)
-    pos = (layer["x"] * base.width - l - tw / 2, layer["y"] * base.height - t - th / 2)
+    # the box stays inside the picture (a full-width title cannot be pushed over the edge)
+    cx = min(max(layer["x"] * base.width, tw / 2), max(tw / 2, base.width - tw / 2))
+    cy = min(max(layer["y"] * base.height, th / 2), max(th / 2, base.height - th / 2))
+    pos = (cx - l - tw / 2, cy - t - th / 2)
+    color = layer.get("color") or "#ffffff"
+    rgb = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5)) if len(color) == 7 else (255, 255, 255)
+    outline = (0, 0, 0) if _lum(np.array(rgb, np.float32)) > 0.4 else (255, 255, 255)   # the opposite end of the scale
     text = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    _draw_text(ImageDraw.Draw(text), pos, layer, font, px, color, outline + (255,))
     if layer.get("shadow"):
         shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
         off = max(1, round(th * 0.04))
-        ImageDraw.Draw(shadow).multiline_text((pos[0] + off, pos[1] + off), layer["text"], font=font,
-                                              fill=(0, 0, 0, 150), align="center")
-        text = Image.alpha_composite(text, shadow.filter(ImageFilter.GaussianBlur(max(1, th * 0.05))))
-    ImageDraw.Draw(text).multiline_text(pos, layer["text"], font=font, fill=layer.get("color") or "#ffffff",
-                                        align="center")
+        _draw_text(ImageDraw.Draw(shadow), (pos[0] + off, pos[1] + off), layer, font, px, (0, 0, 0, 150), (0, 0, 0, 150))
+        text = Image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(1, th * 0.05))), text)
+    opacity = min(1.0, max(0.0, float(layer.get("opacity", 100)) / 100))
+    if opacity < 1:
+        text.putalpha(text.getchannel("A").point(lambda v: round(v * opacity)))
     out = Image.alpha_composite(base, text)
     return out if img.mode == "RGBA" else out.convert(img.mode)

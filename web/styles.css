@@ -502,7 +502,7 @@ body.fam-zimage .paste-only { display: none !important; }
 .title-handle:hover svg, .title-handle:focus-visible svg { filter: drop-shadow(0 0 2px #000) drop-shadow(0 0 4px rgba(0, 0, 0, .6)); }
 .post-title { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--hairline); padding-top: 10px; }
 .tt-head { display: flex; align-items: center; gap: 10px; }
-.tt-head input[type="text"] { flex: 1; min-width: 0; }
+.tt-head input[type="text"], .tt-head textarea { flex: 1; min-width: 0; }
 .tt-grid { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 10px 12px; }
 .tt-label { font-size: 12px; color: var(--muted); }
 .tt-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }

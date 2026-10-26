@@ -72,3 +72,53 @@ def test_text_is_centred_on_its_ink_box():
 
 def test_font_sample_is_a_png():
     assert title.sample(title.DEFAULT_FONT)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_max_size_makes_the_widest_line_span_the_picture():
+    img = Image.new("RGB", (400, 300), "black")
+    for text in ("Late Night Jazz", "Late\nNight Jazz"):
+        m = title.max_size(img, {"text": text})
+        _, (w, _), _ = title._fit(img, {"text": text, "size": m})
+        assert 0.97 * 400 <= w <= 400
+    assert title.max_size(img, {"text": "Late\nNight Jazz"}) > title.max_size(img, {"text": "Late Night Jazz"})
+
+
+def test_oversized_title_stays_inside_the_picture():
+    img = Image.new("RGB", (200, 100), "black")
+    out = title.render(img, {"text": "WIDE TITLE", "size": 60, "x": 0.9, "y": 0.5, "color": "#ffffff"})
+    px = np.asarray(out.convert("L"))
+    assert px[:, 0].max() > 0 and px[:, -1].max() > 0
+
+
+def _ink_box(layer, size=(400, 300)):
+    img = Image.new("RGB", size, "black")
+    out = np.asarray(title.render(img, {"font": title.DEFAULT_FONT, "x": 0.5, "y": 0.5, "color": "#ffffff", "size": 8, **layer}).convert("L"))
+    ys, xs = np.where(out > 0)
+    return xs.min(), xs.max(), ys.min(), ys.max()
+
+
+def test_line_spacing_tracking_and_caps_change_the_box():
+    base = _ink_box({"text": "ab\ncd"})
+    assert _ink_box({"text": "ab\ncd", "line_spacing": 2})[3] - _ink_box({"text": "ab\ncd", "line_spacing": 2})[2] > base[3] - base[2]
+    assert _ink_box({"text": "abcd", "tracking": 30})[1] - _ink_box({"text": "abcd", "tracking": 30})[0] > \
+        _ink_box({"text": "abcd"})[1] - _ink_box({"text": "abcd"})[0]
+    assert _ink_box({"text": "abcd", "caps": True}) != _ink_box({"text": "abcd"})
+
+
+def test_alignment_puts_the_short_line_left_or_right():
+    img = Image.new("RGB", (400, 300), "black")
+    def short_line_x(align):
+        out = np.asarray(title.render(img, {"text": "WWWWWWWW\nI", "align": align, "size": 8, "x": 0.5, "y": 0.5,
+                                            "color": "#ffffff"}).convert("L"))
+        rows = np.where(out.max(axis=1) > 0)[0]
+        last = out[rows[-12:]]   # the bottom rows belong to the short second line
+        return np.where(last.max(axis=0) > 0)[0].mean()
+    assert short_line_x("left") < short_line_x("center") < short_line_x("right")
+
+
+def test_opacity_and_outline():
+    img = Image.new("RGB", (200, 100), "black")
+    layer = {"text": "HI", "size": 30, "x": 0.5, "y": 0.5, "color": "#ffffff"}
+    assert np.asarray(title.render(img, {**layer, "opacity": 50}).convert("L")).max() < 140
+    thick = np.asarray(title.render(img, {**layer, "color": "#808080", "outline": 10}).convert("L"))
+    assert thick.max() > 200   # the outline is the opposite end of the scale (white around mid grey)

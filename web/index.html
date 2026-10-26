@@ -546,7 +546,7 @@
             <div class="post-title" id="postTitleGroup">
               <div class="tt-head">
                 <label class="check"><input type="checkbox" id="titleOn"> Title</label>
-                <input type="text" id="titleEdit" placeholder="Title text" aria-label="Title text">
+                <textarea id="titleEdit" rows="2" placeholder="Title text (Enter = new line)" aria-label="Title text"></textarea>
               </div>
               <div class="tt-grid">
                 <span class="tt-label">Font</span>
@@ -557,7 +557,20 @@
                   <select id="titleFont" hidden aria-hidden="true"></select>
                 </div>
                 <span class="tt-label">Size</span>
-                <div class="tt-inline range-row"><input type="range" id="titleSize" min="2" max="25" step="0.5" value="9" aria-label="Title size"><output id="titleSizeOut">9 %</output></div>
+                <div class="tt-inline range-row"><input type="range" id="titleSize" min="2" max="25" step="0.1" value="9" aria-label="Title size"><output id="titleSizeOut">9 %</output></div>
+                <span class="tt-label">Align</span>
+                <div class="tt-inline">
+                  <select id="titleAlign" aria-label="Text alignment"><option value="center">Centre</option><option value="left">Left</option><option value="right">Right</option></select>
+                  <label class="check"><input type="checkbox" id="titleCaps"> CAPS</label>
+                </div>
+                <span class="tt-label">Lines</span>
+                <div class="tt-inline range-row"><input type="range" id="titleLineSpacing" min="0.6" max="2.5" step="0.05" value="1" aria-label="Line spacing"><output id="titleLineSpacingOut">1</output></div>
+                <span class="tt-label">Letters</span>
+                <div class="tt-inline range-row"><input type="range" id="titleTracking" min="-10" max="60" step="1" value="0" aria-label="Letter spacing"><output id="titleTrackingOut">0 %</output></div>
+                <span class="tt-label">Outline</span>
+                <div class="tt-inline range-row"><input type="range" id="titleOutline" min="0" max="20" step="0.5" value="0" aria-label="Outline width"><output id="titleOutlineOut">0 %</output></div>
+                <span class="tt-label">Opacity</span>
+                <div class="tt-inline range-row"><input type="range" id="titleOpacity" min="10" max="100" step="1" value="100" aria-label="Title opacity"><output id="titleOpacityOut">100 %</output></div>
                 <span class="tt-label">Colour</span>
                 <div class="tt-inline">
                   <input type="color" id="titleColor" value="#ffffff" aria-label="Title colour">

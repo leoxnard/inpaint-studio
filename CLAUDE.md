@@ -70,6 +70,8 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
   multi-run Compare view (detail grid with synced zoom/pan, split strips); `app.js` handles picking and labels.
 
 ## Rules
+- New model or variant: follow `docs/adding-models.md` step by step (research, presets, graphs, UI mirrors, files the
+  user already has, tests, app flow, docs, build).
 - Gray-noise limit: on MPS the edit breaks at >= 4096 latent tokens for target or reference
   (pixels/16 per side). `graphs.TOKEN_LIMIT`; the UI auto-fixes size by default.
 - Remove background (`remove_bg`, checkbox under the prompt): Qwen-Image 2.1 / Turbo, whole image only. Adds

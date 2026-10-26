@@ -218,7 +218,7 @@ body.dragging::after {
 .stagebar .spacer { flex: 1; }
 #stageInfo { font-variant-numeric: tabular-nums; }
 .create-center .stage { flex: 1 1 0; min-height: 360px; border-radius: var(--r-img); }
-.genframe { flex: 1 1 0; min-height: 360px; display: grid; place-items: center; background: var(--surface); border-radius: var(--r-img); padding: 16px; }
+.genframe { flex: 1 1 0; min-height: 360px; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; background: var(--surface); border-radius: var(--r-img); padding: 16px; }
 #genShape {
   width: min(80%, 640px); max-height: 100%; border: 1.5px dashed var(--hairline-strong); display: grid; place-items: center;
   color: var(--body); text-align: center; padding: 16px;

@@ -110,9 +110,25 @@ def item_path(cfg: dict, item: str) -> Path | None:
             f = Path(cfg["comfy_dir"]) / "custom_nodes" / presets.file_name(c)
             return f if f.is_file() else None
         folders = [c["folder"], "clip"] if c["folder"] == "text_encoders" else [c["folder"]]
-        return _model_file(cfg, folders, presets.file_name(c))
-    pid, _, q = rest.partition(":")
-    return _model_file(cfg, ["diffusion_models", "unet"], presets.PRESETS[pid]["quants"][q]["file"])
+        names = [presets.file_name(c), *c.get("alternatives", [])]
+    else:
+        pid, _, q = rest.partition(":")
+        f = presets.PRESETS[pid]["quants"][q]
+        folders, names = ["diffusion_models", "unet"], [f["file"], *f.get("alternatives", [])]
+    # the downloaded file first, then other files with the same weights the user got elsewhere
+    return next((p for n in names if (p := _model_file(cfg, folders, n))), None)
+
+
+def resolve(cfg: dict, pid: str, quant: str | None) -> dict[str, Any]:
+    """presets.resolve with the file names that are really there (an alternative file when it is the one present)."""
+    pr = presets.PRESETS[pid]
+    q = quant if quant in pr["quants"] else pr["default_quant"]
+    res = presets.resolve(pid, q)
+    for key, item in (("unet", f"model:{pid}:{q}"), ("clip", f"component:{pr['text_encoder']}"),
+                      ("vae", f"component:{pr['vae']}")):
+        if (f := item_path(cfg, item)):
+            res[key] = f.name
+    return res
 
 
 def item_target(cfg: dict, item: str) -> tuple[str, Path, int]:
@@ -125,7 +141,8 @@ def item_target(cfg: dict, item: str) -> tuple[str, Path, int]:
     pid, _, q = rest.partition(":")
     pr = presets.PRESETS[pid]
     f = pr["quants"][q]
-    return HF.format(repo=pr["repo"], rev="main", path=f["file"]), Path(cfg["models_dir"]) / "diffusion_models" / f["file"], f["size"]
+    return (HF.format(repo=f.get("repo", pr["repo"]), rev="main", path=f.get("path", f["file"])),
+            Path(cfg["models_dir"]) / "diffusion_models" / f["file"], f["size"])
 
 
 def item_size(item: str) -> int:
@@ -151,8 +168,9 @@ def item_title(item: str) -> str:
 
 def valid_item(item: str) -> bool:
     kind, _, rest = item.partition(":")
-    if kind == "component":   # imported files are linked, never downloaded
-        return rest in presets.COMPONENTS and not presets.COMPONENTS[rest].get("imported")
+    if kind == "component":   # imported files are linked, gated ones fetched by the user, neither downloaded here
+        c = presets.COMPONENTS.get(rest, {})
+        return bool(c) and not c.get("imported") and not c.get("gated")
     if kind == "model":
         pid, _, q = rest.partition(":")
         return pid in presets.PRESETS and q in presets.PRESETS[pid]["quants"] and not presets.PRESETS[pid].get("imported")
@@ -224,7 +242,14 @@ def expand(items: list[str], have: dict[str, bool]) -> list[str]:
     want = set(items)
     for it in items:
         if it.startswith("model:"):
-            want.update(f"component:{c}" for c in needed_components(it.split(":")[1]) if not have[f"component:{c}"])
+            pid = it.split(":")[1]
+            comps = needed_components(pid)
+            # a model with an uncensored twin needs only one of the two text encoders: none extra if one is there
+            base = presets.PRESETS[pid].get("twin_of", pid)
+            twins = [p for k, p in presets.PRESETS.items() if k == base or p.get("twin_of") == base]
+            if any(have[f"component:{p['text_encoder']}"] for p in twins):
+                comps = [c for c in comps if c != presets.PRESETS[pid]["text_encoder"]]
+            want.update(f"component:{c}" for c in comps if not have[f"component:{c}"] and valid_item(f"component:{c}"))
         elif it.startswith("component:"):   # e.g. SeedVR2 needs its VAE (and the 1.4B a node)
             want.update(f"component:{c}" for c in presets.COMPONENTS[it.split(":")[1]].get("needs", []) if not have[f"component:{c}"])
     base = [s for s, _, _ in BASE_STEPS if s in want]
@@ -467,15 +492,24 @@ def _extract_stripped(zpath: Path, target: Path) -> None:
                     shutil.copyfileobj(src, dst)
 
 
+TEKKEN_FIX = '    data["config"]["default_num_special_tokens"] = len(data["special_tokens"])  # inpaint-studio\n'
+
+
 def patch_gguf_loader(loader: Path) -> None:
-    """ComfyUI-GGUF does not know the qwen_image21 architecture yet; add it to IMG_ARCH_LIST."""
+    """Two fixes for ComfyUI-GGUF, both idempotent (also run before every ComfyUI start, `ComfyProcess.start`):
+    it does not know the qwen_image21 architecture yet (added to IMG_ARCH_LIST), and the Mistral tokenizer it rebuilds
+    from a GGUF text encoder (FLUX.2 dev) lacks `default_num_special_tokens`, which ComfyUI's tekken loader now needs
+    (the special tokens come first, so their count is the offset)."""
     text = loader.read_text()
-    if "qwen_image21" in text:
-        return
-    new, n = re.subn(r"(IMG_ARCH_LIST\s*=\s*\{[^}]*)\}", r'\1, "qwen_image21"}', text, count=1)
-    if not n:
-        raise RuntimeError("could not patch ComfyUI-GGUF (IMG_ARCH_LIST not found)")
-    loader.write_text(new)
+    if "qwen_image21" not in text:
+        text, n = re.subn(r"(IMG_ARCH_LIST\s*=\s*\{[^}]*)\}", r'\1, "qwen_image21"}', text, count=1)
+        if not n:
+            raise RuntimeError("could not patch ComfyUI-GGUF (IMG_ARCH_LIST not found)")
+    anchor = '    logging.info(f"Created tekken tokenizer'
+    if TEKKEN_FIX not in text and anchor in text:
+        text = text.replace(anchor, TEKKEN_FIX + anchor, 1)
+    if text != loader.read_text():
+        loader.write_text(text)
 
 
 def find_uv() -> str:
@@ -516,6 +550,12 @@ class ComfyProcess:
         if self.managed:
             return
         APP_SUPPORT.mkdir(parents=True, exist_ok=True)
+        loader = Path(cfg["comfy_dir"]) / "custom_nodes/ComfyUI-GGUF/loader.py"
+        if loader.is_file():   # installs from before a fix get it too
+            try:
+                patch_gguf_loader(loader)
+            except (OSError, RuntimeError) as e:
+                print(f"ComfyUI-GGUF patch skipped: {e}")
         paths = APP_SUPPORT / "model-paths.yaml"
         lines = ["inpaint_studio:", f"  base_path: '{cfg['models_dir']}'", "  is_default: true"]
         lines += [f"  {f}: {f}/" for f in MODEL_FOLDERS]

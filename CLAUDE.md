@@ -3,7 +3,7 @@
 Local UI on top of ComfyUI (127.0.0.1:8188). Three tasks: Edit (optional SAM3 mask, tune + brush/wand/bucket;
 whole image / inpaint / free edit + paste / extend canvas), Generate (text to image) and Upscale (own task, upscale
 models only; edits can still upscale their result). Single images or whole folders, model presets
-(Qwen-Image 2.1 UC/official/Viggle Turbo, Edit 2511, 2512, Z-Image), live per-step previews, post-processing.
+(Qwen-Image 2.1 UC/official/Viggle Turbo, Edit 2511, 2512, Z-Image, FLUX.2 klein 4B/9B, FLUX.2 dev), live per-step previews, post-processing.
 README.md is the user guide (tables + short bullets); keep it in sync when UI features change.
 Runs locally on macOS; the .app is self-contained so it can be shared. No deploy.
 
@@ -69,10 +69,27 @@ Runs locally on macOS; the .app is self-contained so it can be shared. No deploy
 - Remove background (`remove_bg`, checkbox under the prompt): Qwen-Image 2.1 / Turbo, whole image only. Adds
   `graphs.REMOVE_BG_PROMPT` (ComfyUI's `image_qwen_image_2_1_background_removal` template) after the prompt; the 2.1 VAE
   decodes RGBA, so `<run>.png` is transparent. Upscale, post-processing and the keep note are off (they work in RGB).
-- Extra reference images (`refs` in a job): `graphs.MAX_REFS` per family (Qwen 2.1: 3, Edit 2511: 2), mirrored
+- Extra reference images (`refs` in a job): `graphs.MAX_REFS` per family (Qwen 2.1: 3, FLUX.2: 3, Edit 2511: 2), mirrored
   in `web/app.js` `MAX_REFS`. The edited image stays image 1 (its size sets the latent). `ref_takes` (one
   text per ref, turned into "Replace the X in <image1> with the X from <image2>." after the prompt) and `graphs.REF_NOTE` name the images the encoder's way (`<image2>` / "Picture 2").
   `ref_crops` ({x,y,w,h} px per ref) → `ImageCrop`, scaled to at most its own size (fewer tokens).
+- FLUX.2 klein (`family` "flux2"): `CLIPLoader` type flux2, the edited image and the refs go in as `ReferenceLatent`s,
+  sigmas from `Flux2Scheduler` (denoise < 1 = longer schedule, last `steps` sigmas kept), so it always runs the
+  chunked sampler; the scheduler picker is ignored. A quant may name its own `repo` / `path` (4B BF16 from Comfy-Org).
+  Components and quants may list `alternatives` (other file names with the same weights, e.g. the gated BFL 9B original):
+  one present counts as installed and `installer.resolve` uses it. Each klein preset has an uncensored twin
+  (`<id>_unc`, `twin_of`: same model files, ponpoke's text encoder). Those encoders are `gated` (never downloaded by
+  the app, the Download Center links to Hugging Face); the twin shows inside its base card, the picker lists both.
+  A text encoder ending in `.gguf` loads via `CLIPLoaderGGUF`. FLUX.2 dev (`flux2_dev`, Mistral 24B encoder): same graph
+  with `FluxGuidance` (= the cfg value) + `BasicGuider`, no negative.
+- split_encode (`graphs.SPLIT_ENCODE_FAMILIES`, Advanced → Text encoder: auto / on / off): on a Mac ComfyUI keeps the
+  text encoder loaded next to the diffusion model and swaps when both do not fit (`presets.needs_split_encode`). Then
+  `server.encode_first` runs `graphs.build_encode_graph` (SaveConditioning) on its own, moves the files to
+  `models/embeddings/inpaint-studio/<run>_pos|neg.safetensors` (deleted with the run), POSTs `/free` (unload_models + free_memory: unloading alone keeps a CPU copy, the same RAM on a Mac), and
+  the sampling graph loads them (`ConditioningLoader`, params `cond_pos` / `cond_neg`).
+- `installer.patch_gguf_loader` also adds `default_num_special_tokens` to the Mistral (tekken) tokenizer ComfyUI-GGUF
+  rebuilds from a GGUF encoder; it runs before every ComfyUI start. LoRAs on GGUF models are applied on the fly and cost
+  a lot of memory: the FLUX.2 dev Turbo LoRA on Q2_K was slower (~230 s/step) than 20 steps without it (~95 s/step).
 - Model, text encoder and VAE must match: the presets encode the pairs. fp8 text encoders
   (Qwen2.5-VL for 2511/2512) run on the CPU (`device: cpu`), MPS cannot do fp8.
 - Encoder resolution is matched to the working size by default (`graphs.matching_resolution`):

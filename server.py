@@ -66,7 +66,8 @@ HISTORY_PARAMS = ("prompt", "negative", "mode", "use_mask", "steps", "denoise", 
                   "scheduler", "feather", "megapixels", "resolution", "save_every", "save_last", "unet",
                   "keep_identical", "preset", "quant", "task", "family", "enhance", "prompt_original",
                   "upscale", "upscale_width", "upscale_long_side", "upscale_mb", "grain", "upscaler", "post_colors", "post_warp", "post_poisson", "post_align", "post_grain", "grain_strength", "refs", "ref_takes", "ref_crops", "ref_note", "clean_overlays", "keep_whole", "keep_note", "upscale_of", "color_correction", "upscale_colors", "group", "variant",
-                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control", "title", "template")
+                  "crop_stitch", "crop_context", "crop_box", "orig_size", "outpaint", "loras", "outpaint_colors", "crop_grain", "outpaint_holes", "remove_bg", "control",
+                  "split_encode", "cond_pos", "title", "template")
 
 @asynccontextmanager
 async def lifespan(app):
@@ -302,13 +303,14 @@ async def setup_status():
             "experimental": bool(pr.get("experimental")), "default_quant": pr["default_quant"], "defaults": pr["defaults"],
             "good_for": pr.get("good_for", ""), "recommended": bool(pr.get("recommended")), "imported": bool(pr.get("imported")),
             "recommended_quant": presets.recommended_quant(pid, ram),
-            "text_encoder": pr["text_encoder"], "vae": pr["vae"], "nodes": pr.get("nodes", []), **st,
+            "text_encoder": pr["text_encoder"], "vae": pr["vae"], "nodes": pr.get("nodes", []), "twin_of": pr.get("twin_of"),
+            "lora_family": presets.lora_family(pr), **st,
             "quants": [{"id": f"model:{pid}:{q}", "quant": q, "size": f["size"], "file": f["file"], "installed": have[f"model:{pid}:{q}"],
                         "memory": presets.memory_need(pid, q), "fit": presets.memory_fit(presets.memory_need(pid, q), ram)}
                        for q, f in pr["quants"].items()]})
     return {"ready": installer.ready(have), "mask_available": have["component:sam3"], "config": cfg,
             "system": {"ram": ram, "gpu_budget": int(ram * presets.GPU_SHARE), "seedvr2_ref_mp": presets.SEEDVR2_REF_MP},
-            "base": base, "components": comps, "lora_groups": presets.LORA_GROUPS, "imports": imports.load(),
+            "base": base, "components": comps, "lora_groups": presets.LORA_GROUPS, "imports": imports.load(), "watch_folders": imports.watch_load()["folders"],
             "import_kinds": {k: label for k, (_, label) in imports.KINDS.items()}, "presets": models, "default_preset": presets.DEFAULT_PRESET,
             "comfy": {"up": await comfy_up(), "managed": COMFY_PROC.managed}, "install": INSTALLER.state()}
 
@@ -740,6 +742,8 @@ async def delete_run(run_id: str):
     if run_id in JOBS:
         raise HTTPException(409, "the run is still queued or running; cancel it first")
     shutil.rmtree(d)
+    for f in (cond_dir() / "inpaint-studio").glob(f"{run_id}_*.safetensors"):   # split_encode conditionings
+        f.unlink(missing_ok=True)
     return {"deleted": run_id}
 
 
@@ -1367,6 +1371,8 @@ async def run_job(job: dict) -> None:
     if params.get("enhance") and "prompt_original" not in params:
         await enhance_prompt(job)
     try:
+        if params.get("cond_pos"):
+            await encode_first(job)
         async with websockets.connect(f"{COMFY_WS}?clientId={client_id}", max_size=64 * 1024 * 1024) as cws:
             pid = await submit(job["graph"], client_id, {"preview_method": "auto"})
             run["prompt_id"] = pid
@@ -1406,7 +1412,7 @@ async def run_job(job: dict) -> None:
                         await broadcast({"type": "node", "job_id": run_id, **ph})
                 elif kind == "execution_start":
                     # the UI's elapsed time survives reloads; an improved prompt started the run already
-                    run.update(status="running", started=run.get("started") if params.get("enhance") else time.time())
+                    run.update(status="running", started=run.get("started") if params.get("enhance") or params.get("cond_pos") else time.time())
                     save_run(run)
                     await broadcast({"type": "running", "job_id": run_id, "started": run["started"]})
                 elif kind == "progress" and (node == "sampler" or node.startswith("chunk_")):
@@ -1450,6 +1456,40 @@ async def run_job(job: dict) -> None:
     except Exception as e:  # keep the queue alive, report to the UI
         await drop_prompt(run.get("prompt_id"))
         await finish_job(job, "error", error=repr(e))
+
+
+def cond_dir() -> Path:
+    """Where split runs keep their prompt conditionings (ComfyUI's ConditioningLoader reads models/embeddings)."""
+    return Path(installer.load_config()["models_dir"]) / "embeddings"
+
+
+async def encode_first(job: dict) -> None:
+    """split_encode: encode the prompt in a ComfyUI run of its own, move the conditioning files to models/embeddings
+    (named in params cond_pos / cond_neg, which the sampling graph loads) and unload the text encoder, so it is not in
+    memory next to the diffusion model. Files already there (a retried run) are reused."""
+    run, params = job["run"], job["params"]
+    want = {k: params[f"cond_{k}"] for k in ("pos", "neg") if params.get(f"cond_{k}")}
+    if all((cond_dir() / name).is_file() for name in want.values()):
+        return
+    if not run.get("started"):
+        run.update(status="running", started=time.time())
+        save_run(run)
+        await broadcast({"type": "running", "job_id": run["id"], "started": run["started"]})
+    job["phase"] = {"phase": "encode", "detail": "text encoder, then unloaded"}
+    await broadcast({"type": "node", "job_id": run["id"], **job["phase"]})
+    pid = await submit(graphs.build_encode_graph(params), f"inpaint-studio-{uuid.uuid4().hex}")
+    run["encode_prompt_id"] = pid
+    await wait_history(pid, timeout=3600)
+    out = (COMFY_OUTPUT or Path(installer.load_config()["output_dir"])) / params["prefix"]
+    for key, name in want.items():
+        found = sorted(out.glob(f"cond_{key}_*.safetensors"), key=lambda f: f.stat().st_mtime)
+        if not found:
+            raise HTTPException(500, f"the text encoder run wrote no conditioning ({key})")
+        dest = cond_dir() / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(found[-1], dest)
+    # free_memory too: unload alone moves the encoder's weights to "CPU" memory, which on a Mac is the same RAM
+    await comfy_json("POST", "/free", json={"unload_models": True, "free_memory": True})
 
 
 async def enhance_prompt(job: dict) -> None:
@@ -1978,7 +2018,7 @@ async def create_job(params: dict):
         if params["task"] not in pr["modes"]:
             raise HTTPException(400, f"{pr['title']} cannot {params['task']}")
         # Advanced overrides: an explicitly chosen unet / clip / vae wins over the preset's file
-        resolved = presets.resolve(params["preset"], params.get("quant"))
+        resolved = installer.resolve(installer.load_config(), params["preset"], params.get("quant"))
         params.update({k: params.get(k) or v for k, v in resolved.items()})
     if t := params.get("template"):   # Generate with a template: a soft canny ControlNet on it, or a whole-image edit of it
         if params.get("task") != "generate":
@@ -2069,12 +2109,29 @@ async def create_job(params: dict):
     rep = graphs.size_report(params["src_w"], params["src_h"], params["megapixels"], params["resolution"])
     params["work_w"], params["work_h"] = rep["work_w"], rep["work_h"]
     params["prefix"] = f"InpaintStudio/{run_id}"
+    split_encode(params, run_id)
     graph = graphs.build_edit_graph(params)
     run = {"id": run_id, "created": time.time(), "status": "queued",
            "params": {k: params.get(k) for k in HISTORY_PARAMS}, "size": rep, "frames": []}
     save_run_config(run_id, run, params, graph)
     remember_prompt("prompts", params.get("prompt", ""))
     return start_job(run, params, graph)
+
+
+def split_encode(params: dict, run_id: str) -> None:
+    """params split_encode: "on", "off" or "auto" (default: on when the preset's diffusion model and text encoder do
+    not fit in memory together, presets.needs_split_encode). Sets cond_pos / cond_neg, the conditioning files the
+    sampling graph loads (written by encode_first). Only for the preset's own text encoder."""
+    mode, pid = params.get("split_encode") or "auto", params.get("preset")
+    if mode == "off" or params.get("family") not in graphs.SPLIT_ENCODE_FAMILIES or pid not in presets.PRESETS:
+        return
+    pr = presets.PRESETS[pid]
+    q = params.get("quant") if params.get("quant") in pr["quants"] else pr["default_quant"]
+    if mode != "on" and not presets.needs_split_encode(pid, q, system_ram()):
+        return
+    params["cond_pos"] = f"inpaint-studio/{run_id}_pos.safetensors"
+    if params.get("family") != "flux2_dev" and (params.get("negative") or "").strip():
+        params["cond_neg"] = f"inpaint-studio/{run_id}_neg.safetensors"
 
 
 @app.get("/api/jobs")

@@ -49,9 +49,12 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
   const comp = (key) => data.components.find((c) => c.key === key);
   // everything a preset needs besides the model file: text encoder, VAE and custom nodes
   const needKeys = (p) => [p.text_encoder, p.vae, ...(p.nodes || [])];
-  const missingKeys = (p) => needKeys(p).filter((k) => !comp(k)?.installed);
+  // a model with an uncensored twin needs only one of the two text encoders (installer.expand does the same)
+  const encoderThere = (p) => data.presets.some((x) => (x.id === p.id || x.twin_of === p.id) && comp(x.text_encoder)?.installed);
+  const missingKeys = (p) => needKeys(p).filter((k) => !comp(k)?.installed && !comp(k)?.gated
+    && !(k === p.text_encoder && encoderThere(p)));
   const recQuant = (p) => p.recommended_quant || p.default_quant;
-  const sorted = () => data.presets.filter((p) => !p.imported).sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0));
+  const sorted = () => data.presets.filter((p) => !p.imported && !p.twin_of).sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0));
   const FIT = {
     good: ["ok", "Fits"], tight: ["warn", "Tight – may swap, slow"], no: ["bad", "Too large"],
   };
@@ -435,19 +438,31 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     n.appendChild(el("span", null, `${kind}: ${c.title} (${fmtBytes(c.size)})`));
     if (c.installed) {
       n.appendChild(installedBadge());
+      if (c.present && c.present !== c.file) {   // another file with the same weights (presets `alternatives`)
+        n.appendChild(el("span", null, `using ${c.present}`));
+      }
       const others = usersOf(key, p.id);
       if (others.length) n.appendChild(el("span", null, `shared with ${others.map((o) => o.title).join(", ")}`));
       const all = usersOf(key, null).map((o) => o.title);
       n.appendChild(actBtn("Delete", "danger linkbtn", () => confirmDelete(
         c.id, c.title, c.size, all.length ? `Used by: ${all.join(", ")}. These models stop working until it is downloaded again.` : "")));
+    } else if (c.gated) {   // needs a Hugging Face account: the user downloads it into models/text_encoders
+      const a = el("a", "linkbtn", "Get it on Hugging Face");
+      a.href = `https://huggingface.co/${c.repo}`;
+      a.target = "_blank";
+      n.append(el("span", "pstate error", `missing: log in, accept the terms, download ${c.file} into models/${c.folder}`), a);
     } else {
-      n.appendChild(el("span", "pstate error", "missing, downloaded together with the model"));
+      // the model file is already there (e.g. for its uncensored twin): this one alone
+      const alone = p.installed_quants?.length || (key === p.text_encoder && encoderThere(p));
+      n.appendChild(el("span", "pstate error", alone ? "missing" : "missing, downloaded together with the model"));
+      if (alone) n.appendChild(queueBtn(c.id, actBtn(`Download ${fmtBytes(c.size)}`, "linkbtn", () => startInstall([c.id]))));
     }
     return n;
   }
 
   function buildCard(p) {
-    const card = el("div", `mcard${p.complete ? " complete" : ""}`);
+    const done = p.complete || data.presets.some((x) => x.twin_of === p.id && x.complete);
+    const card = el("div", `mcard${done ? " complete" : ""}`);
     const head = el("div", "head");
     head.appendChild(el("b", null, p.title));
     if (p.recommended) head.appendChild(el("span", "chip rec", "Recommended"));
@@ -457,7 +472,9 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     if (p.good_for) card.appendChild(el("div", "goodfor", p.good_for));
     card.appendChild(el("div", "hint", p.note));
     const needs = el("div", "needs");
-    needs.appendChild(compLine(p, p.text_encoder, "Text encoder"));
+    const twin = data.presets.find((x) => x.twin_of === p.id);   // same model, uncensored text encoder
+    needs.appendChild(compLine(p, p.text_encoder, twin ? "Text encoder (original)" : "Text encoder"));
+    if (twin) needs.appendChild(compLine(twin, twin.text_encoder, "Text encoder (uncensored)"));
     needs.appendChild(compLine(p, p.vae, "VAE"));
     for (const k of p.nodes || []) needs.appendChild(compLine(p, k, "Custom node"));
     card.appendChild(needs);
@@ -590,7 +607,7 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     for (const [group, families] of Object.entries(data.lora_groups || {})) {
       const items = loras.filter((l) => l.families.some((f) => families.includes(f)));
       if (!items.length) continue;
-      const models = data.presets.filter((p) => families.includes(p.family));
+      const models = data.presets.filter((p) => families.includes(p.lora_family));
       const det = el("details", "lgroup");
       const used = models.some((p) => p.installed_quants.length) || items.some((l) => l.installed);
       det.open = loraOpen.has(group) || (!loraClosed.has(group) && used);
@@ -624,7 +641,7 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     a.rel = "noopener";
     a.title = `${l.repo} on Hugging Face`;
     name.appendChild(a);
-    const not = models.filter((p) => !l.families.includes(p.family));
+    const not = models.filter((p) => !l.families.includes(p.lora_family));
     if (not.length) name.appendChild(el("span", "chip", `not for ${not.map((p) => shortTitle(p, group)).join(", ")}`));
     if (l.strength !== 1) name.appendChild(el("span", "hint", `strength ${l.strength}`));
     name.appendChild(stateTag(l.id));

@@ -127,7 +127,7 @@ KEEP_IDENTICAL = ("Keep everything else in the image exactly identical to the or
 
 # extra reference images (besides the edited image) the text encoder of each family takes:
 # TextEncodeQwenImage21 has up to 16 slots, TextEncodeQwenImageEditPlus 3 in total (image1 = edited image)
-MAX_REFS = {"qwen21": 3, "qwen21_turbo": 3, "qwen_edit": 2}
+MAX_REFS = {"qwen21": 3, "qwen21_turbo": 3, "qwen_edit": 2, "flux2": 3, "flux2_dev": 3}
 
 
 REF_NOTE = ("{main} is the image to edit. Keep its framing, composition, camera angle, perspective and "
@@ -164,8 +164,9 @@ def template_note(p: dict[str, Any]) -> str:
 
 def ref_labels(family: str, n: int) -> tuple[str, list[str]]:
     """The encoder's own names for the edited image and the references: Qwen 2.1 tags them <image1>, <image2>
-    (TextEncodeQwenImage21), Edit 2511 "Picture 1", "Picture 2" (TextEncodeQwenImageEditPlus)."""
-    name = (lambda i: f"Picture {i}") if family == "qwen_edit" else (lambda i: f"<image{i}>")
+    (TextEncodeQwenImage21), Edit 2511 "Picture 1", "Picture 2" (TextEncodeQwenImageEditPlus), FLUX.2 plain "image 1"
+    (its reference latents carry no tags)."""
+    name = {"qwen_edit": lambda i: f"Picture {i}", "flux2": lambda i: f"image {i}", "flux2_dev": lambda i: f"image {i}"}.get(family, lambda i: f"<image{i}>")
     return name(1), [name(i) for i in range(2, n + 2)]
 
 
@@ -232,7 +233,9 @@ def edit_prompt(p: dict[str, Any]) -> str:
 
 
 CLIP_TYPES = {"qwen21": "qwen_image", "qwen21_turbo": "qwen_image", "qwen_edit": "qwen_image", "qwen": "qwen_image",
-              "zimage": "lumina2"}
+              "zimage": "lumina2", "flux2": "flux2", "flux2_dev": "flux2"}
+# families whose prompt can be encoded in a run of its own, so the text encoder is unloaded before sampling (split_encode)
+SPLIT_ENCODE_FAMILIES = ("flux2", "flux2_dev")
 CPU_TEXT_ENCODER = {"qwen_edit", "qwen"}  # fp8 text encoders cannot run on MPS
 # Viggle Turbo raw sigma nodes per step count (5-7); change steps only at the high-noise end
 VIGGLE_NODES = {5: "1.0, 0.875, 0.75, 0.5, 0.25", 6: "1.0, 0.9375, 0.875, 0.75, 0.5, 0.25",
@@ -349,7 +352,10 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
 
     family (see presets.py): "qwen21" (Qwen-Image 2.1, edit + generate), "qwen21_turbo" (same with
     the Viggle 6-step sigmas, no CFG), "qwen_edit" (Qwen-Image-Edit 2511), "qwen" (Qwen-Image 2512,
-    generate only) or "zimage" (Z-Image Turbo: generate, edit = img2img/inpaint).
+    generate only), "zimage" (Z-Image Turbo: generate, edit = img2img/inpaint) or "flux2" (FLUX.2 klein: generate,
+    edit by instruction with the image and the references as reference latents) or "flux2_dev" (FLUX.2 dev: the same
+    with FluxGuidance = the cfg value and BasicGuider). With p["cond_pos"] (and "cond_neg") the prompt comes from a
+    conditioning file written by build_encode_graph instead of the text encoder.
 
     mode "inpaint" (default): only the masked latent area is re-generated (noise mask).
     mode "paste": the model edits the whole image freely, then only the masked area is
@@ -369,6 +375,8 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
         "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": p["clip"], "type": CLIP_TYPES[family],
                                                          "device": "cpu" if family in CPU_TEXT_ENCODER else "default"}},
     }
+    if p["clip"].endswith(".gguf"):   # ComfyUI-GGUF
+        g["clip"] = {"class_type": "CLIPLoaderGGUF", "inputs": {"clip_name": p["clip"], "type": CLIP_TYPES[family]}}
     if not generate:
         g["load"] = {"class_type": "LoadImage", "inputs": {"image": p["image"]}}
         g["scale"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
@@ -417,13 +425,40 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
         else:
             g["encode_neg"] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["encode", 0]}}
         pos, neg = ["encode", 0], ["encode_neg", 0]
+    elif family in ("flux2", "flux2_dev"):
+        dev = family == "flux2_dev"   # guidance-distilled: FluxGuidance (the CFG field) + BasicGuider, no negative
+        g["model"] = g.pop("unet")   # no sampling patch: Flux2Scheduler sizes the sigmas
+        if p.get("cond_pos"):   # encoded in a run of its own (split_encode), the text encoder is not loaded here
+            del g["clip"]
+            g["encode"] = {"class_type": "ConditioningLoader", "inputs": {"conditioning_name": p["cond_pos"]}}
+        else:
+            g["encode"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": prompt}}
+        if dev:
+            g["guidance"] = {"class_type": "FluxGuidance", "inputs": {"conditioning": ["encode", 0], "guidance": float(p["cfg"])}}
+            pos, neg = ["guidance", 0], None
+        else:
+            if p.get("cond_neg"):
+                g["encode_neg"] = {"class_type": "ConditioningLoader", "inputs": {"conditioning_name": p["cond_neg"]}}
+            elif negative.strip():
+                g["encode_neg"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": negative}}
+            else:
+                g["encode_neg"] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["encode", 0]}}
+            pos, neg = ["encode", 0], ["encode_neg", 0]
+        # the edited image is reference 1, extra references follow; each is attached to both conditionings
+        for i, link in enumerate(refs if generate else [["scale", 0], *refs], start=1):
+            g[f"flux_ref{i}"] = {"class_type": "VAEEncode", "inputs": {"pixels": link, "vae": ["vae", 0]}}
+            for key, cond in (("pos", pos), ("neg", neg)):
+                if cond:
+                    g[f"flux_ref{i}_{key}"] = {"class_type": "ReferenceLatent", "inputs": {"conditioning": cond, "latent": [f"flux_ref{i}", 0]}}
+            pos, neg = [f"flux_ref{i}_pos", 0], neg and [f"flux_ref{i}_neg", 0]
     else:
         raise ValueError(f"unknown model family {family}")
 
     if generate and p.get("control"):
         apply_control(g, p, family)
     if generate:
-        empty = "EmptyLatentImage" if family in ("qwen21", "qwen21_turbo") else "EmptySD3LatentImage"
+        empty = {"qwen21": "EmptyLatentImage", "qwen21_turbo": "EmptyLatentImage",
+                 "flux2": "EmptyFlux2LatentImage", "flux2_dev": "EmptyFlux2LatentImage"}.get(family, "EmptySD3LatentImage")
         g["latent_src"] = {"class_type": empty, "inputs": {"width": p["work_w"], "height": p["work_h"], "batch_size": 1}}
         latent = ["latent_src", 0]
         return _sample_and_save(g, p, latent, pos, neg, use_mask=False, generate=True)
@@ -466,9 +501,29 @@ def build_edit_graph(p: dict[str, Any]) -> dict:
     return _sample_and_save(g, p, latent, pos, neg, use_mask=use_mask, generate=False)
 
 
+def build_encode_graph(p: dict[str, Any]) -> dict:
+    """The text-encoder half of a split run (SPLIT_ENCODE_FAMILIES): encodes the prompt (and a negative prompt, if
+    any) and saves each conditioning to the output folder as <prefix>/cond_pos|cond_neg_00001_.safetensors. The server
+    moves them to models/embeddings and unloads the encoder before it queues the sampling graph."""
+    family = p.get("family", "flux2")
+    if p["clip"].endswith(".gguf"):
+        g = {"clip": {"class_type": "CLIPLoaderGGUF", "inputs": {"clip_name": p["clip"], "type": CLIP_TYPES[family]}}}
+    else:
+        g = {"clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": p["clip"], "type": CLIP_TYPES[family], "device": "default"}}}
+    prefix = p.get("prefix", "InpaintStudio/edit")
+    texts = {"pos": edit_prompt(p)}
+    if family != "flux2_dev" and p.get("negative", "").strip():
+        texts["neg"] = p["negative"]
+    for key, text in texts.items():
+        g[f"encode_{key}"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": text}}
+        g[f"save_{key}"] = {"class_type": "SaveConditioning", "inputs": {
+            "conditioning": [f"encode_{key}", 0], "filename_prefix": f"{prefix}/cond_{key}"}}
+    return g
+
+
 def _sample_and_save(g: dict, p: dict[str, Any], latent: list, pos: list, neg: list, use_mask: bool, generate: bool) -> dict:
     every, last = int(p.get("save_every") or 0), int(p.get("save_last") or 0)
-    if every > 0 or last > 0 or p.get("family") == "qwen21_turbo":  # turbo needs its own sigmas
+    if every > 0 or last > 0 or p.get("family") in ("qwen21_turbo", "flux2", "flux2_dev"):  # own sigma schedules
         final_latent = _chunked_sampler(g, p, latent, every, last, pos, neg)
     else:
         g["sampler"] = {"class_type": "KSampler", "inputs": {
@@ -581,10 +636,24 @@ def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int, last:
     save_steps = every > 0 or last > 0
     g["noise"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": int(p["seed"])}}
     g["no_noise"] = {"class_type": "DisableNoise", "inputs": {}}
+    sigmas = ["sched", 0]
     if turbo:  # distilled: no CFG, euler on the Viggle sigma schedule (sized from the latent)
         g["guider"] = {"class_type": "BasicGuider", "inputs": {"model": ["model", 0], "conditioning": pos}}
         g["ksel"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}}
         g["sched"] = {"class_type": "ViggleTurboSigmas", "inputs": {"latent": latent, "nodes": VIGGLE_NODES[steps]}}
+    elif p.get("family") in ("flux2", "flux2_dev"):
+        if p.get("family") == "flux2_dev":   # the guidance is in the conditioning (FluxGuidance)
+            g["guider"] = {"class_type": "BasicGuider", "inputs": {"model": ["model", 0], "conditioning": pos}}
+        else:
+            g["guider"] = {"class_type": "CFGGuider", "inputs": {
+                "model": ["model", 0], "positive": pos, "negative": neg, "cfg": float(p["cfg"])}}
+        g["ksel"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": p["sampler"]}}
+        # Flux2Scheduler has no denoise: schedule steps / denoise and keep only the last `steps` sigmas
+        denoise = min(1.0, max(0.01, float(p["denoise"])))
+        total = max(steps, round(steps / denoise))
+        g["sched_full"] = {"class_type": "Flux2Scheduler", "inputs": {"steps": total, "width": p["work_w"], "height": p["work_h"]}}
+        g["sched"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": ["sched_full", 0], "step": total - steps}}
+        sigmas = ["sched", 1]
     else:
         g["guider"] = {"class_type": "CFGGuider", "inputs": {
             "model": ["model", 0], "positive": pos, "negative": neg, "cfg": float(p["cfg"])}}
@@ -600,7 +669,7 @@ def _chunked_sampler(g: dict, p: dict[str, Any], latent: list, every: int, last:
         # outside the mask after every chunk keeps it at the clean original.
         g["outside"] = {"class_type": "InvertMask", "inputs": {"mask": ["mask_hard", 0]}}
     for i, (a, b) in enumerate(step_chunks(steps, every, last)):
-        g[f"upto_{i}"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": ["sched", 0], "step": b}}
+        g[f"upto_{i}"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": sigmas, "step": b}}
         g[f"from_{i}"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": [f"upto_{i}", 0], "step": a}}
         g[f"chunk_{i}"] = {"class_type": "SamplerCustomAdvanced", "inputs": {
             "noise": ["noise", 0] if i == 0 else ["no_noise", 0], "guider": ["guider", 0], "sampler": ["ksel", 0],

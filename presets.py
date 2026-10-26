@@ -11,6 +11,13 @@ from __future__ import annotations
 
 from typing import Any
 
+def _ponpoke(size: str) -> list[str]:
+    """The GGUF files of ponpoke/flux2-klein-<size>-uncensored-text-encoder."""
+    return [f"flux2-klein-{size}-uncensored-{q}.gguf" for q in ("f16", "q8_0", "q6_k", "q4_k_m")]
+
+
+# `alternatives`: other file names with the same weights; one of them present = installed and used.
+# `gated`: the repo needs a Hugging Face account and accepted terms, so the app links to it instead of downloading.
 COMPONENTS: dict[str, dict[str, Any]] = {
     "qwen3vl_8b": {"title": "Qwen3-VL 8B text encoder (int8)", "repo": "Comfy-Org/Qwen-Image-2.1",
                    "path": "text_encoders/qwen3vl_8b_int8_convrot.safetensors", "folder": "text_encoders", "size": 9_350_798_360},
@@ -25,6 +32,19 @@ COMPONENTS: dict[str, dict[str, Any]] = {
                  "path": "split_files/text_encoders/qwen_3_4b.safetensors", "folder": "text_encoders", "size": 8_044_982_048},
     "vae_ae": {"title": "Flux AE VAE", "repo": "Comfy-Org/z_image_turbo",
                "path": "split_files/vae/ae.safetensors", "folder": "vae", "size": 335_304_388},
+    "qwen3_8b": {"title": "Qwen3 8B text encoder", "repo": "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
+                 "path": "split_files/text_encoders/qwen_3_8b.safetensors", "folder": "text_encoders", "size": 16_381_517_176},
+    # the same Qwen3 encoders fine-tuned not to refuse (ponpoke); the diffusion model stays the official one
+    "qwen3_4b_unc": {"title": "Qwen3 4B text encoder, uncensored", "repo": "ponpoke/flux2-klein-4b-uncensored-text-encoder",
+                     "path": "flux2-klein-4b-uncensored-text-encoder/model.safetensors", "save_as": "qwen_3_4b_uncensored.safetensors",
+                     "folder": "text_encoders", "size": 8_044_981_680, "gated": True, "alternatives": _ponpoke("4b")},
+    "qwen3_8b_unc": {"title": "Qwen3 8B text encoder, uncensored (Q8_0)", "repo": "ponpoke/flux2-klein-9b-uncensored-text-encoder",
+                     "path": "flux2-klein-9b-uncensored-q8_0.gguf", "folder": "text_encoders", "size": 8_709_518_304, "gated": True,
+                     "alternatives": ["qwen_3_8b_uncensored.safetensors", *_ponpoke("9b")]},
+    "vae_flux2": {"title": "FLUX.2 VAE", "repo": "Comfy-Org/vae-text-encorder-for-flux-klein-4b",
+                  "path": "split_files/vae/flux2-vae.safetensors", "folder": "vae", "size": 336_211_292},
+    "mistral_24b": {"title": "Mistral Small 3.2 24B text encoder (Q4_K_M)", "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF",
+                    "path": "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf", "folder": "text_encoders", "size": 14_333_922_848},
     "viggle_node": {"title": "Viggle Turbo sigmas (ComfyUI node)", "repo": "Viggle/Qwen-Image-2.1-viggle-turbo",
                     "path": "comfyui/viggle_turbo.py", "folder": "custom_node", "size": 5_467},
     "up_ultrasharp_v2": {"title": "UltraSharp V2 (4x)", "kind": "upscaler", "scale": 4, "repo": "Kim2091/UltraSharpV2",
@@ -142,6 +162,10 @@ LORA_GROUPS: dict[str, list[str]] = {
     "Qwen-Image-Edit 2511": ["qwen_edit"],
     "Qwen-Image 2512": ["qwen"],
     "Z-Image Turbo": ["zimage"],
+    # same graph family, but a LoRA fits only the size it was trained on (`lora_family` of the preset)
+    "FLUX.2 klein 4B": ["flux2_4b"],
+    "FLUX.2 klein 9B": ["flux2_9b"],
+    "FLUX.2 dev": ["flux2_dev"],
 }
 
 COMPONENTS.update({
@@ -199,12 +223,18 @@ COMPONENTS.update({
     "lora_zi_coloring": _lora("Coloring book", "renderartist/Coloring-Book-Z-Image-Turbo-LoRA",
                               "Coloring_Book_Z_Image_Turbo_v1_renderartist_2000.safetensors", 31_948_552, ["zimage"],
                               'Black and white line art. Put "c0l0ringb00k" in the prompt.', 0.7),
+    # FLUX.2 dev
+    "lora_f2d_turbo": _lora("Turbo (8 steps)", "Comfy-Org/flux2-dev", "split_files/loras/Flux_2-Turbo-LoRA_comfyui.safetensors",
+                            2_760_814_880, ["flux2_dev"], "8 steps instead of 20 (set Steps to 8). On a 32 GB Mac with "
+                            "the GGUF model it needs so much extra memory that it was not faster (measured: ~200 s per step)."),
 })
 
 
-def _quants(stem: str, sizes: dict[str, int]) -> dict[str, dict[str, Any]]:
-    """GGUF files are '<stem>-<quant>.gguf'; int8 convrot is a safetensors file (normal UNet loader)."""
-    return {q: {"file": f"{stem}-{q}.{'safetensors' if q == 'int8_convrot' else 'gguf'}", "size": s} for q, s in sizes.items()}
+def _quants(stem: str, sizes: dict[str, int], alternatives: dict[str, list[str]] | None = None) -> dict[str, dict[str, Any]]:
+    """GGUF files are '<stem>-<quant>.gguf'; int8 convrot is a safetensors file (normal UNet loader).
+    A quant may also name its own `repo` and `path` (a file from another repo, saved as `file`)."""
+    return {q: {"file": f"{stem}-{q}.{'safetensors' if q == 'int8_convrot' else 'gguf'}", "size": s,
+                **({"alternatives": (alternatives or {})[q]} if q in (alternatives or {}) else {})} for q, s in sizes.items()}
 
 
 PRESETS: dict[str, dict[str, Any]] = {
@@ -284,9 +314,56 @@ PRESETS: dict[str, dict[str, Any]] = {
         "text_encoder": "qwen3_4b", "vae": "vae_ae",
         "defaults": {"steps": 8, "cfg": 1.0, "sampler": "res_multistep", "scheduler": "simple"},
     },
+    "flux2_klein_4b": {
+        "good_for": "Fast text-to-image and instruction edits in 4 steps, also with reference images. Small enough for 16 GB.",
+        "title": "FLUX.2 klein 4B", "family": "flux2", "modes": ["generate", "edit"],
+        "note": "Distilled FLUX.2 (4 steps, no CFG, Apache 2.0; GGUF by unsloth). Edits by instruction and generates.",
+        "repo": "unsloth/FLUX.2-klein-4B-GGUF", "default_quant": "BF16",
+        "quants": {**_quants("flux-2-klein-4b", {
+            "Q4_K_M": 2_604_311_104, "Q5_K_M": 3_073_368_640, "Q6_K": 3_409_273_408, "Q8_0": 4_300_644_928}),
+            "BF16": {"file": "flux-2-klein-4b.safetensors", "size": 7_751_105_712,
+                     "repo": "Comfy-Org/vae-text-encorder-for-flux-klein-4b",
+                     "path": "split_files/diffusion_models/flux-2-klein-4b.safetensors"}},
+        "text_encoder": "qwen3_4b", "vae": "vae_flux2", "lora_family": "flux2_4b",
+        "defaults": {"steps": 4, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
+    },
+    "flux2_klein_9b": {
+        "good_for": "Better detail and prompt following than klein 4B, still 4 steps. Needs more memory.",
+        "title": "FLUX.2 klein 9B", "family": "flux2", "modes": ["generate", "edit"],
+        "note": "Distilled FLUX.2 9B (4 steps, no CFG, non-commercial licence; GGUF by unsloth). Edits by instruction and generates.",
+        "repo": "unsloth/FLUX.2-klein-9B-GGUF", "default_quant": "Q8_0",
+        "quants": _quants("flux-2-klein-9b", {
+            "Q4_K_M": 5_909_829_920, "Q5_K_M": 7_018_699_040, "Q6_K": 7_865_424_160, "Q8_0": 9_978_304_800,
+            "BF16": 18_157_197_600}, alternatives={"BF16": ["flux-2-klein-9b.safetensors"]}),   # the gated BFL original
+        "text_encoder": "qwen3_8b", "vae": "vae_flux2", "lora_family": "flux2_9b",
+        "defaults": {"steps": 4, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"},
+    },
 }
 
+PRESETS["flux2_dev"] = {
+    "good_for": "The full 32B FLUX.2: best detail and prompt following of the FLUX models, edits with reference images. Very slow on 32 GB.",
+    "title": "FLUX.2 dev", "family": "flux2_dev", "modes": ["generate", "edit"], "experimental": True,
+    "note": "32B FLUX.2 (GGUF by city96, non-commercial licence). CFG is the FLUX guidance (4). 20 steps, or 8 with the "
+            "Turbo LoRA. On 32 GB only Q2_K is usable: 3-4 min per step at 1 MP (about 1-1.5 h per image).",
+    "repo": "city96/FLUX.2-dev-gguf", "default_quant": "Q2_K",
+    "quants": _quants("flux2-dev", {"Q2_K": 12_858_250_208, "Q3_K_M": 15_960_134_624, "Q4_K_M": 20_082_414_560}),
+    "text_encoder": "mistral_24b", "vae": "vae_flux2", "lora_family": "flux2_dev",
+    "defaults": {"steps": 20, "cfg": 4.0, "sampler": "euler", "scheduler": "simple"},
+}
+
+# uncensored twins: same model files, ponpoke's uncensored text encoder; the Download Center shows them in the
+# card of `twin_of`, the model picker as their own entry
+for _pid, _te in (("flux2_klein_4b", "qwen3_4b_unc"), ("flux2_klein_9b", "qwen3_8b_unc")):
+    PRESETS[f"{_pid}_unc"] = {**PRESETS[_pid], "title": f"{PRESETS[_pid]['title']} uncensored", "text_encoder": _te, "twin_of": _pid,
+                              "good_for": f"{PRESETS[_pid]['good_for']} Uncensored text encoder: no refusals.",
+                              "note": PRESETS[_pid]["note"] + " The text encoder needs a Hugging Face account (gated)."}
+
 DEFAULT_PRESET = "qwen21_uc"
+
+
+def lora_family(pr: dict[str, Any]) -> str:
+    """What LoRAs must be made for (LORA_GROUPS): the graph family, or `lora_family` when one family has several sizes."""
+    return pr.get("lora_family", pr["family"])
 
 
 def resolve(preset_id: str, quant: str | None) -> dict[str, Any]:
@@ -312,6 +389,14 @@ def memory_need(pid: str, quant: str) -> int:
     vae = COMPONENTS[pr["vae"]]["size"]
     te = COMPONENTS[pr["text_encoder"]]["size"]
     return int(max(unet + vae + ACTIVATIONS, te + 1.5e9))
+
+
+def needs_split_encode(pid: str, quant: str, ram: int) -> bool:
+    """On a Mac ComfyUI keeps the text encoder loaded next to the diffusion model. When both (plus VAE and working
+    memory) do not fit, the run swaps heavily; encoding in a run of its own and unloading the encoder avoids that."""
+    pr = PRESETS[pid]
+    both = pr["quants"][quant]["size"] + COMPONENTS[pr["text_encoder"]]["size"] + COMPONENTS[pr["vae"]]["size"] + ACTIVATIONS
+    return both > ram * GPU_SHARE
 
 
 # SeedVR2 samples the whole image at once, so memory grows with the output size (calibrated with 7B on a 32 GB

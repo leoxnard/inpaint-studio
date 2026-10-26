@@ -420,6 +420,13 @@
           <label>Sampler <select id="sampler"></select></label>
           <label>Scheduler <select id="scheduler"></select></label>
         </div>
+        <label id="splitEncodeRow" hidden title="The text encoder and the diffusion model together may not fit in memory, and the run then swaps and gets very slow. Encoding the prompt first and unloading the encoder before sampling avoids that, at the cost of loading it again for every run.">Text encoder
+          <select id="splitEncode">
+            <option value="auto">Auto: unload before sampling when memory is short</option>
+            <option value="on">Always: encode first, then unload</option>
+            <option value="off">Never: keep it loaded</option>
+          </select>
+        </label>
         <div class="stack paste-only edit-only" id="keepNoteRow">
           <label title="Free edit + paste (or whole image with Keep everything else identical): added after your prompt so everything outside the change stays where it is and the pasted area lines up. Empty = no instruction.">Keep-identical instruction
             <textarea id="keepNote" rows="4"></textarea>

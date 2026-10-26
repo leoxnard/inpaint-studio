@@ -350,9 +350,39 @@ def test_control_guidance_chain():
     assert presets.control_patch("qwen21_turbo", "depth") == presets.control_patch("qwen21", "canny") == "ctrl_q21_union"
 
 
+def test_flux2_edit_uses_reference_latents_and_cut_schedule():
+    p = dict(image="a.png", mask=None, refs=["r.png"], megapixels=1.0, resolution=1024, prompt="x", negative="",
+             steps=4, denoise=0.5, seed=1, cfg=1.0, sampler="euler", scheduler="simple", feather=0,
+             work_w=1024, work_h=768, unet="k.safetensors", clip="te.gguf", vae="v.safetensors", family="flux2", task="edit")
+    g = graphs.build_edit_graph(p)
+    assert g["clip"]["class_type"] == "CLIPLoaderGGUF" and g["clip"]["inputs"]["type"] == "flux2"
+    assert g["model"]["class_type"] == "UNETLoader" and "unet" not in g
+    assert g["guider"]["inputs"]["positive"] == ["flux_ref2_pos", 0]   # image 1 then the reference
+    assert g["flux_ref1"]["inputs"]["pixels"] == ["scale", 0]
+    assert g["sched_full"]["inputs"] == {"steps": 8, "width": 1024, "height": 768}
+    assert g["sched"]["inputs"]["step"] == 4 and g["from_0"]["inputs"]["sigmas"] == ["upto_0", 0]
+    assert g["upto_0"]["inputs"]["sigmas"] == ["sched", 1]
+
+
 def test_reseed_seedvr2_sets_the_sampler_seed():
     comp = {"engine": "seedvr2"}
     g = graphs.build_upscale_graph("in.png", comp, {"model": "m", "vae": "v"}, 2, "p", seed=1)
     assert graphs.reseed_seedvr2(g, 7)
     assert g["sampler"]["inputs"]["seed"] == 7
     assert not graphs.reseed_seedvr2(graphs.build_upscale_graph("in.png", {"scale": 4}, {"model": "m"}, 2, "p"), 7)
+
+
+def test_flux2_dev_uses_flux_guidance_and_a_split_conditioning():
+    p = dict(image=None, mask=None, refs=[], megapixels=1.0, resolution=1024, prompt="a house", negative="",
+             steps=20, denoise=1.0, seed=1, cfg=4.0, sampler="euler", scheduler="simple", feather=0, work_w=1024, work_h=1024,
+             unet="d.gguf", clip="m.gguf", vae="v.safetensors", family="flux2_dev", task="generate", prefix="P/r")
+    g = graphs.build_edit_graph(p)
+    assert g["guidance"]["inputs"]["guidance"] == 4.0 and g["guider"]["class_type"] == "BasicGuider"
+    assert g["clip"]["class_type"] == "CLIPLoaderGGUF" and g["encode"]["class_type"] == "CLIPTextEncode"
+    split = graphs.build_edit_graph({**p, "cond_pos": "inpaint-studio/r_pos.safetensors"})
+    assert "clip" not in split and split["encode"] == {"class_type": "ConditioningLoader",
+                                                        "inputs": {"conditioning_name": "inpaint-studio/r_pos.safetensors"}}
+    enc = graphs.build_encode_graph(p)
+    assert enc["save_pos"]["inputs"]["filename_prefix"] == "P/r/cond_pos" and "save_neg" not in enc   # dev: no negative
+    klein = graphs.build_encode_graph({**p, "family": "flux2", "negative": "blurry"})
+    assert klein["encode_neg"]["inputs"]["text"] == "blurry" and klein["clip"]["inputs"]["type"] == "flux2"

@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 const PERSIST = [
   "megapixels", "resolution", "autofix", "matchRef", "maskText", "threshold", "refine", "expand", "invert",
   "brushSize", "opacity", "tolerance", "prompt", "negative", "steps", "denoise", "feather", "mode", "keepNote", "postAlign", "postColors", "postWarp", "postPoisson", "postGrain", "saveEvery", "saveLast", "upscale", "upscaler", "seed",
-  "randomSeed", "cfg", "sampler", "scheduler", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg", "enhance", "addTitle", "titlePosition", "titleText",
+  "randomSeed", "cfg", "sampler", "scheduler", "splitEncode", "task", "preset", "quant", "aspect", "refNote", "cleanOverlays", "keepWhole", "removeBg", "enhance", "addTitle", "titlePosition", "titleText",
   "upscaleModel", "upscaleFactor", "upscaleBy", "upscaleLong", "upscaleMB", "upscaleGrain", "cropStitch", "cropContext",
 ];
 const STORE_KEY = "inpaint-studio-form-v1";
@@ -734,7 +734,10 @@ const saveLoras = () => { try { localStorage.setItem(LORA_KEY, JSON.stringify(st
 
 // LoRAs from Downloads are known: their title, model family and suggested strength
 const loraInfo = (file) => (state.setup?.components || []).find((c) => c.kind === "lora" && c.file === file);
-const loraFits = (file) => { const i = loraInfo(file); return !i || i.families.includes(currentFamily()); };
+const loraFits = (file) => {
+  const i = loraInfo(file), p = presetById($("preset").value);
+  return !i || i.families.includes(p?.lora_family || currentFamily());   // FLUX.2 klein: per size
+};
 const loraGroup = (file) => Object.entries(state.setup?.lora_groups || {})
   .find(([, fams]) => loraInfo(file)?.families.some((f) => fams.includes(f)))?.[0] || "another model";
 
@@ -1440,7 +1443,7 @@ function editParams({ image, srcW, srcH, maskName, useMask, megapixels, resoluti
     megapixels: megapixels ?? num("megapixels"), resolution: resolution ?? parseInt($("resolution").value, 10),
     prompt: $("prompt").value, negative: $("negative").value,
     steps: parseInt($("steps").value, 10), denoise: num("denoise"), seed, cfg: num("cfg"),
-    sampler: $("sampler").value, scheduler: $("scheduler").value, feather: num("feather"), mode: maskOn() && currentFamily() !== "zimage" ? $("mode").value : "inpaint",
+    sampler: $("sampler").value, scheduler: $("scheduler").value, split_encode: $("splitEncode").value, feather: num("feather"), mode: maskOn() && currentFamily() !== "zimage" ? $("mode").value : "inpaint",
     // only an edited instruction is sent; otherwise the server adds its default (graphs.KEEP_IDENTICAL)
     keep_note: $("keepNote").value === KEEP_NOTE ? undefined : $("keepNote").value, save_every: parseInt($("saveEvery").value, 10) || 0,
     save_last: parseInt($("saveLast").value, 10) || 0,
@@ -3702,6 +3705,7 @@ async function writeIdeas() {
     state.ideas = r.ideas.map((i) => ({ ...i, withTitle }));
     renderIdeas();
     $("ideasHint").textContent = "Done, the model is unloaded again. Edit a prompt if you like, then run one or all.";
+    loadPromptHistory();
   } catch (e) {
     $("ideasHint").textContent = "No prompts.";
     showError(e.message);
@@ -3709,7 +3713,6 @@ async function writeIdeas() {
     btn.disabled = false;
     btn.textContent = label;
   }
-    loadPromptHistory();
 }
 // one Generate job per idea, with the current settings (model, size, steps, variations…)
 async function runIdeas(ideas) {
@@ -3815,7 +3818,7 @@ syncModeUi();
 // ------------------------------------------------------------------ extra reference images
 // The text encoder of some models takes more images than the edited one (see graphs.MAX_REFS).
 // The edited image is image 1, references follow; when generating they start at image 1.
-const MAX_REFS = { qwen21: 3, qwen21_turbo: 3, qwen_edit: 2 };
+const MAX_REFS = { qwen21: 3, qwen21_turbo: 3, qwen_edit: 2, flux2: 3, flux2_dev: 3 };
 const maxRefs = () => MAX_REFS[currentFamily()] || 0;
 state.refs = [];   // [{name, label, take, crop}] uploaded to ComfyUI's input folder; take = what to take from it,
                    // crop = {x, y, w, h} in the image's pixels or null for the whole image
@@ -3850,7 +3853,7 @@ const OLD_REF_NOTE_3 = "{main} is the image to edit. Keep its framing, compositi
 const OLD_REF_NOTE_2 = "{main} is the image to edit. Keep its framing, composition, camera angle, perspective, poses and "
   + "everything the instruction does not change. Use {refs} only as reference for how the changed parts "
   + "should look, never for pose or composition.";
-const isDefaultRefNote = (v) => ["qwen21", "qwen_edit"].some((f) => [1, 2, 3].some((n) =>
+const isDefaultRefNote = (v) => ["qwen21", "qwen_edit", "flux2", "flux2_dev"].some((f) => [1, 2, 3].some((n) =>
   [REF_NOTE, OLD_REF_NOTE_2, OLD_REF_NOTE_3].some((t) => v === refNoteFor(f, n, t))))
   || ["image 1", "Picture 1"].some((m) => v === OLD_REF_NOTE(m));
 $("refNote").value = refNoteFor("qwen21", 1);   // before loadForm: a stored text wins
@@ -5511,13 +5514,20 @@ function renderModelSel(list) {
   const sel = $("modelSel");
   sel.innerHTML = "";
   const FIT = { tight: " · tight", no: " · too large" };
+  // an uncensored twin (same model, other text encoder) sits in the group of its base model
+  const groups = new Map();
   for (const p of list) {
-    const grp = document.createElement("optgroup");
-    grp.label = p.title + (p.experimental ? " (experimental)" : "");
-    for (const q of p.quants.filter((x) => x.installed)) {
-      grp.appendChild(new Option(`${p.title} · ${q.quant}${FIT[q.fit] || ""}`, `${p.id}|${q.quant}`));
+    const base = presetById(p.twin_of) || p;
+    if (!groups.has(base.id)) {
+      const grp = document.createElement("optgroup");
+      grp.label = base.title + (base.experimental ? " (experimental)" : "");
+      groups.set(base.id, grp);
+      sel.appendChild(grp);
     }
-    sel.appendChild(grp);
+    for (const q of p.quants.filter((x) => x.installed)) {
+      const label = `${base.title} · ${q.quant}${p.twin_of ? " · uncensored" : ""}${FIT[q.fit] || ""}`;
+      groups.get(base.id).appendChild(new Option(label, `${p.id}|${q.quant}`));
+    }
   }
   // Upscale task: only the upscalers; the edit models stay picked in #preset / #quant meanwhile
   const ups = state.task === "upscale" ? installedUpscalers() : [];
@@ -5675,6 +5685,7 @@ function syncTaskUi() {
   syncEnhance();
   syncTitleRow();
   // turbo models: fixed 5-7 steps, no CFG; the server clamps and forces, the form just follows
+  $("splitEncodeRow").hidden = !["flux2", "flux2_dev"].includes(fam);   // mirrors graphs.SPLIT_ENCODE_FAMILIES
   const turbo = fam === "qwen21_turbo";
   document.body.classList.toggle("fam-turbo", turbo);
   $("steps").min = turbo ? 5 : 1;

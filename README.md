@@ -329,8 +329,16 @@ LoRAs, Your files).
 | Qwen-Image-Edit 2511 (experimental) | ✓ | |
 | Qwen-Image 2512 (experimental) | | ✓ |
 | Z-Image Turbo | img2img | ✓ |
+| FLUX.2 klein 4B / 9B (4 steps, up to 3 reference images; each also uncensored) | ✓ | ✓ |
+| FLUX.2 dev (experimental, 32B: 20 steps, about 1-1.5 h per image on 32 GB with Q2_K) | ✓ | ✓ |
 
 - Each preset brings the matching text encoder and VAE (`presets.py`).
+- **Advanced → Text encoder** (FLUX.2 models): *Auto* encodes the prompt first and unloads the text encoder before
+  sampling when model and encoder do not fit in memory together (klein 9B BF16, dev), *Always* / *Never* force it.
+  Without it such runs swap and get several times slower.
+- **FLUX.2 klein uncensored:** the same model with an uncensored text encoder. Its Hugging Face repo needs an account
+  and accepted terms, so the card links there; put the file into `models/text_encoders` and the picker lists the
+  model twice (original and uncensored).
 - **LoRAs:** a picked set per model line (speed, styles, camera angles, upscale). The picker shows which
   model line a LoRA is for, starts with its suggested strength and warns when it does not fit.
 - **Upscalers** and **Control** (guidance patches, Depth Anything) have their own sections.

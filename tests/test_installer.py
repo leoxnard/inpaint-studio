@@ -85,10 +85,10 @@ def test_queue_runs_items_in_order_and_accepts_more_while_running(monkeypatch):
 
 
 def test_loras_belong_to_a_group_of_known_families():
-    families = {p["family"] for p in presets.PRESETS.values()}
+    families = {presets.lora_family(p) for p in presets.PRESETS.values()}
     grouped = {f for fams in presets.LORA_GROUPS.values() for f in fams}
     assert grouped <= families
-    loras = {k: c for k, c in presets.COMPONENTS.items() if c.get("kind") == "lora"}
+    loras = {k: c for k, c in presets.COMPONENTS.items() if c.get("kind") == "lora" and not c.get("imported")}
     assert loras
     for key, c in loras.items():
         assert c["folder"] == "loras" and c["path"].endswith(".safetensors"), key
@@ -123,3 +123,46 @@ def test_comfy_boot_steps_from_log(tmp_path, monkeypatch):
     assert b["steps"][b["step"]] == "Loading ComfyUI" and "exited" not in b
     cp.proc.returncode = 1
     assert cp.boot()["exited"] == 1 and cp.boot()["log"][-1] == "Device: mps"
+
+
+def test_alternative_files_count_as_installed(tmp_path):
+    cfg = {**installer.defaults(), "models_dir": str(tmp_path)}
+    (tmp_path / "text_encoders").mkdir()
+    (tmp_path / "diffusion_models").mkdir()
+    (tmp_path / "text_encoders/flux2-klein-9b-uncensored-q8_0.gguf").write_bytes(b"t")
+    (tmp_path / "diffusion_models/flux-2-klein-9b.safetensors").write_bytes(b"m")
+    (tmp_path / "vae").mkdir()
+    (tmp_path / "vae/flux2-vae.safetensors").write_bytes(b"v")
+    have = installer.installed(cfg)
+    assert have["component:qwen3_8b_unc"] and not have["component:qwen3_8b"] and have["model:flux2_klein_9b:BF16"]
+    st = installer.preset_status(have, "flux2_klein_9b_unc")
+    assert st["complete"] and not installer.preset_status(have, "flux2_klein_9b")["complete"]
+    assert not installer.valid_item("component:qwen3_8b_unc")   # gated: never downloaded by the app
+    res = installer.resolve(cfg, "flux2_klein_9b_unc", "BF16")
+    assert res["clip"] == "flux2-klein-9b-uncensored-q8_0.gguf" and res["unet"] == "flux-2-klein-9b.safetensors"
+
+
+def test_model_download_skips_the_encoder_when_its_twin_has_one():
+    have = {f"component:{c}": False for c in presets.COMPONENTS}
+    have["component:qwen3_8b_unc"] = True
+    assert installer.expand(["model:flux2_klein_9b:Q8_0"], have) == ["component:vae_flux2", "model:flux2_klein_9b:Q8_0"]
+    have["component:qwen3_8b_unc"] = False
+    assert "component:qwen3_8b" in installer.expand(["model:flux2_klein_9b:Q8_0"], have)
+
+
+def test_gguf_loader_patch_adds_the_tekken_offset_once(tmp_path):
+    loader = tmp_path / "loader.py"
+    loader.write_text('IMG_ARCH_LIST = {"flux", "sd1"}\n\ndef f(data):\n    for x in y:\n        pass\n\n'
+                      '    logging.info(f"Created tekken tokenizer with vocab size")\n')
+    installer.patch_gguf_loader(loader)
+    installer.patch_gguf_loader(loader)
+    text = loader.read_text()
+    assert '"qwen_image21"}' in text and text.count("default_num_special_tokens") == 1
+    assert text.index("default_num_special_tokens") < text.index("Created tekken")
+
+
+def test_split_encode_auto_only_when_model_and_encoder_do_not_fit():
+    ram = 32 * 2**30
+    assert presets.needs_split_encode("flux2_dev", "Q2_K", ram)
+    assert presets.needs_split_encode("flux2_klein_9b", "BF16", ram)
+    assert not presets.needs_split_encode("flux2_klein_4b", "BF16", ram)

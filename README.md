@@ -331,6 +331,7 @@ prompt unchanged; the model only picks a camera itself when the request names no
   unloaded again.
 - The prompts show as tiles: title and fields can be edited, the prompt follows. **Run** queues one, **Run all** all
   of them, with the current settings (model, size, steps, variations).
+The Models section has one pill per series (Qwen-Image, Z-Image, FLUX) so only that series' cards show.
 For each model you pick a quantisation in an LM Studio style list (format, RAM fit, recommended for
 this Mac, downloaded, size). Q4 (Q4_K_M where there is one) is preselected; models without a Q4 file get the largest
 quantisation that fits. A bar at the top jumps between the sections (Components, Models, Upscalers, Control,

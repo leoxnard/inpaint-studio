@@ -999,3 +999,5 @@ select.compact { width: auto; max-width: 55%; min-height: 28px; padding-top: 2px
 @media (max-width: 600px) { .watch-row .lbl { flex-basis: 100%; } .watch-path { padding-left: 0; } }
 .tpl-overlay { position: absolute; z-index: 5; pointer-events: none; image-rendering: auto; }
 .tpl-overlay[hidden] { display: none; }
+
+.model-series { margin: 4px 0 12px; }

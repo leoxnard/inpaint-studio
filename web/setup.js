@@ -39,6 +39,7 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
   let pathsOpen = false;
   const picked = new Map();       // picker key (preset id / "seedvr2") -> chosen item id
   const loraOpen = new Set(), loraClosed = new Set();   // LoRA groups opened / closed by hand
+  let modelSeries = null;         // Models: the series pill that is open (SERIES key)
   const baseSel = new Set();      // first run: base steps to install
   let pick = { preset: null, quant: null };
   let sam3Pick = false;
@@ -55,6 +56,10 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     && !(k === p.text_encoder && encoderThere(p)));
   const recQuant = (p) => p.recommended_quant || p.default_quant;
   const sorted = () => data.presets.filter((p) => !p.imported && !p.twin_of).sort((a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0));
+  // Models: one pill per series (by the preset's family), so the list stays short
+  const SERIES = [["qwen", "Qwen-Image", (f) => f.startsWith("qwen")], ["zimage", "Z-Image", (f) => f.startsWith("zimage")],
+                  ["flux", "FLUX", (f) => f.startsWith("flux")]];
+  const seriesOf = (p) => (SERIES.find(([, , has]) => has(p.family || "")) || [])[0];
   const FIT = {
     good: ["ok", "Fits"], tight: ["warn", "Tight – may swap, slow"], no: ["bad", "Too large"],
   };
@@ -594,7 +599,27 @@ export function createSetup({ api, postJson, root, onReady, onCanGoBack, onChang
     sec.appendChild(el("div", "hint", "Q4 = smaller and faster, BF16 = best quality but needs a lot of RAM. A download also fetches the text encoder and VAE if they are missing."));
     const sl = systemLine();
     if (sl) sec.appendChild(sl);
-    for (const p of sorted()) sec.appendChild(buildCard(p));
+    const all = sorted();
+    const tabs = SERIES.filter(([k]) => all.some((p) => seriesOf(p) === k));
+    if (!tabs.some(([k]) => k === modelSeries)) modelSeries = seriesOf(all[0]) || tabs[0]?.[0];
+    const list = el("div", "model-list");
+    const fill = () => {
+      list.replaceChildren(...all.filter((p) => !tabs.length || seriesOf(p) === modelSeries).map(buildCard));
+      for (const b of seg.children) b.setAttribute("aria-pressed", String(b.dataset.series === modelSeries));
+    };
+    const seg = el("div", "seg model-series");
+    seg.setAttribute("role", "group");
+    seg.setAttribute("aria-label", "Model series");
+    for (const [key, title] of tabs) {
+      const b = el("button", null, title);
+      b.type = "button";
+      b.dataset.series = key;
+      b.onclick = () => { modelSeries = key; fill(); updateAll(); };
+      seg.appendChild(b);
+    }
+    if (tabs.length > 1) sec.appendChild(seg);
+    fill();
+    sec.appendChild(list);
     return sec;
   }
 
